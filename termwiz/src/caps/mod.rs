@@ -302,7 +302,7 @@ impl Capabilities {
                         "2.9.20150512",
                     )
                 }
-                Some("WezTerm") => true,
+                Some("Terminaler") => true,
                 _ => false,
             }
         });

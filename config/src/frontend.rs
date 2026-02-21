@@ -1,4 +1,4 @@
-use wezterm_dynamic::{FromDynamic, ToDynamic};
+use terminaler_dynamic::{FromDynamic, ToDynamic};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, FromDynamic, ToDynamic, Default)]
 pub enum FrontEndSelection {

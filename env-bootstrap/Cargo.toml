@@ -17,7 +17,7 @@ lazy_static.workspace = true
 libc.workspace = true
 log.workspace = true
 termwiz.workspace = true
-wezterm-version.workspace = true
+terminaler-version.workspace = true
 
 [target."cfg(windows)".dependencies]
 winapi.workspace = true

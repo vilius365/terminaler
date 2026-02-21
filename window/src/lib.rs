@@ -9,7 +9,7 @@ use std::rc::Rc;
 use thiserror::Error;
 use url::Url;
 pub mod bitmaps;
-pub use wezterm_color_types as color;
+pub use terminaler_color_types as color;
 mod configuration;
 pub mod connection;
 pub mod os;
@@ -38,7 +38,7 @@ pub use bitmaps::{BitmapImage, Image};
 pub use connection::*;
 pub use glium;
 pub use os::*;
-pub use wezterm_input_types::*;
+pub use terminaler_input_types::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Clipboard {

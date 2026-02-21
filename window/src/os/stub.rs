@@ -57,7 +57,7 @@ impl Window {
         _name: &str,
         _geometry: crate::RequestedWindowGeometry,
         _config: Option<&config::ConfigHandle>,
-        _font_config: std::rc::Rc<wezterm_font::FontConfiguration>,
+        _font_config: std::rc::Rc<terminaler_font::FontConfiguration>,
         _event_handler: F,
     ) -> anyhow::Result<Window>
     where

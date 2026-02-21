@@ -1,4 +1,4 @@
-use wezterm_dynamic::Value;
+use terminaler_dynamic::Value;
 
 /// Trait for returning metadata about config options
 pub trait ConfigMeta {

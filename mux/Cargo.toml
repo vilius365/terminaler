@@ -45,9 +45,9 @@ termwiz.workspace = true
 textwrap.workspace = true
 thiserror.workspace = true
 url.workspace = true
-wezterm-dynamic.workspace = true
-# STRIPPED: wezterm-ssh.workspace = true
-wezterm-term = { workspace=true, features=["use_serde"] }
+terminaler-dynamic.workspace = true
+# STRIPPED: terminaler-ssh.workspace = true
+terminaler-term = { workspace=true, features=["use_serde"] }
 
 [target."cfg(windows)".dependencies]
 ntapi.workspace = true

@@ -1,7 +1,7 @@
 //! This crate provides the core of the virtual terminal emulator implementation
-//! used by [wezterm](https://wezterm.org/).  The home for this
-//! crate is in the wezterm repo and development is tracked at
-//! <https://github.com/wezterm/wezterm/>.
+//! used by [terminaler](https://wezfurlong.org/wezterm/).  The home for this
+//! crate is in the terminaler repo and development is tracked at
+//! <https://github.com/wez/wezterm/>.
 //!
 //! It is full featured, providing terminal escape sequence parsing, keyboard
 //! and mouse input encoding, a model for the screen cells including scrollback,
@@ -20,8 +20,8 @@ use anyhow::Error;
 use serde::{Deserialize, Serialize};
 use std::ops::{Deref, DerefMut, Range};
 use std::str;
-use wezterm_dynamic::{FromDynamic, ToDynamic};
-use wezterm_surface::SequenceNo;
+use terminaler_dynamic::{FromDynamic, ToDynamic};
+use terminaler_surface::SequenceNo;
 
 pub mod config;
 pub use config::TerminalConfiguration;
@@ -29,8 +29,8 @@ pub use config::TerminalConfiguration;
 pub mod input;
 pub use crate::input::*;
 
-pub use wezterm_cell::*;
-pub use wezterm_surface::line::*;
+pub use terminaler_cell::*;
+pub use terminaler_surface::line::*;
 
 pub mod screen;
 pub use crate::screen::*;
@@ -107,8 +107,8 @@ pub enum Position {
 pub struct CursorPosition {
     pub x: usize,
     pub y: VisibleRowIndex,
-    pub shape: wezterm_surface::CursorShape,
-    pub visibility: wezterm_surface::CursorVisibility,
+    pub shape: terminaler_surface::CursorShape,
+    pub visibility: terminaler_surface::CursorVisibility,
     pub seqno: SequenceNo,
 }
 

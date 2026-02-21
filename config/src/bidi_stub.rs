@@ -1,7 +1,7 @@
-//! Stub replacement for wezterm-bidi types used in config.
+//! Stub replacement for terminaler-bidi types used in config.
 //! BIDI support was stripped from Terminaler.
 
-use wezterm_dynamic::{FromDynamic, ToDynamic};
+use terminaler_dynamic::{FromDynamic, ToDynamic};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, FromDynamic, ToDynamic)]
 pub enum ParagraphDirectionHint {

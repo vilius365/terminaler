@@ -83,7 +83,7 @@ impl UnixDomain {
     pub fn serve_command(&self) -> anyhow::Result<Vec<String>> {
         let exe = std::env::current_exe()
             .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|_| "wezterm".to_string());
+            .unwrap_or_else(|_| "terminaler".to_string());
         Ok(vec![exe, "start".to_string(), "--always-new-process".to_string()])
     }
 }

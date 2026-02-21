@@ -21,7 +21,7 @@ smol.workspace = true
 termwiz.workspace = true
 thiserror.workspace = true
 varbincode.workspace = true
-wezterm-term = { workspace=true, features=["use_serde"] }
+terminaler-term = { workspace=true, features=["use_serde"] }
 zstd.workspace = true
 
 [dev-dependencies]

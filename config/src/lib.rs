@@ -17,17 +17,17 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use wezterm_dynamic::{FromDynamic, FromDynamicOptions, ToDynamic, UnknownFieldAction, Value};
-use wezterm_term::UnicodeVersion;
+use terminaler_dynamic::{FromDynamic, FromDynamicOptions, ToDynamic, UnknownFieldAction, Value};
+use terminaler_term::UnicodeVersion;
 
 /// Replacement for luahelper::impl_lua_conversion_dynamic! macro.
-/// Generates IntoLua and FromLua implementations bridging through wezterm_dynamic::Value.
+/// Generates IntoLua and FromLua implementations bridging through terminaler_dynamic::Value.
 #[macro_export]
 macro_rules! impl_lua_conversion_dynamic {
     ($type:ty) => {
         impl<'lua> mlua::IntoLua<'lua> for $type {
             fn into_lua(self, lua: &'lua mlua::Lua) -> Result<mlua::Value<'lua>, mlua::Error> {
-                use wezterm_dynamic::ToDynamic;
+                use terminaler_dynamic::ToDynamic;
                 let dyn_value = self.to_dynamic();
                 $crate::lua::dynamic_to_lua_value(lua, dyn_value)
                     .map_err(|e| mlua::Error::external(e))
@@ -36,7 +36,7 @@ macro_rules! impl_lua_conversion_dynamic {
 
         impl<'lua> mlua::FromLua<'lua> for $type {
             fn from_lua(value: mlua::Value<'lua>, _lua: &'lua mlua::Lua) -> Result<Self, mlua::Error> {
-                use wezterm_dynamic::{FromDynamic, FromDynamicOptions, UnknownFieldAction};
+                use terminaler_dynamic::{FromDynamic, FromDynamicOptions, UnknownFieldAction};
                 let dyn_value = $crate::lua::lua_value_to_dynamic(value)
                     .map_err(|e| mlua::Error::external(e))?;
                 Self::from_dynamic(
@@ -418,9 +418,9 @@ pub fn create_user_owned_dirs(p: &Path) -> anyhow::Result<()> {
 }
 
 fn xdg_config_home() -> PathBuf {
-    match std::env::var_os("XDG_CONFIG_HOME").map(|s| PathBuf::from(s).join("wezterm")) {
+    match std::env::var_os("XDG_CONFIG_HOME").map(|s| PathBuf::from(s).join("terminaler")) {
         Some(p) => p,
-        None => HOME_DIR.join(".config").join("wezterm"),
+        None => HOME_DIR.join(".config").join("terminaler"),
     }
 }
 
@@ -430,7 +430,7 @@ fn config_dirs() -> Vec<PathBuf> {
 
     #[cfg(unix)]
     if let Some(d) = std::env::var_os("XDG_CONFIG_DIRS") {
-        dirs.extend(std::env::split_paths(&d).map(|s| PathBuf::from(s).join("wezterm")));
+        dirs.extend(std::env::split_paths(&d).map(|s| PathBuf::from(s).join("terminaler")));
     }
 
     dirs
@@ -479,7 +479,7 @@ pub fn configuration() -> ConfigHandle {
 
 /// Returns a version of the config (loaded from the config file)
 /// with some field overridden based on the supplied overrides object.
-pub fn overridden_config(overrides: &wezterm_dynamic::Value) -> Result<ConfigHandle, Error> {
+pub fn overridden_config(overrides: &terminaler_dynamic::Value) -> Result<ConfigHandle, Error> {
     CONFIG.overridden(overrides)
 }
 
@@ -596,7 +596,7 @@ impl ConfigInner {
     }
 
     fn accumulate_watch_paths(lua: &Lua, watch_paths: &mut Vec<PathBuf>) {
-        if let Ok(mlua::Value::Table(tbl)) = lua.named_registry_value("wezterm-watch-paths") {
+        if let Ok(mlua::Value::Table(tbl)) = lua.named_registry_value("terminaler-watch-paths") {
             for path in tbl.sequence_values::<String>() {
                 if let Ok(path) = path {
                     watch_paths.push(PathBuf::from(path));
@@ -630,7 +630,7 @@ impl ConfigInner {
                 // But avoid watching the home dir itself, so that we
                 // don't keep reloading every time something in the
                 // home dir changes!
-                // <https://github.com/wezterm/wezterm/issues/1895>
+                // <https://github.com/wez/wezterm/issues/1895>
                 if parent != &*HOME_DIR {
                     watch_paths.push(parent.to_path_buf());
                 }
@@ -690,7 +690,7 @@ impl ConfigInner {
         self.generation += 1;
     }
 
-    fn overridden(&mut self, overrides: &wezterm_dynamic::Value) -> Result<ConfigHandle, Error> {
+    fn overridden(&mut self, overrides: &terminaler_dynamic::Value) -> Result<ConfigHandle, Error> {
         let config = Config::load_with_overrides(overrides);
         Ok(ConfigHandle {
             config: Arc::new(config.config?),
@@ -765,7 +765,7 @@ impl Configuration {
         inner.use_this_config(cfg);
     }
 
-    fn overridden(&self, overrides: &wezterm_dynamic::Value) -> Result<ConfigHandle, Error> {
+    fn overridden(&self, overrides: &terminaler_dynamic::Value) -> Result<ConfigHandle, Error> {
         let mut inner = self.inner.lock().unwrap();
         inner.overridden(overrides)
     }

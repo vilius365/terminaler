@@ -1,6 +1,6 @@
 use crate::{default_one_point_oh, Config, Dimension, HsbTransform, PixelUnit, RgbaColor};
 use termwiz::color::SrgbaTuple;
-use wezterm_dynamic::{FromDynamic, FromDynamicOptions, ToDynamic, Value};
+use terminaler_dynamic::{FromDynamic, FromDynamicOptions, ToDynamic, Value};
 
 #[derive(Debug, Clone, FromDynamic, ToDynamic)]
 pub struct ImageFileSource {
@@ -28,7 +28,7 @@ impl FromDynamic for ImageFileSourceWrap {
     fn from_dynamic(
         value: &Value,
         options: FromDynamicOptions,
-    ) -> Result<Self, wezterm_dynamic::Error> {
+    ) -> Result<Self, terminaler_dynamic::Error> {
         match value {
             Value::String(path) => Ok(Self {
                 inner: ImageFileSource {
@@ -151,7 +151,7 @@ impl FromDynamic for BackgroundSize {
     fn from_dynamic(
         value: &Value,
         options: FromDynamicOptions,
-    ) -> Result<Self, wezterm_dynamic::Error> {
+    ) -> Result<Self, terminaler_dynamic::Error> {
         match value {
             Value::String(label) => match label.as_str() {
                 "Contain" => return Ok(Self::Contain),
@@ -162,7 +162,7 @@ impl FromDynamic for BackgroundSize {
         }
         match PixelUnit::from_dynamic(value, options) {
             Ok(pix) => Ok(Self::Dimension(pix.into())),
-            Err(_) => Err(wezterm_dynamic::Error::Message(format!(
+            Err(_) => Err(terminaler_dynamic::Error::Message(format!(
                 "expected either 'Contain', 'Cover', \
                         a number, or a string of \
                         the form '123px' where 'px' is a unit and \

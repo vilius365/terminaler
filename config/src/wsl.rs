@@ -1,7 +1,7 @@
 use crate::config::validate_domain_name;
 use crate::*;
 use std::collections::HashMap;
-use wezterm_dynamic::{FromDynamic, ToDynamic};
+use terminaler_dynamic::{FromDynamic, ToDynamic};
 
 #[derive(Default, Debug, Clone, FromDynamic, ToDynamic)]
 pub struct WslDomain {

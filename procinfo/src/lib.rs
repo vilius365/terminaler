@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 #[cfg(feature = "lua")]
-use wezterm_dynamic::{FromDynamic, ToDynamic};
+use terminaler_dynamic::{FromDynamic, ToDynamic};
 
 mod linux;
 mod macos;
