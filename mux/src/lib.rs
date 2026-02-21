@@ -47,6 +47,7 @@ pub mod termwiztermtab;
 // STRIPPED: pub mod tmux;
 // STRIPPED: pub mod tmux_commands;
 // STRIPPED: mod tmux_pty;
+pub mod session_state;
 pub mod window;
 
 use crate::activity::Activity;

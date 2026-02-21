@@ -22,6 +22,7 @@ mod cell;
 mod color;
 mod config;
 mod daemon;
+pub mod defaults;
 mod exec_domain;
 mod font;
 mod frontend;
@@ -37,6 +38,7 @@ mod terminal;
 mod units;
 pub mod unix; // minimal UnixDomain stub for Phase 0
 mod version;
+pub mod themes;
 pub mod window;
 mod wsl;
 

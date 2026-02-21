@@ -96,14 +96,14 @@ These crates/paths were removed in Phase 0:
 | Phase | Description | Status |
 |-------|-------------|--------|
 | 0 | Fork setup: clone, rename, strip non-Windows, strip unused crates | **COMPLETE** |
-| 1 | JSON config: replace Lua with serde_json config system | Pending |
-| 2 | Snap layouts: terminaler-layout crate, 8 built-in presets, picker UI | Pending |
-| 3 | UX features: hover highlight, toast, ctrl+scroll font, drag-drop, resize | Pending |
-| 4 | Theming & UI polish: dark/light themes, tab bar restyle, command palette | Pending |
-| 5 | Session persistence: terminaler-daemon, named pipes, session restore | Pending |
-| 6 | Workspaces: workspace templates, launcher UI, Claude Code templates | Pending |
-| 7 | Search & polish: terminal search, URL detection, installer | Pending |
-| 8 | Testing & release: integration tests, performance, v1.0 | Pending |
+| 1 | JSON config: replace Lua with serde_json config system | **COMPLETE** |
+| 2 | Snap layouts: terminaler-layout crate, 8 built-in presets, picker UI | **COMPLETE** |
+| 3 | UX features: hover highlight, toast, ctrl+scroll font, drag-drop, resize | **COMPLETE** |
+| 4 | Theming & UI polish: dark/light themes, tab bar restyle, command palette | **COMPLETE** |
+| 5 | Session persistence: terminaler-daemon, named pipes, session restore | **COMPLETE** |
+| 6 | Workspaces: workspace templates, launcher UI, Claude Code templates | **COMPLETE** |
+| 7 | Search & polish: terminal search, URL detection, installer | **COMPLETE** |
+| 8 | Testing & release: integration tests, performance, v1.0 | **COMPLETE** |
 
 ## Phase 0 Checklist
 

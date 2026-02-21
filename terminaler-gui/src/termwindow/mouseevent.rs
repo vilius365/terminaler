@@ -3,7 +3,7 @@ use crate::termwindow::{
     GuiWin, MouseCapture, PositionedSplit, ScrollHit, TermWindowNotif, UIItem, UIItemType, TMB,
 };
 use ::window::{
-    MouseButtons as WMB, MouseCursor, MouseEvent, MouseEventKind as WMEK, MousePress,
+    Modifiers, MouseButtons as WMB, MouseCursor, MouseEvent, MouseEventKind as WMEK, MousePress,
     WindowDecorations, WindowOps, WindowState,
 };
 use config::keyassignment::{KeyAssignment, MouseEventTrigger, SpawnTabDomain};
@@ -183,6 +183,19 @@ impl super::TermWindow {
                 }
             }
             _ => {}
+        }
+
+        // Ctrl+scroll: adjust font size instead of scrolling
+        if let WMEK::VertWheel(amount) = event.kind {
+            if event.modifiers.contains(Modifiers::CTRL) {
+                if amount > 0 {
+                    self.increase_font_size();
+                } else {
+                    self.decrease_font_size();
+                }
+                context.invalidate();
+                return;
+            }
         }
 
         let prior_ui_item = self.last_ui_item.clone();

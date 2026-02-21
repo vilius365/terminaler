@@ -12,7 +12,24 @@ impl crate::TermWindow {
         pane: &Arc<dyn Pane>,
     ) -> anyhow::Result<()> {
         let palette = pane.palette();
-        let foreground = palette.split.to_linear();
+        let base_color = palette.split.to_linear();
+
+        // Brighten the split color when the mouse is hovering over it
+        let is_hovered = self.last_ui_item.as_ref().map_or(false, |item| {
+            matches!(&item.item_type, crate::termwindow::UIItemType::Split(s) if s.index == split.index)
+        });
+        let foreground = if is_hovered {
+            // Blend toward white (1.0, 1.0, 1.0) by 50% to create a bright highlight
+            use window::color::LinearRgba;
+            LinearRgba::with_components(
+                base_color.0 + (1.0 - base_color.0) * 0.5,
+                base_color.1 + (1.0 - base_color.1) * 0.5,
+                base_color.2 + (1.0 - base_color.2) * 0.5,
+                base_color.3,
+            )
+        } else {
+            base_color
+        };
         let cell_width = self.render_metrics.cell_size.width as f32;
         let cell_height = self.render_metrics.cell_size.height as f32;
 

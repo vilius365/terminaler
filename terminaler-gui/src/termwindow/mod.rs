@@ -2099,6 +2099,75 @@ impl TermWindow {
         self.show_launcher_impl(args, active_tab_idx);
     }
 
+    fn show_snap_layout_picker(&mut self) {
+        let title = "Snap Layout".to_string();
+        let args = LauncherActionArgs {
+            title: Some(title),
+            flags: LauncherFlags::LAYOUTS | LauncherFlags::FUZZY,
+            help_text: None,
+            fuzzy_help_text: None,
+            alphabet: None,
+        };
+        self.show_launcher_impl(args, 0);
+    }
+
+    fn apply_snap_layout(&mut self, name: &str) {
+        let layout = match terminaler_layout::find_builtin(name) {
+            Some(l) => l,
+            None => {
+                log::error!("Unknown snap layout: {}", name);
+                return;
+            }
+        };
+
+        let splits = terminaler_layout::collect_splits(&layout.root);
+        let size = self.terminal_size;
+        let window_id = self.mux_window_id;
+
+        let mux = Mux::get();
+        let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
+            Some(tab) => tab,
+            None => return,
+        };
+
+        let term_config = Arc::new(TermConfig::with_config(self.config.clone()));
+
+        // Apply splits: spawn panes and split the current tab
+        for split in &splits {
+            let direction = match split.direction {
+                terminaler_layout::SplitDirection::Horizontal => {
+                    mux::tab::SplitDirection::Horizontal
+                }
+                terminaler_layout::SplitDirection::Vertical => {
+                    mux::tab::SplitDirection::Vertical
+                }
+            };
+            let percent = (split.ratio * 100.0) as u8;
+
+            self.spawn_command(
+                &config::keyassignment::SpawnCommand::default(),
+                SpawnWhere::SplitPane(mux::tab::SplitRequest {
+                    direction,
+                    target_is_second: true,
+                    size: MuxSplitSize::Percent(percent),
+                    top_level: false,
+                }),
+            );
+        }
+    }
+
+    fn show_workspace_picker(&mut self) {
+        let title = "Workspaces".to_string();
+        let args = LauncherActionArgs {
+            title: Some(title),
+            flags: LauncherFlags::WORKSPACES | LauncherFlags::FUZZY,
+            help_text: None,
+            fuzzy_help_text: None,
+            alphabet: None,
+        };
+        self.show_launcher_impl(args, 0);
+    }
+
     fn show_launcher(&mut self) {
         let title = "Launcher".to_string();
         let args = LauncherActionArgs {
@@ -2884,6 +2953,21 @@ impl TermWindow {
             PromptInputLine(args) => self.show_prompt_input_line(args),
             InputSelector(args) => self.show_input_selector(args),
             Confirmation(args) => self.show_confirmation(args),
+            SnapLayoutPicker => {
+                log::info!("SnapLayoutPicker: showing layout picker");
+                self.show_snap_layout_picker();
+            }
+            ApplySnapLayout(name) => {
+                log::info!("ApplySnapLayout: {}", name);
+                self.apply_snap_layout(name);
+            }
+            SwitchWorkspace(name) => {
+                front_end().switch_workspace(name);
+            }
+            WorkspacePicker => {
+                log::info!("WorkspacePicker: showing workspace picker");
+                self.show_workspace_picker();
+            }
         };
         Ok(PerformAssignmentResult::Handled)
     }

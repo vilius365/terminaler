@@ -1,0 +1,10 @@
+[package]
+name = "terminaler-layout"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = {workspace = true, features = ["std"]}
+serde_json = {workspace = true}
+anyhow = {workspace = true}
+log = {workspace = true}

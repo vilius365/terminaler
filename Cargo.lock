@@ -2635,6 +2635,7 @@ dependencies = [
  "chrono",
  "config",
  "crossbeam",
+ "dirs-next",
  "downcast-rs",
  "fancy-regex",
  "filedescriptor",
@@ -2655,6 +2656,7 @@ dependencies = [
  "promise",
  "rangeset",
  "serde",
+ "serde_json",
  "shell-words",
  "smol",
  "terminaler-dynamic",
@@ -4374,6 +4376,7 @@ dependencies = [
  "terminaler-dynamic",
  "terminaler-font",
  "terminaler-gui-subcommands",
+ "terminaler-layout",
  "terminaler-mux-server-impl",
  "terminaler-term",
  "terminaler-toast-notification",
@@ -4409,6 +4412,16 @@ dependencies = [
  "euclid",
  "serde",
  "terminaler-dynamic",
+]
+
+[[package]]
+name = "terminaler-layout"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "log",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

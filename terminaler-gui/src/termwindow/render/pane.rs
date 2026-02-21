@@ -221,6 +221,45 @@ impl crate::TermWindow {
             }
         }
 
+        // Draw a subtle border around the active pane to indicate focus
+        if pos.is_active {
+            let border_color = palette.cursor_border.to_linear().mul_alpha(0.6);
+            let b = 2.0_f32; // border thickness in pixels
+            let r = &background_rect;
+            // Top edge
+            self.filled_rectangle(
+                layers,
+                2,
+                euclid::rect(r.origin.x, r.origin.y, r.size.width, b),
+                border_color,
+            )
+            .context("active pane border top")?;
+            // Bottom edge
+            self.filled_rectangle(
+                layers,
+                2,
+                euclid::rect(r.origin.x, r.origin.y + r.size.height - b, r.size.width, b),
+                border_color,
+            )
+            .context("active pane border bottom")?;
+            // Left edge
+            self.filled_rectangle(
+                layers,
+                2,
+                euclid::rect(r.origin.x, r.origin.y, b, r.size.height),
+                border_color,
+            )
+            .context("active pane border left")?;
+            // Right edge
+            self.filled_rectangle(
+                layers,
+                2,
+                euclid::rect(r.origin.x + r.size.width - b, r.origin.y, b, r.size.height),
+                border_color,
+            )
+            .context("active pane border right")?;
+        }
+
         // TODO: we only have a single scrollbar in a single position.
         // We only update it for the active pane, but we should probably
         // do a per-pane scrollbar.  That will require more extensive

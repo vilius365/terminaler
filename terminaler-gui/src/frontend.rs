@@ -289,6 +289,8 @@ impl GuiFrontEnd {
 
                 match action {
                     KeyAssignment::QuitApplication => {
+                        // Save session state before quitting
+                        crate::session::save_current_session();
                         // If we get here, there are no windows that could have received
                         // the QuitApplication command, therefore it must be ok to quit
                         // immediately

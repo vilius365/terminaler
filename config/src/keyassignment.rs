@@ -33,6 +33,7 @@ bitflags::bitflags! {
         const KEY_ASSIGNMENTS = 16;
         const WORKSPACES = 32;
         const COMMANDS = 64;
+        const LAYOUTS = 128;
     }
 }
 
@@ -72,6 +73,9 @@ impl ToString for LauncherFlags {
         if self.contains(Self::COMMANDS) {
             s.push("COMMANDS");
         }
+        if self.contains(Self::LAYOUTS) {
+            s.push("LAYOUTS");
+        }
         s.join("|")
     }
 }
@@ -91,6 +95,7 @@ impl TryFrom<String> for LauncherFlags {
                 "KEY_ASSIGNMENTS" => flags |= Self::KEY_ASSIGNMENTS,
                 "WORKSPACES" => flags |= Self::WORKSPACES,
                 "COMMANDS" => flags |= Self::COMMANDS,
+                "LAYOUTS" => flags |= Self::LAYOUTS,
                 _ => {
                     return Err(format!("invalid LauncherFlags `{}` in `{}`", ele, s));
                 }
@@ -643,6 +648,16 @@ pub enum KeyAssignment {
     PromptInputLine(PromptInputLine),
     InputSelector(InputSelector),
     Confirmation(Confirmation),
+
+    // Terminaler additions
+    /// Open the snap layout picker overlay.
+    SnapLayoutPicker,
+    /// Apply a named snap layout to the current tab.
+    ApplySnapLayout(String),
+    /// Switch to a named workspace.
+    SwitchWorkspace(String),
+    /// Open the workspace picker overlay.
+    WorkspacePicker,
 }
 
 #[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]

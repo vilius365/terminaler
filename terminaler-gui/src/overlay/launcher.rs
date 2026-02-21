@@ -309,6 +309,19 @@ impl LauncherState {
             });
         }
 
+        if args.flags.contains(LauncherFlags::LAYOUTS) {
+            for layout in terminaler_layout::builtin_layouts() {
+                let panes = terminaler_layout::pane_count(&layout.root);
+                self.entries.push(Entry {
+                    label: format!(
+                        "Layout: {} ({} panes) - {}",
+                        layout.name, panes, layout.description
+                    ),
+                    action: KeyAssignment::ApplySnapLayout(layout.name),
+                });
+            }
+        }
+
         for tab in &args.tabs {
             self.entries.push(Entry {
                 label: match tab.pane_count {

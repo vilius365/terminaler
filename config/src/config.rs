@@ -1031,8 +1031,24 @@ impl Config {
         }
 
         // We didn't find (or were asked to skip) a config file, so
-        // update the environment to make it simpler to understand this
-        // state.
+        // generate a default config file for first-run experience.
+        if !CONFIG_SKIP.load(Ordering::Relaxed) {
+            match crate::defaults::ensure_config_exists() {
+                Ok(path) => {
+                    log::info!("Generated default config at {}", path.display());
+                    // Try loading the newly created config
+                    let item = PathPossibility::optional(path);
+                    match Self::try_load(&item, overrides) {
+                        Ok(Some(loaded)) => return loaded,
+                        _ => {}
+                    }
+                }
+                Err(e) => {
+                    log::warn!("Failed to create default config: {:#}", e);
+                }
+            }
+        }
+
         std::env::remove_var("TERMINALER_CONFIG_FILE");
         std::env::remove_var("TERMINALER_CONFIG_DIR");
 

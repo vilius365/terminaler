@@ -2,6 +2,7 @@
 members = [
   "strip-ansi-escapes",
   "terminaler-cli",
+  "terminaler-layout",
   "terminaler-blob-leases",
   "terminaler-cell",
   "terminaler-escape-parser",
@@ -194,6 +195,7 @@ varbincode = "0.1"
 vtparse = { version="0.7", path="vtparse", default-features=false }
 walkdir = "2"
 terminaler-blob-leases = { version="0.1.1", path = "terminaler-blob-leases"}
+terminaler-layout = { path = "terminaler-layout" }
 terminaler-cell = { path = "terminaler-cell"}
 terminaler-char-props = { path = "terminaler-char-props", default-features=false }
 terminaler-client = { path = "terminaler-client" }

@@ -2011,6 +2011,31 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             menubar: &["Edit"],
             icon: None,
         },
+        SnapLayoutPicker => CommandDef {
+            brief: "Snap Layout Picker".into(),
+            doc: "Opens the snap layout picker to apply a predefined pane layout".into(),
+            keys: vec![(Modifiers::CTRL | Modifiers::SHIFT, "l".into())],
+            args: &[ArgType::ActiveTab],
+            menubar: &["View"],
+            icon: Some("md_view_column"),
+        },
+        ApplySnapLayout(name) => CommandDef {
+            brief: format!("Apply Layout: {name}").into(),
+            doc: format!("Applies the '{name}' snap layout").into(),
+            keys: vec![],
+            args: &[ArgType::ActiveTab],
+            menubar: &[],
+            icon: None,
+        },
+        WorkspacePicker => CommandDef {
+            brief: "Workspace Picker".into(),
+            doc: "Opens the workspace picker".into(),
+            keys: vec![(Modifiers::CTRL | Modifiers::SHIFT, "o".into())],
+            args: &[ArgType::ActiveWindow],
+            menubar: &["View"],
+            icon: None,
+        },
+        _ => return None,
     })
 }
 
@@ -2136,6 +2161,9 @@ fn compute_default_actions() -> Vec<KeyAssignment> {
         ActivateLastTab,
         ShowLauncher,
         ShowTabNavigator,
+        // ----------------- Terminaler Snap Layouts
+        SnapLayoutPicker,
+        WorkspacePicker,
         // ----------------- Help
         OpenUri("https://wezfurlong.org/wezterm/".to_string()),
         OpenUri("https://github.com/wez/wezterm/discussions/".to_string()),
