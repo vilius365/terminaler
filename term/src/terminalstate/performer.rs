@@ -13,7 +13,7 @@ use std::ops::{Deref, DerefMut};
 use termwiz::input::KeyboardEncoding;
 use unicode_normalization::{is_nfc_quick, IsNormalized, UnicodeNormalization};
 use url::Url;
-use wezterm_bidi::ParagraphDirectionHint;
+use wezterm_surface::bidi_stub::ParagraphDirectionHint;
 use wezterm_cell::{
     grapheme_column_width, is_white_space_grapheme, Cell, CellAttributes, SemanticType,
 };

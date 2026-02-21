@@ -6,13 +6,13 @@ publish = false
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [features]
-default = ["lua"]
-lua = ["dep:luahelper", "dep:wezterm-dynamic"]
+# STRIPPED: default = ["lua"]
+lua = ["dep:config", "dep:wezterm-dynamic"]
 
 [dependencies]
 libc.workspace = true
 log.workspace = true
-luahelper = { workspace=true, optional = true }
+config = { workspace=true, optional = true }
 wezterm-dynamic = { workspace=true, optional = true, features=["std"]}
 
 [target."cfg(windows)".dependencies]

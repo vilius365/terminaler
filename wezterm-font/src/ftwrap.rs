@@ -1494,8 +1494,8 @@ pub fn vector_x_y(vector: &FT_Vector) -> (f32, f32) {
     (vector.x.f16d16().to_num(), vector.y.f16d16().to_num())
 }
 
-pub fn composite_mode_to_operator(mode: FT_Composite_Mode) -> cairo::Operator {
-    use cairo::Operator;
+pub fn composite_mode_to_operator(mode: FT_Composite_Mode) -> crate::rasterizer::colr::Operator {
+    use crate::rasterizer::colr::Operator;
     use FT_Composite_Mode::*;
     match mode {
         FT_COLR_COMPOSITE_CLEAR => Operator::Clear,

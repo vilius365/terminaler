@@ -1,7 +1,6 @@
 use crate::default_true;
 use crate::keys::KeyNoAction;
 use crate::window::WindowLevel;
-use luahelper::impl_lua_conversion_dynamic;
 use ordered_float::NotNan;
 use portable_pty::CommandBuilder;
 use serde::{Deserialize, Serialize};

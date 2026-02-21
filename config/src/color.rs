@@ -1,5 +1,4 @@
 use crate::*;
-use luahelper::impl_lua_conversion_dynamic;
 use std::convert::{TryFrom, TryInto};
 use std::str::FromStr;
 use termwiz::cell::CellAttributes;

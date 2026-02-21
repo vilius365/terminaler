@@ -1,6 +1,6 @@
 use clap::Parser;
 use mux::pane::PaneId;
-use termwiz_funcs::lines_to_escapes;
+// STRIPPED: use termwiz_funcs::lines_to_escapes;
 use wezterm_client::client::Client;
 use wezterm_term::{ScrollbackOrVisibleRowIndex, StableRowIndex};
 
@@ -75,7 +75,7 @@ impl GetText {
             })
             .await?;
 
-        let lines = lines
+        let lines: Vec<wezterm_term::Line> = lines
             .lines
             .extract_data()
             .0
@@ -84,7 +84,9 @@ impl GetText {
             .collect();
 
         if self.escapes {
-            println!("{}", lines_to_escapes(lines)?);
+            // STRIPPED: lines_to_escapes from termwiz_funcs removed; fallback to plain text
+            log::warn!("--escapes flag is not supported (termwiz_funcs stripped); outputting plain text");
+            lines.iter().for_each(|line| println!("{}", line.as_str()));
         } else {
             lines.iter().for_each(|line| println!("{}", line.as_str()));
         }

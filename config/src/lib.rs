@@ -20,8 +20,41 @@ use std::time::Duration;
 use wezterm_dynamic::{FromDynamic, FromDynamicOptions, ToDynamic, UnknownFieldAction, Value};
 use wezterm_term::UnicodeVersion;
 
+/// Replacement for luahelper::impl_lua_conversion_dynamic! macro.
+/// Generates IntoLua and FromLua implementations bridging through wezterm_dynamic::Value.
+#[macro_export]
+macro_rules! impl_lua_conversion_dynamic {
+    ($type:ty) => {
+        impl<'lua> mlua::IntoLua<'lua> for $type {
+            fn into_lua(self, lua: &'lua mlua::Lua) -> Result<mlua::Value<'lua>, mlua::Error> {
+                use wezterm_dynamic::ToDynamic;
+                let dyn_value = self.to_dynamic();
+                $crate::lua::dynamic_to_lua_value(lua, dyn_value)
+                    .map_err(|e| mlua::Error::external(e))
+            }
+        }
+
+        impl<'lua> mlua::FromLua<'lua> for $type {
+            fn from_lua(value: mlua::Value<'lua>, _lua: &'lua mlua::Lua) -> Result<Self, mlua::Error> {
+                use wezterm_dynamic::{FromDynamic, FromDynamicOptions, UnknownFieldAction};
+                let dyn_value = $crate::lua::lua_value_to_dynamic(value)
+                    .map_err(|e| mlua::Error::external(e))?;
+                Self::from_dynamic(
+                    &dyn_value,
+                    FromDynamicOptions {
+                        unknown_fields: UnknownFieldAction::Warn,
+                        deprecated_fields: UnknownFieldAction::Warn,
+                    },
+                )
+                .map_err(|e| mlua::Error::external(anyhow::anyhow!("{}", e)))
+            }
+        }
+    };
+}
+
 mod background;
 mod bell;
+pub mod bidi_stub;
 mod cell;
 mod color;
 mod config;
@@ -34,12 +67,12 @@ mod keys;
 pub mod lua;
 pub mod meta;
 mod scheme_data;
-mod serial;
-mod ssh;
+// STRIPPED: mod serial;
+// STRIPPED: mod ssh;
 mod terminal;
-mod tls;
+// STRIPPED: mod tls;
 mod units;
-mod unix;
+pub mod unix; // minimal UnixDomain stub for Phase 0
 mod version;
 pub mod window;
 mod wsl;
@@ -54,12 +87,12 @@ pub use exec_domain::*;
 pub use font::*;
 pub use frontend::*;
 pub use keys::*;
-pub use serial::*;
-pub use ssh::*;
+// STRIPPED: pub use serial::*;
+// STRIPPED: pub use ssh::*;
 pub use terminal::*;
-pub use tls::*;
+// STRIPPED: pub use tls::*;
 pub use units::*;
-pub use unix::*;
+pub use unix::*; // UnixDomain, UnixTarget stubs
 pub use version::*;
 pub use wsl::*;
 
@@ -322,7 +355,9 @@ fn default_config_with_overrides_applied() -> anyhow::Result<Config> {
     let table = mlua::Value::Table(lua.create_table()?);
     let config = Config::apply_overrides_to(&lua, table).context("apply_overrides_to")?;
 
-    let dyn_config = luahelper::lua_value_to_dynamic(config)?;
+    // STRIPPED: let dyn_config = luahelper::lua_value_to_dynamic(config)?;
+    let dyn_config = lua::lua_value_to_dynamic(config)
+        .context("lua_value_to_dynamic for config")?;
 
     let cfg: Config = Config::from_dynamic(
         &dyn_config,

@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use termwiz::cell::Presentation;
 use thiserror::Error;
-use wezterm_bidi::Direction;
+use crate::shaper::Direction;
 use wezterm_term::{CellAttributes, Intensity};
 use wezterm_toast_notification::ToastNotification;
 

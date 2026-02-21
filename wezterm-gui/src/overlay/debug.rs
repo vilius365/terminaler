@@ -2,7 +2,7 @@ use crate::scripting::guiwin::GuiWin;
 use chrono::prelude::*;
 use futures::FutureExt;
 use log::Level;
-use luahelper::ValuePrinter;
+// STRIPPED: luahelper removed; ValuePrinter replaced inline below
 use mlua::Value;
 use mux::termwiztermtab::TermWizTerminal;
 use std::io::Write;
@@ -267,8 +267,8 @@ async fn evaluate(host: LuaReplHost, expr: String) -> (LuaReplHost, String) {
             .eval_async::<Value>()
             .map(|result| match result {
                 Ok(result) => {
-                    let value = ValuePrinter(result);
-                    format!("{:#?}", value)
+                    // STRIPPED: luahelper::ValuePrinter removed; format debug directly
+                    format!("{:#?}", result)
                 }
                 Err(err) => format_lua_err(err),
             })

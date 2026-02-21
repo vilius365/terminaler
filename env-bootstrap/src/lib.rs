@@ -185,25 +185,11 @@ fn register_panic_hook() {
     }));
 }
 
+// STRIPPED: Lua module registrations removed (Phase 0 - all lua-api-crates deleted)
 fn register_lua_modules() {
-    for func in [
-        battery::register,
-        color_funcs::register,
-        termwiz_funcs::register,
-        logging::register,
-        mux_lua::register,
-        procinfo_funcs::register,
-        filesystem::register,
-        serde_funcs::register,
-        plugin::register,
-        ssh_funcs::register,
-        spawn_funcs::register,
-        share_data::register,
-        time_funcs::register,
-        url_funcs::register,
-    ] {
-        config::lua::add_context_setup_func(func);
-    }
+    // Previously registered: battery, color_funcs, termwiz_funcs, logging,
+    // mux_lua, procinfo_funcs, filesystem, serde_funcs, plugin, ssh_funcs,
+    // spawn_funcs, share_data, time_funcs, url_funcs
 }
 
 pub fn bootstrap() {

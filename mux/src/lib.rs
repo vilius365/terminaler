@@ -1,6 +1,6 @@
 use crate::client::{ClientId, ClientInfo};
 use crate::pane::{CachePolicy, Pane, PaneId};
-use crate::ssh_agent::AgentProxy;
+// STRIPPED: use crate::ssh_agent::AgentProxy;
 use crate::tab::{SplitRequest, Tab, TabId};
 use crate::window::{Window, WindowId};
 use anyhow::{anyhow, Context, Error};
@@ -40,13 +40,13 @@ pub mod domain;
 pub mod localpane;
 pub mod pane;
 pub mod renderable;
-pub mod ssh;
-pub mod ssh_agent;
+// STRIPPED: pub mod ssh;
+// STRIPPED: pub mod ssh_agent;
 pub mod tab;
 pub mod termwiztermtab;
-pub mod tmux;
-pub mod tmux_commands;
-mod tmux_pty;
+// STRIPPED: pub mod tmux;
+// STRIPPED: pub mod tmux_commands;
+// STRIPPED: mod tmux_pty;
 pub mod window;
 
 use crate::activity::Activity;
@@ -112,7 +112,7 @@ pub struct Mux {
     identity: RwLock<Option<Arc<ClientId>>>,
     num_panes_by_workspace: RwLock<HashMap<String, usize>>,
     main_thread_id: std::thread::ThreadId,
-    agent: Option<AgentProxy>,
+    // STRIPPED: agent: Option<AgentProxy>,
 }
 
 const BUFSIZE: usize = 1024 * 1024;
@@ -428,11 +428,7 @@ impl Mux {
             );
         }
 
-        let agent = if config::configuration().mux_enable_ssh_agent {
-            Some(AgentProxy::new())
-        } else {
-            None
-        };
+        // STRIPPED: SSH agent initialization removed
 
         Self {
             tabs: RwLock::new(HashMap::new()),
@@ -447,7 +443,6 @@ impl Mux {
             identity: RwLock::new(None),
             num_panes_by_workspace: RwLock::new(HashMap::new()),
             main_thread_id: std::thread::current().id(),
-            agent,
         }
     }
 
@@ -485,9 +480,7 @@ impl Mux {
         if let Some(info) = self.clients.write().get_mut(client_id) {
             info.update_last_input();
         }
-        if let Some(agent) = &self.agent {
-            agent.update_target();
-        }
+        // STRIPPED: SSH agent update_target removed
     }
 
     pub fn record_input_for_current_identity(&self) {

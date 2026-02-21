@@ -11,7 +11,8 @@ use config::MouseEventAltScreen;
 use mux::pane::{Pane, WithPaneLines};
 use mux::tab::SplitDirection;
 use mux::Mux;
-use mux_lua::MuxPane;
+// STRIPPED: mux_lua removed; use local stub
+use crate::scripting::guiwin::MuxPane;
 use std::convert::TryInto;
 use std::ops::Sub;
 use std::rc::Rc;

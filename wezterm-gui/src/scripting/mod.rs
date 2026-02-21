@@ -4,7 +4,8 @@ use config::keyassignment::KeyTable;
 use config::lua::get_or_create_sub_module;
 use config::lua::mlua::{self, Lua};
 use config::{DeferredKeyCode, GpuInfo, Key, KeyNoAction};
-use luahelper::dynamic_to_lua_value;
+// STRIPPED: luahelper removed; use config::lua directly
+use config::lua::dynamic_to_lua_value;
 use mux::window::WindowId as MuxWindowId;
 use std::collections::HashMap;
 use wezterm_dynamic::ToDynamic;
@@ -61,7 +62,7 @@ pub fn register(lua: &Lua) -> anyhow::Result<()> {
         lua.create_function(|lua, _: ()| {
             let map = InputMap::default_input_map();
             let keys = key_table_to_lua(&map.keys.default);
-            dynamic_to_lua_value(lua, keys.to_dynamic())
+            dynamic_to_lua_value(lua, keys.to_dynamic()).map_err(mlua::Error::external)
         })?,
     )?;
 
@@ -74,7 +75,7 @@ pub fn register(lua: &Lua) -> anyhow::Result<()> {
                 let keys = key_table_to_lua(table);
                 tables.insert(k.to_string(), keys);
             }
-            dynamic_to_lua_value(lua, tables.to_dynamic())
+            dynamic_to_lua_value(lua, tables.to_dynamic()).map_err(mlua::Error::external)
         })?,
     )?;
 

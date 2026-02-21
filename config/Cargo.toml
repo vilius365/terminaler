@@ -23,7 +23,7 @@ hostname.workspace = true
 lazy_static.workspace = true
 libc.workspace = true
 log.workspace = true
-luahelper.workspace = true
+# STRIPPED: luahelper.workspace = true
 mlua = {workspace=true, features=["vendored", "lua54", "async", "send", "serialize"]}
 notify.workspace = true
 ordered-float = { workspace=true, features = ["serde"] }
@@ -36,11 +36,12 @@ smol.workspace = true
 termwiz = { workspace=true, features=["use_serde"] }
 toml.workspace = true
 umask.workspace = true
-wezterm-bidi.workspace = true
+# STRIPPED: wezterm-bidi.workspace = true
 wezterm-config-derive.workspace = true
+wezterm-surface = {workspace = true, features=["std"]}
 wezterm-dynamic.workspace = true
 wezterm-input-types.workspace = true
-wezterm-ssh.workspace = true
+# STRIPPED: wezterm-ssh.workspace = true
 wezterm-term = { workspace = true, features=["use_serde"] }
 
 [target."cfg(unix)".dependencies]

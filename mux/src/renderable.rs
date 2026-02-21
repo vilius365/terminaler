@@ -1,5 +1,5 @@
 use crate::pane::{ForEachPaneLogicalLine, WithPaneLines};
-use luahelper::impl_lua_conversion_dynamic;
+use config::impl_lua_conversion_dynamic;
 use rangeset::RangeSet;
 use serde::{Deserialize, Serialize};
 use std::ops::Range;

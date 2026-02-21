@@ -20,6 +20,14 @@ pub fn wezterm_target_triple() -> &'static str {
         .unwrap_or(&"someone forgot to call assign_version_info")
 }
 
+/// Get the current username from environment variables.
+/// Originally from unix.rs, moved here after stripping Unix domain code.
+pub fn username_from_env() -> anyhow::Result<String> {
+    std::env::var("USER")
+        .or_else(|_| std::env::var("USERNAME"))
+        .map_err(|_| anyhow::anyhow!("Unable to determine username from environment"))
+}
+
 pub fn running_under_wsl() -> bool {
     #[cfg(unix)]
     unsafe {

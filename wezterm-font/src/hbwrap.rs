@@ -4,9 +4,8 @@ use freetype;
 pub use harfbuzz::*;
 
 use crate::locator::{FontDataHandle, FontDataSource};
-use crate::rasterizer::colr::{ColorLine, ColorStop, DrawOp};
+use crate::rasterizer::colr::{ColorLine, ColorStop, DrawOp, Extend};
 use anyhow::{ensure, Context, Error};
-use cairo::Extend;
 use memmap2::{Mmap, MmapOptions};
 use std::ffi::CStr;
 use std::io::Read;

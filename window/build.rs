@@ -31,16 +31,8 @@ fn main() {
         ],
     );
 
-    if target.contains("android") || target.contains("ios") {
-        reg.write_bindings(gl_generator::StaticStructGenerator, &mut file)
-    } else {
-        reg.write_bindings(gl_generator::StructGenerator, &mut file)
-    }
-    .unwrap();
-
-    if target.contains("apple") {
-        println!("cargo:rustc-link-lib=framework=Carbon");
-    }
+    reg.write_bindings(gl_generator::StructGenerator, &mut file)
+        .unwrap();
 
     if target.contains("windows") {
         let mut file = File::create(dest.join("wgl_bindings.rs")).unwrap();

@@ -4,8 +4,9 @@ use crate::pane::{
     SearchResult, WithPaneLines,
 };
 use crate::renderable::*;
-use crate::tmux::{TmuxDomain, TmuxDomainState};
-use crate::{Domain, Mux, MuxNotification};
+// STRIPPED: use crate::tmux::{TmuxDomain, TmuxDomainState};
+use crate::{Mux, MuxNotification};
+// STRIPPED: Domain import removed (was used for tmux)
 use anyhow::Error;
 use async_trait::async_trait;
 use config::keyassignment::ScrollbackEraseMode;
@@ -128,7 +129,7 @@ pub struct LocalPane {
     pty: Mutex<Box<dyn MasterPty>>,
     writer: Mutex<Box<dyn Write + Send>>,
     domain_id: DomainId,
-    tmux_domain: Mutex<Option<Arc<TmuxDomainState>>>,
+    // STRIPPED: tmux_domain: Mutex<Option<Arc<TmuxDomainState>>>,
     proc_list: Mutex<Option<CachedProcInfo>>,
     #[cfg(unix)]
     leader: Arc<Mutex<Option<CachedLeaderInfo>>>,
@@ -164,19 +165,14 @@ impl Pane for LocalPane {
     }
 
     fn get_cursor_position(&self) -> StableCursorPosition {
-        let mut cursor = terminal_get_cursor_position(&mut self.terminal.lock());
-        if self.tmux_domain.lock().is_some() {
-            cursor.visibility = termwiz::surface::CursorVisibility::Hidden;
-        }
+        let cursor = terminal_get_cursor_position(&mut self.terminal.lock());
+        // STRIPPED: tmux cursor hiding removed
         cursor
     }
 
     fn get_keyboard_encoding(&self) -> KeyboardEncoding {
-        if self.tmux_domain.lock().is_some() {
-            KeyboardEncoding::Xterm
-        } else {
-            self.terminal.lock().get_keyboard_encoding()
-        }
+        // STRIPPED: tmux keyboard encoding override removed
+        self.terminal.lock().get_keyboard_encoding()
     }
 
     fn get_current_seqno(&self) -> SequenceNo {
@@ -224,17 +220,11 @@ impl Pane for LocalPane {
     }
 
     fn exit_behavior(&self) -> Option<ExitBehavior> {
-        // If we are ssh, and we've not yet fully connected,
-        // then override exit_behavior so that we can show
-        // connection issues
+        // STRIPPED: SSH connecting check removed (SSH support stripped)
         let mut pty = self.pty.lock();
-        let is_ssh_connecting = pty
-            .downcast_mut::<crate::ssh::WrappedSshPty>()
-            .map(|s| s.is_connecting())
-            .unwrap_or(false);
         let is_failed_spawn = pty.is::<crate::domain::FailedSpawnPty>();
 
-        if is_ssh_connecting || is_failed_spawn {
+        if is_failed_spawn {
             Some(ExitBehavior::CloseOnCleanExit)
         } else {
             None
@@ -398,15 +388,8 @@ impl Pane for LocalPane {
 
     fn key_down(&self, key: KeyCode, mods: KeyModifiers) -> Result<(), Error> {
         Mux::get().record_input_for_current_identity();
-        if self.tmux_domain.lock().is_some() {
-            log::trace!("key: {:?}", key);
-            if key == KeyCode::Char('q') {
-                self.terminal.lock().send_paste("detach\n")?;
-            }
-            return Ok(());
-        } else {
-            self.terminal.lock().key_down(key, mods)
-        }
+        // STRIPPED: tmux control mode key handling removed
+        self.terminal.lock().key_down(key, mods)
     }
 
     fn key_up(&self, key: KeyCode, mods: KeyModifiers) -> Result<(), Error> {
@@ -439,11 +422,8 @@ impl Pane for LocalPane {
 
     fn send_paste(&self, text: &str) -> Result<(), Error> {
         Mux::get().record_input_for_current_identity();
-        if self.tmux_domain.lock().is_some() {
-            Ok(())
-        } else {
-            self.terminal.lock().send_paste(text)
-        }
+        // STRIPPED: tmux paste blocking removed
+        self.terminal.lock().send_paste(text)
     }
 
     fn get_title(&self) -> String {
@@ -494,19 +474,13 @@ impl Pane for LocalPane {
     }
 
     fn is_mouse_grabbed(&self) -> bool {
-        if self.tmux_domain.lock().is_some() {
-            false
-        } else {
-            self.terminal.lock().is_mouse_grabbed()
-        }
+        // STRIPPED: tmux mouse grab override removed
+        self.terminal.lock().is_mouse_grabbed()
     }
 
     fn is_alt_screen_active(&self) -> bool {
-        if self.tmux_domain.lock().is_some() {
-            false
-        } else {
-            self.terminal.lock().is_alt_screen_active()
-        }
+        // STRIPPED: tmux alt screen override removed
+        self.terminal.lock().is_alt_screen_active()
     }
 
     fn get_current_working_dir(&self, policy: CachePolicy) -> Option<Url> {
@@ -565,21 +539,9 @@ impl Pane for LocalPane {
                 info.root
             );
 
-            let hook_result = config::run_immediate_with_lua_config(|lua| {
-                let lua = match lua {
-                    Some(lua) => lua,
-                    None => return Ok(None),
-                };
-                let v = config::lua::emit_sync_callback(
-                    &*lua,
-                    ("mux-is-process-stateful".to_string(), (info.root.clone())),
-                )?;
-                match v {
-                    mlua::Value::Nil => Ok(None),
-                    mlua::Value::Boolean(v) => Ok(Some(v)),
-                    _ => Ok(None),
-                }
-            });
+            // STRIPPED: Lua hook removed (LocalProcessInfo does not impl IntoLuaMulti;
+            // Lua config will be replaced with JSON in Phase 1). Always use default check.
+            let hook_result: anyhow::Result<Option<bool>> = Ok(None);
 
             fn default_stateful_check(proc_list: &LocalProcessInfo) -> bool {
                 // Fig uses `figterm` a pseudo terminal for a lot of functionality, it runs between
@@ -827,7 +789,7 @@ impl Pane for LocalPane {
 
 struct LocalPaneDCSHandler {
     pane_id: PaneId,
-    tmux_domain: Option<Arc<TmuxDomainState>>,
+    // STRIPPED: tmux_domain: Option<Arc<TmuxDomainState>>,
 }
 
 pub(crate) fn emit_output_for_pane(pane_id: PaneId, message: &str) {
@@ -849,49 +811,13 @@ impl wezterm_term::DeviceControlHandler for LocalPaneDCSHandler {
     fn handle_device_control(&mut self, control: termwiz::escape::DeviceControlMode) {
         match control {
             DeviceControlMode::Enter(mode) => {
-                if !mode.ignored_extra_intermediates
-                    && mode.params.len() == 1
-                    && mode.params[0] == 1000
-                    && mode.intermediates.is_empty()
-                {
-                    log::info!("tmux -CC mode requested");
-
-                    // Create a new domain to host these tmux tabs
-                    let domain = TmuxDomain::new(self.pane_id);
-                    let tmux_domain = Arc::clone(&domain.inner);
-
-                    let domain: Arc<dyn Domain> = Arc::new(domain);
-                    let mux = Mux::get();
-                    mux.add_domain(&domain);
-
-                    if let Some(pane) = mux.get_pane(self.pane_id) {
-                        let pane = pane.downcast_ref::<LocalPane>().unwrap();
-                        pane.tmux_domain.lock().replace(Arc::clone(&tmux_domain));
-
-                        emit_output_for_pane(
-                            self.pane_id,
-                            "\r\n[This pane is running tmux control mode. Press q to detach]",
-                        );
-                    }
-
-                    self.tmux_domain.replace(tmux_domain);
-
-                // TODO: do we need to proactively list available tabs here?
-                // if so we should arrange to call domain.attach() and make
-                // it do the right thing.
-                } else if configuration().log_unknown_escape_sequences {
+                // STRIPPED: tmux -CC mode handling removed
+                if configuration().log_unknown_escape_sequences {
                     log::warn!("unknown DeviceControlMode::Enter {:?}", mode,);
                 }
             }
             DeviceControlMode::Exit => {
-                if let Some(tmux) = self.tmux_domain.take() {
-                    let mux = Mux::get();
-                    if let Some(pane) = mux.get_pane(self.pane_id) {
-                        let pane = pane.downcast_ref::<LocalPane>().unwrap();
-                        pane.tmux_domain.lock().take();
-                    }
-                    mux.domain_was_detached(tmux.domain_id);
-                }
+                // STRIPPED: tmux domain detach removed
             }
             DeviceControlMode::Data(c) => {
                 if configuration().log_unknown_escape_sequences {
@@ -902,13 +828,7 @@ impl wezterm_term::DeviceControlHandler for LocalPaneDCSHandler {
                     );
                 }
             }
-            DeviceControlMode::TmuxEvents(events) => {
-                if let Some(tmux) = self.tmux_domain.as_ref() {
-                    tmux.advance(events);
-                } else {
-                    log::warn!("unhandled DeviceControlMode::TmuxEvents {:?}", &events);
-                }
-            }
+            // STRIPPED: DeviceControlMode::TmuxEvents handling removed
             _ => {
                 if configuration().log_unknown_escape_sequences {
                     log::warn!("unhandled: {:?}", control);
@@ -998,7 +918,7 @@ impl LocalPane {
 
         terminal.set_device_control_handler(Box::new(LocalPaneDCSHandler {
             pane_id,
-            tmux_domain: None,
+            // STRIPPED: tmux_domain: None,
         }));
         terminal.set_notification_handler(Box::new(LocalPaneNotifHandler { pane_id }));
 
@@ -1014,7 +934,7 @@ impl LocalPane {
             pty: Mutex::new(pty),
             writer: Mutex::new(writer),
             domain_id,
-            tmux_domain: Mutex::new(None),
+            // STRIPPED: tmux_domain: Mutex::new(None),
             proc_list: Mutex::new(None),
             #[cfg(unix)]
             leader: Arc::new(Mutex::new(None)),

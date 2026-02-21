@@ -5,7 +5,7 @@ use crate::{
     TextStyle,
 };
 use anyhow::{anyhow, Context};
-use luahelper::{from_lua_value_dynamic, lua_value_to_dynamic, to_lua};
+// STRIPPED: use luahelper::{from_lua_value_dynamic, lua_value_to_dynamic, to_lua};
 use mlua::{FromLua, IntoLuaMulti, Lua, Table, Value, Variadic};
 use ordered_float::NotNan;
 use portable_pty::CommandBuilder;
@@ -17,6 +17,111 @@ use wezterm_dynamic::{
 };
 
 pub use mlua;
+
+// Inlined from the removed luahelper crate: bridge functions between mlua::Value
+// and wezterm_dynamic::Value.
+
+/// Convert an mlua::Value to a wezterm_dynamic::Value
+pub fn lua_value_to_dynamic(value: Value) -> anyhow::Result<DynValue> {
+    Ok(match value {
+        Value::Nil => DynValue::Null,
+        Value::Boolean(b) => DynValue::Bool(b),
+        Value::Integer(i) => DynValue::I64(i),
+        Value::Number(n) => DynValue::F64(ordered_float::OrderedFloat(n)),
+        Value::String(s) => DynValue::String(s.to_str()?.to_string()),
+        Value::Table(t) => {
+            // Determine if this is an array-like or object-like table
+            let len = t.raw_len();
+            if len > 0 {
+                // Check if it looks like a sequence
+                let mut is_seq = true;
+                for pair in t.clone().pairs::<Value, Value>() {
+                    let (k, _) = pair?;
+                    match k {
+                        Value::Integer(_) => {}
+                        _ => {
+                            is_seq = false;
+                            break;
+                        }
+                    }
+                }
+                if is_seq {
+                    let mut arr = vec![];
+                    for pair in t.clone().sequence_values::<Value>() {
+                        let v = pair?;
+                        arr.push(lua_value_to_dynamic(v)?);
+                    }
+                    DynValue::Array(arr.into())
+                } else {
+                    let mut obj = wezterm_dynamic::Object::default();
+                    for pair in t.pairs::<Value, Value>() {
+                        let (k, v) = pair?;
+                        let key = lua_value_to_dynamic(k)?;
+                        let val = lua_value_to_dynamic(v)?;
+                        obj.insert(key, val);
+                    }
+                    DynValue::Object(obj)
+                }
+            } else {
+                // Empty or pure-object table
+                let mut obj = wezterm_dynamic::Object::default();
+                for pair in t.pairs::<Value, Value>() {
+                    let (k, v) = pair?;
+                    let key = lua_value_to_dynamic(k)?;
+                    let val = lua_value_to_dynamic(v)?;
+                    obj.insert(key, val);
+                }
+                if obj.len() == 0 {
+                    DynValue::Array(vec![].into())
+                } else {
+                    DynValue::Object(obj)
+                }
+            }
+        }
+        _ => anyhow::bail!("cannot convert lua value {:?} to dynamic", value.type_name()),
+    })
+}
+
+/// Convert a wezterm_dynamic::Value to an mlua::Value
+pub fn dynamic_to_lua_value<'lua>(lua: &'lua Lua, value: DynValue) -> anyhow::Result<Value<'lua>> {
+    Ok(match value {
+        DynValue::Null => Value::Nil,
+        DynValue::Bool(b) => Value::Boolean(b),
+        DynValue::String(s) => Value::String(lua.create_string(&s)?),
+        DynValue::I64(i) => Value::Integer(i),
+        DynValue::U64(u) => Value::Integer(u as i64),
+        DynValue::F64(f) => Value::Number(f.into_inner()),
+        DynValue::Array(arr) => {
+            let table = lua.create_table()?;
+            for (i, v) in arr.into_iter().enumerate() {
+                table.set(i + 1, dynamic_to_lua_value(lua, v)?)?;
+            }
+            Value::Table(table)
+        }
+        DynValue::Object(obj) => {
+            let table = lua.create_table()?;
+            for (k, v) in obj.into_iter() {
+                table.set(
+                    dynamic_to_lua_value(lua, k)?,
+                    dynamic_to_lua_value(lua, v)?,
+                )?;
+            }
+            Value::Table(table)
+        }
+    })
+}
+
+/// Convert an mlua::Value to a Rust type via wezterm_dynamic::FromDynamic
+pub fn from_lua_value_dynamic<T: FromDynamic>(value: Value) -> anyhow::Result<T> {
+    let dyn_value = lua_value_to_dynamic(value)?;
+    T::from_dynamic(&dyn_value, Default::default()).map_err(|e| anyhow::anyhow!("{}", e))
+}
+
+/// Convert a Rust type to an mlua::Value via wezterm_dynamic::ToDynamic
+pub fn to_lua<'lua, T: ToDynamic>(lua: &'lua Lua, value: T) -> anyhow::Result<Value<'lua>> {
+    let dyn_value = value.to_dynamic();
+    dynamic_to_lua_value(lua, dyn_value)
+}
 
 static LUA_REGISTRY_USER_CALLBACK_COUNT: &str = "wezterm-user-callback-count";
 
@@ -342,7 +447,7 @@ end
             lua.create_function(font_with_fallback)?,
         )?;
         wezterm_mod.set("hostname", lua.create_function(hostname)?)?;
-        wezterm_mod.set("action", luahelper::enumctor::Enum::<KeyAssignment>::new())?;
+        // STRIPPED: wezterm_mod.set("action", luahelper::enumctor::Enum::<KeyAssignment>::new())?;
         wezterm_mod.set(
             "has_action",
             lua.create_function(|_lua, name: String| {
@@ -366,7 +471,7 @@ end
             "default_hyperlink_rules",
             lua.create_function(move |lua, ()| {
                 let rules = crate::config::default_hyperlink_rules();
-                Ok(to_lua(lua, rules))
+                to_lua(lua, rules).map_err(|e| mlua::Error::external(e))
             })?,
         )?;
 
@@ -456,7 +561,7 @@ struct TextStyleAttributes {
 }
 impl<'lua> FromLua<'lua> for TextStyleAttributes {
     fn from_lua(value: Value<'lua>, _lua: &'lua Lua) -> Result<Self, mlua::Error> {
-        let mut attr: TextStyleAttributes = from_lua_value_dynamic(value)?;
+        let mut attr: TextStyleAttributes = from_lua_value_dynamic(value).map_err(|e| mlua::Error::external(e))?;
         if let Some(italic) = attr.italic.take() {
             attr.style = if italic {
                 FontStyle::Italic
@@ -508,7 +613,7 @@ impl<'lua> FromLua<'lua> for LuaFontAttributes {
                 Ok(attr)
             }
             v => {
-                let mut attr: LuaFontAttributes = from_lua_value_dynamic(v)?;
+                let mut attr: LuaFontAttributes = from_lua_value_dynamic(v).map_err(|e| mlua::Error::external(e))?;
                 if let Some(italic) = attr.italic.take() {
                     attr.style = if italic {
                         FontStyle::Italic
@@ -671,7 +776,7 @@ fn exec_domain<'lua>(
         }
         Some(Value::String(value)) => Some(ValueOrFunc::Value(lua_value_to_dynamic(
             Value::String(value),
-        )?)),
+        ).map_err(|e| mlua::Error::external(e))?)),
         Some(_) => {
             return Err(mlua::Error::external(
                 "label function parameter must be either a string or a lua function",

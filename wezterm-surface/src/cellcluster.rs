@@ -1,6 +1,6 @@
 use crate::line::CellRef;
 use alloc::borrow::Cow;
-use wezterm_bidi::{BidiContext, Direction, ParagraphDirectionHint};
+use crate::bidi_stub::{BidiContext, Direction, ParagraphDirectionHint};
 use wezterm_cell::CellAttributes;
 use wezterm_char_props::emoji::Presentation;
 

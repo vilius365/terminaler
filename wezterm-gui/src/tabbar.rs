@@ -8,7 +8,36 @@ use termwiz::escape::csi::Sgr;
 use termwiz::escape::parser::Parser;
 use termwiz::escape::{Action, ControlCode, CSI};
 use termwiz::surface::SEQ_ZERO;
-use termwiz_funcs::{format_as_escapes, FormatColor, FormatItem};
+// STRIPPED: termwiz_funcs removed; define minimal stubs locally
+
+/// Minimal stub for termwiz_funcs::FormatColor
+#[derive(Clone, Debug, PartialEq)]
+pub enum FormatColor {
+    AnsiColor(termwiz::color::AnsiColor),
+    Color(termwiz::color::RgbColor),
+    Default,
+}
+
+/// Minimal stub for termwiz_funcs::FormatItem
+#[derive(Clone, Debug, PartialEq)]
+pub enum FormatItem {
+    Text(String),
+    Attribute(termwiz::cell::AttributeChange),
+    Foreground(FormatColor),
+    Background(FormatColor),
+}
+
+/// Minimal stub for termwiz_funcs::format_as_escapes
+/// Converts FormatItems to an escape-sequence string (simplified, no colors).
+fn format_as_escapes(items: Vec<FormatItem>) -> anyhow::Result<String> {
+    let mut result = String::new();
+    for item in items {
+        if let FormatItem::Text(s) = item {
+            result.push_str(&s);
+        }
+    }
+    Ok(result)
+}
 use wezterm_term::{Line, Progress};
 use window::{IntegratedTitleButton, IntegratedTitleButtonAlignment, IntegratedTitleButtonStyle};
 
@@ -72,13 +101,12 @@ fn call_format_tab_title(
             match &v {
                 mlua::Value::Nil => Ok(None),
                 mlua::Value::Table(_) => {
-                    let items = <Vec<FormatItem>>::from_lua(v, &*lua)?;
-
-                    let esc = format_as_escapes(items.clone())?;
-                    let line = parse_status_text(&esc, CellAttributes::default());
-
+                    // STRIPPED: FormatItem::from_lua not implemented (termwiz_funcs stripped)
+                    // Fall through to string representation
+                    let s = format!("{:?}", v);
+                    let line = parse_status_text(&s, CellAttributes::default());
                     Ok(Some(TitleText {
-                        items,
+                        items: vec![FormatItem::Text(s)],
                         len: line.len(),
                     }))
                 }

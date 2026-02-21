@@ -1,6 +1,7 @@
-use config::{ConfigHandle, SshMultiplexing};
+use config::ConfigHandle;
+// STRIPPED: SshMultiplexing removed (SSH support stripped)
 use mux::domain::{Domain, LocalDomain};
-use mux::ssh::RemoteSshDomain;
+// STRIPPED: use mux::ssh::RemoteSshDomain; (SSH support stripped)
 use mux::Mux;
 use std::sync::Arc;
 use wezterm_client::domain::{ClientDomain, ClientDomainConfig};
@@ -10,22 +11,10 @@ pub mod local;
 pub mod pki;
 pub mod sessionhandler;
 
-fn client_domains(config: &config::ConfigHandle) -> Vec<ClientDomainConfig> {
-    let mut domains = vec![];
-    for unix_dom in &config.unix_domains {
-        domains.push(ClientDomainConfig::Unix(unix_dom.clone()));
-    }
-
-    for ssh_dom in config.ssh_domains().into_iter() {
-        if ssh_dom.multiplexing == SshMultiplexing::WezTerm {
-            domains.push(ClientDomainConfig::Ssh(ssh_dom.clone()));
-        }
-    }
-
-    for tls_client in &config.tls_clients {
-        domains.push(ClientDomainConfig::Tls(tls_client.clone()));
-    }
-    domains
+fn client_domains(_config: &config::ConfigHandle) -> Vec<ClientDomainConfig> {
+    // STRIPPED: SSH and TLS domain config removed; unix_domains field removed from Config.
+    // Unix domain sockets for mux will be re-added when daemon support is implemented (Phase 5).
+    vec![]
 }
 
 pub fn update_mux_domains(config: &ConfigHandle) -> anyhow::Result<()> {
@@ -39,7 +28,7 @@ pub fn update_mux_domains_for_server(config: &ConfigHandle) -> anyhow::Result<()
 fn update_mux_domains_impl(config: &ConfigHandle, is_standalone_mux: bool) -> anyhow::Result<()> {
     let mux = Mux::get();
 
-    for client_config in client_domains(&config) {
+    for client_config in client_domains(config) {
         if mux.get_domain_by_name(client_config.name()).is_some() {
             continue;
         }
@@ -48,18 +37,8 @@ fn update_mux_domains_impl(config: &ConfigHandle, is_standalone_mux: bool) -> an
         mux.add_domain(&domain);
     }
 
-    for ssh_dom in config.ssh_domains().into_iter() {
-        if ssh_dom.multiplexing != SshMultiplexing::None {
-            continue;
-        }
-
-        if mux.get_domain_by_name(&ssh_dom.name).is_some() {
-            continue;
-        }
-
-        let domain: Arc<dyn Domain> = Arc::new(RemoteSshDomain::with_ssh_domain(&ssh_dom)?);
-        mux.add_domain(&domain);
-    }
+    // STRIPPED: SSH domain setup removed (mux::ssh stripped)
+    // STRIPPED: TLS client domain setup removed
 
     for wsl_dom in config.wsl_domains() {
         if mux.get_domain_by_name(&wsl_dom.name).is_some() {
@@ -79,14 +58,8 @@ fn update_mux_domains_impl(config: &ConfigHandle, is_standalone_mux: bool) -> an
         mux.add_domain(&domain);
     }
 
-    for serial in &config.serial_ports {
-        if mux.get_domain_by_name(&serial.name).is_some() {
-            continue;
-        }
-
-        let domain: Arc<dyn Domain> = Arc::new(LocalDomain::new_serial_domain(serial.clone())?);
-        mux.add_domain(&domain);
-    }
+    // STRIPPED: serial_ports domain setup removed (serial support stripped)
+    // STRIPPED: LocalDomain::new_serial_domain removed
 
     if is_standalone_mux {
         if let Some(name) = &config.default_mux_server_domain {

@@ -1,5 +1,5 @@
 use crate::parser::ParsedFont;
-use crate::shaper::{FallbackIdx, FontMetrics, FontShaper, GlyphInfo, PresentationWidth};
+use crate::shaper::{Direction, FallbackIdx, FontMetrics, FontShaper, GlyphInfo, PresentationWidth};
 use crate::units::*;
 use crate::{ftwrap, hbwrap as harfbuzz};
 use anyhow::{anyhow, Context};
@@ -11,7 +11,7 @@ use std::cell::{RefCell, RefMut};
 use std::collections::HashMap;
 use std::ops::Range;
 use termwiz::cell::{unicode_column_width, Presentation};
-use wezterm_bidi::Direction;
+// STRIPPED: use wezterm_bidi::Direction;
 
 // Changing these will switch to using harfbuzz's opentype functions.
 // There's something awry with our integration in that mode: the advances

@@ -4,11 +4,8 @@ use crate::ftwrap::{
     SelectedFontSize, FT_LOAD_NO_HINTING,
 };
 use crate::parser::ParsedFont;
-use crate::rasterizer::colr::{
-    apply_draw_ops_to_context, paint_linear_gradient, paint_radial_gradient, paint_sweep_gradient,
-    ColorLine, ColorStop, PaintOp,
-};
-use crate::rasterizer::harfbuzz::{argb_to_rgba, HarfbuzzRasterizer};
+use crate::rasterizer::colr::{ColorLine, ColorStop, Extend, Matrix, Operator, PaintOp};
+use crate::rasterizer::harfbuzz::HarfbuzzRasterizer;
 use crate::rasterizer::{FontRasterizer, FAKE_ITALIC_SKEW};
 use crate::units::*;
 use crate::{ftwrap, FontRasterizerSelection, RasterizedGlyph};
@@ -16,7 +13,6 @@ use ::freetype::{
     FT_Color_Root_Transform, FT_GlyphSlotRec_, FT_Matrix, FT_Opaque_Paint_, FT_PaintFormat_,
 };
 use anyhow::{bail, Context as _};
-use cairo::{Content, Context, Extend, Format, ImageSurface, Matrix, Operator, RecordingSurface};
 use config::{DisplayPixelGeometry, FreeTypeLoadFlags, FreeTypeLoadTarget};
 use std::cell::RefCell;
 use std::f64::consts::PI;
@@ -461,51 +457,13 @@ impl FreeTypeRasterizer {
 }
 
 fn rasterize_from_ops(
-    ops: Vec<PaintOp>,
-    scale_x: f64,
-    scale_y: f64,
+    _ops: Vec<PaintOp>,
+    _scale_x: f64,
+    _scale_y: f64,
 ) -> anyhow::Result<RasterizedGlyph> {
-    let (surface, has_color) = record_to_cairo_surface(ops, scale_x, scale_y)?;
-    let (left, top, width, height) = surface.ink_extents();
-    log::trace!("extents: left={left} top={top} width={width} height={height}");
-
-    if width as usize == 0 || height as usize == 0 {
-        return Ok(RasterizedGlyph {
-            data: vec![],
-            height: 0,
-            width: 0,
-            bearing_x: PixelLength::new(0.),
-            bearing_y: PixelLength::new(0.),
-            has_color: false,
-            is_scaled: true,
-        });
-    }
-
-    let mut bounds_adjust = Matrix::identity();
-    bounds_adjust.translate(left * -1., top * -1.);
-    log::trace!("dims: {width}x{height} {bounds_adjust:?}");
-
-    let target = ImageSurface::create(Format::ARgb32, width as i32, height as i32)?;
-    {
-        let context = Context::new(&target)?;
-        context.transform(bounds_adjust);
-        context.set_antialias(cairo::Antialias::Best);
-        context.set_source_surface(surface, 0., 0.)?;
-        context.paint()?;
-    }
-
-    let mut data = target.take_data()?.to_vec();
-    argb_to_rgba(&mut data);
-
-    Ok(RasterizedGlyph {
-        data,
-        height: height as usize,
-        width: width as usize,
-        bearing_x: PixelLength::new(left.min(0.)),
-        bearing_y: PixelLength::new(top * -1.),
-        has_color,
-        is_scaled: true,
-    })
+    // Cairo was stripped from Terminaler (Windows-only build).
+    // COLR v1 outline rasterization via cairo is not supported.
+    anyhow::bail!("COLR v1 outline rasterization via cairo is not supported in this build")
 }
 
 struct Walker<'a> {
@@ -798,113 +756,4 @@ fn affine2x3_to_matrix(t: FT_Affine23) -> Matrix {
     )
 }
 
-fn record_to_cairo_surface(
-    paint_ops: Vec<PaintOp>,
-    scale_x: f64,
-    scale_y: f64,
-) -> anyhow::Result<(RecordingSurface, bool)> {
-    let mut has_color = false;
-    let surface = RecordingSurface::create(Content::ColorAlpha, None)?;
-    let context = Context::new(&surface)?;
-    context.scale(scale_x, scale_y);
-    context.set_antialias(cairo::Antialias::Best);
-
-    for pop in paint_ops {
-        match pop {
-            PaintOp::PushTransform(matrix) => {
-                context.save()?;
-                context.transform(matrix);
-            }
-            PaintOp::PopTransform => {
-                context.restore()?;
-            }
-            PaintOp::PushClip(draw) => {
-                context.save()?;
-                apply_draw_ops_to_context(&draw, &context)?;
-                context.clip();
-            }
-            PaintOp::PopClip => {
-                context.restore()?;
-            }
-            PaintOp::PushGroup => {
-                context.save()?;
-                context.push_group();
-            }
-            PaintOp::PopGroup(operator) => {
-                context.pop_group_to_source()?;
-                context.set_operator(operator);
-                context.paint()?;
-                context.restore()?;
-            }
-            PaintOp::PaintSolid(color) => {
-                if color.as_srgba32() != 0xffffffff {
-                    has_color = true;
-                }
-                let (r, g, b, a) = color.as_srgba_tuple();
-                context.set_source_rgba(r.into(), g.into(), b.into(), a.into());
-                context.paint()?;
-            }
-            PaintOp::PaintLinearGradient {
-                x0,
-                y0,
-                x1,
-                y1,
-                x2,
-                y2,
-                color_line,
-            } => {
-                has_color = true;
-                paint_linear_gradient(
-                    &context,
-                    x0.into(),
-                    y0.into(),
-                    x1.into(),
-                    y1.into(),
-                    x2.into(),
-                    y2.into(),
-                    color_line,
-                )?;
-            }
-            PaintOp::PaintRadialGradient {
-                x0,
-                y0,
-                r0,
-                x1,
-                y1,
-                r1,
-                color_line,
-            } => {
-                has_color = true;
-                paint_radial_gradient(
-                    &context,
-                    x0.into(),
-                    y0.into(),
-                    r0.into(),
-                    x1.into(),
-                    y1.into(),
-                    r1.into(),
-                    color_line,
-                )?;
-            }
-            PaintOp::PaintSweepGradient {
-                x0,
-                y0,
-                start_angle,
-                end_angle,
-                color_line,
-            } => {
-                has_color = true;
-                paint_sweep_gradient(
-                    &context,
-                    x0.into(),
-                    y0.into(),
-                    start_angle.into(),
-                    end_angle.into(),
-                    color_line,
-                )?;
-            }
-        }
-    }
-
-    Ok((surface, has_color))
-}
+// record_to_cairo_surface removed: cairo was stripped from Terminaler (Windows-only build).

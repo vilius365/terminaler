@@ -1,6 +1,5 @@
 use crate::config::validate_domain_name;
 use crate::*;
-use luahelper::impl_lua_conversion_dynamic;
 use std::collections::HashMap;
 use wezterm_dynamic::{FromDynamic, ToDynamic};
 

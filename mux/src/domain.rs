@@ -13,7 +13,8 @@ use crate::Mux;
 use anyhow::{bail, Context, Error};
 use async_trait::async_trait;
 use config::keyassignment::{SpawnCommand, SpawnTabDomain};
-use config::{configuration, ExecDomain, SerialDomain, ValueOrFunc, WslDomain};
+use config::{configuration, ExecDomain, ValueOrFunc, WslDomain};
+// STRIPPED: SerialDomain import removed
 use downcast_rs::{impl_downcast, Downcast};
 use parking_lot::Mutex;
 use portable_pty::{native_pty_system, CommandBuilder, ExitStatus, MasterPty, PtySize, PtySystem};
@@ -243,15 +244,7 @@ impl LocalDomain {
         Self::new(&exec_domain.name)
     }
 
-    pub fn new_serial_domain(serial_domain: SerialDomain) -> anyhow::Result<Self> {
-        let port = serial_domain.port.as_ref().unwrap_or(&serial_domain.name);
-        let mut serial = portable_pty::serial::SerialTty::new(&port);
-        if let Some(baud) = serial_domain.baud {
-            serial.set_baud_rate(baud as u32);
-        }
-        let pty_system = Box::new(serial);
-        Ok(Self::with_pty_system(&serial_domain.name, pty_system))
-    }
+    // STRIPPED: new_serial_domain method removed
 
     #[cfg(unix)]
     fn is_conpty(&self) -> bool {
@@ -343,8 +336,9 @@ impl LocalDomain {
                     (ed.fixup_command.clone(), (spawn_command.clone())),
                 )
                 .await?;
+                // STRIPPED: luahelper::from_lua_value_dynamic -> config::lua::from_lua_value_dynamic
                 let cmd: SpawnCommand =
-                    luahelper::from_lua_value_dynamic(value).with_context(|| {
+                    config::lua::from_lua_value_dynamic(value).with_context(|| {
                         format!(
                             "interpreting SpawnCommand result from ExecDomain {}",
                             ed.name
@@ -480,9 +474,7 @@ impl LocalDomain {
             cmd.env("WEZTERM_UNIX_SOCKET", sock);
         }
         cmd.env("WEZTERM_PANE", pane_id.to_string());
-        if let Some(agent) = Mux::get().agent.as_ref() {
-            cmd.env("SSH_AUTH_SOCK", agent.path());
-        }
+        // STRIPPED: SSH agent SSH_AUTH_SOCK removed
         self.fixup_command(&mut cmd).await?;
         Ok(cmd)
     }
@@ -684,8 +676,9 @@ impl Domain for LocalDomain {
                             (label_func.clone(), (self.name.clone())),
                         )
                         .await?;
+                        // STRIPPED: luahelper::from_lua_value_dynamic -> config::lua::from_lua_value_dynamic
                         let label: String =
-                            luahelper::from_lua_value_dynamic(value).with_context(|| {
+                            config::lua::from_lua_value_dynamic(value).with_context(|| {
                                 format!(
                                     "interpreting SpawnCommand result from ExecDomain {}",
                                     ed.name

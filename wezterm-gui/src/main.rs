@@ -9,11 +9,13 @@ use anyhow::{anyhow, Context};
 use clap::builder::ValueParser;
 use clap::{Parser, ValueHint};
 use config::keyassignment::{SpawnCommand, SpawnTabDomain};
-use config::{ConfigHandle, SerialDomain, SshDomain, SshMultiplexing};
+use config::ConfigHandle;
+// STRIPPED: SerialDomain, SshDomain, SshMultiplexing removed (SSH/serial support stripped)
 use mux::activity::Activity;
 use mux::domain::{Domain, LocalDomain};
 use mux::Mux;
-use mux_lua::MuxDomain;
+// STRIPPED: mux_lua removed; use local stub
+use crate::scripting::guiwin::MuxDomain;
 use portable_pty::cmdbuilder::CommandBuilder;
 use promise::spawn::block_on;
 use std::borrow::Cow;
@@ -26,7 +28,8 @@ use std::sync::Arc;
 use termwiz::cell::CellAttributes;
 use termwiz::surface::{Line, SEQ_ZERO};
 use unicode_normalization::UnicodeNormalization;
-use wezterm_bidi::Direction;
+// STRIPPED: wezterm_bidi removed; use bidi stub from termwiz::surface
+use termwiz::surface::bidi_stub::Direction;
 use wezterm_client::domain::ClientDomain;
 use wezterm_font::shaper::PresentationWidth;
 use wezterm_font::FontConfiguration;
@@ -117,11 +120,8 @@ enum SubCommand {
     #[command(short_flag_alias = 'e', hide = true)]
     BlockingStart(StartCommand),
 
-    #[command(name = "ssh", about = "Establish an ssh session")]
-    Ssh(SshCommand),
-
-    #[command(name = "serial", about = "Open a serial port")]
-    Serial(SerialCommand),
+    // STRIPPED: Ssh(SshCommand), (SSH support removed)
+    // STRIPPED: Serial(SerialCommand), (serial support removed)
 
     #[command(name = "connect", about = "Connect to wezterm multiplexer")]
     Connect(ConnectCommand),
@@ -133,124 +133,10 @@ enum SubCommand {
     ShowKeys(ShowKeysCommand),
 }
 
-async fn async_run_ssh(opts: SshCommand) -> anyhow::Result<()> {
-    let mut ssh_option = HashMap::new();
-    if opts.verbose {
-        ssh_option.insert("wezterm_ssh_verbose".to_string(), "true".to_string());
-    }
-    for (k, v) in opts.config_override {
-        ssh_option.insert(k.to_lowercase().to_string(), v);
-    }
-
-    let dom = SshDomain {
-        name: format!("SSH to {}", opts.user_at_host_and_port),
-        remote_address: opts.user_at_host_and_port.host_and_port.clone(),
-        username: opts.user_at_host_and_port.username.clone(),
-        multiplexing: SshMultiplexing::None,
-        ssh_option,
-        ..Default::default()
-    };
-
-    let start_command = StartCommand {
-        always_new_process: true,
-        class: opts.class,
-        cwd: None,
-        no_auto_connect: true,
-        position: opts.position,
-        workspace: None,
-        prog: opts.prog.clone(),
-        ..Default::default()
-    };
-
-    let cmd = if !opts.prog.is_empty() {
-        let builder = CommandBuilder::from_argv(opts.prog);
-        Some(builder)
-    } else {
-        None
-    };
-
-    let domain: Arc<dyn Domain> = Arc::new(mux::ssh::RemoteSshDomain::with_ssh_domain(&dom)?);
-    let mux = Mux::get();
-    mux.add_domain(&domain);
-    mux.set_default_domain(&domain);
-
-    let should_publish = false;
-    async_run_terminal_gui(cmd, start_command, should_publish).await
-}
-
-fn run_ssh(opts: SshCommand) -> anyhow::Result<()> {
-    if let Some(cls) = opts.class.as_ref() {
-        crate::set_window_class(cls);
-    }
-    if let Some(pos) = opts.position.as_ref() {
-        set_window_position(pos.clone());
-    }
-
-    build_initial_mux(&config::configuration(), None, None)?;
-
-    let gui = crate::frontend::try_new()?;
-
-    promise::spawn::spawn(async {
-        if let Err(err) = async_run_ssh(opts).await {
-            terminate_with_error(err);
-        }
-    })
-    .detach();
-
-    maybe_show_configuration_error_window();
-    gui.run_forever()
-}
-
-async fn async_run_serial(opts: SerialCommand) -> anyhow::Result<()> {
-    let serial_domain = SerialDomain {
-        name: format!("Serial Port {}", opts.port),
-        port: Some(opts.port.clone()),
-        baud: opts.baud,
-    };
-
-    let start_command = StartCommand {
-        always_new_process: true,
-        class: opts.class,
-        cwd: None,
-        no_auto_connect: true,
-        position: opts.position,
-        workspace: None,
-        domain: Some(serial_domain.name.clone()),
-        ..Default::default()
-    };
-
-    let cmd = None;
-
-    let domain: Arc<dyn Domain> = Arc::new(LocalDomain::new_serial_domain(serial_domain)?);
-    let mux = Mux::get();
-    mux.add_domain(&domain);
-
-    let should_publish = false;
-    async_run_terminal_gui(cmd, start_command, should_publish).await
-}
-
-fn run_serial(config: config::ConfigHandle, opts: SerialCommand) -> anyhow::Result<()> {
-    if let Some(cls) = opts.class.as_ref() {
-        crate::set_window_class(cls);
-    }
-    if let Some(pos) = opts.position.as_ref() {
-        set_window_position(pos.clone());
-    }
-
-    build_initial_mux(&config, None, None)?;
-
-    let gui = crate::frontend::try_new()?;
-
-    promise::spawn::spawn(async {
-        if let Err(err) = async_run_serial(opts).await {
-            terminate_with_error(err);
-        }
-    })
-    .detach();
-
-    maybe_show_configuration_error_window();
-    gui.run_forever()
-}
+// STRIPPED: async_run_ssh removed (SSH support stripped)
+// STRIPPED: run_ssh removed (SSH support stripped)
+// STRIPPED: async_run_serial removed (serial support stripped)
+// STRIPPED: run_serial removed (serial support stripped)
 
 fn have_panes_in_domain_and_ws(domain: &Arc<dyn Domain>, workspace: &Option<String>) -> bool {
     let mux = Mux::get();
@@ -1199,10 +1085,8 @@ fn run() -> anyhow::Result<()> {
     };
 
     env_bootstrap::bootstrap();
-    // window_funcs is not set up by env_bootstrap as window_funcs is
-    // GUI environment specific and env_bootstrap is used to setup the
-    // headless mux server.
-    config::lua::add_context_setup_func(window_funcs::register);
+    // STRIPPED: window_funcs crate removed; skip its registration
+    // config::lua::add_context_setup_func(window_funcs::register);
     config::lua::add_context_setup_func(crate::scripting::register);
     config::lua::add_context_setup_func(crate::stats::register);
 
@@ -1215,9 +1099,7 @@ fn run() -> anyhow::Result<()> {
         opts.skip_config,
     )?;
     let config = config::configuration();
-    if let Some(value) = &config.default_ssh_auth_sock {
-        std::env::set_var("SSH_AUTH_SOCK", value);
-    }
+    // STRIPPED: default_ssh_auth_sock removed (SSH support stripped)
 
     let sub = match opts.cmd.as_ref().cloned() {
         Some(SubCommand::BlockingStart(start)) => {
@@ -1254,8 +1136,8 @@ fn run() -> anyhow::Result<()> {
             res
         }
         SubCommand::BlockingStart(_) => unreachable!(),
-        SubCommand::Ssh(ssh) => run_ssh(ssh),
-        SubCommand::Serial(serial) => run_serial(config, serial),
+        // STRIPPED: SubCommand::Ssh(ssh) => run_ssh(ssh), (SSH support removed)
+        // STRIPPED: SubCommand::Serial(serial) => run_serial(config, serial), (serial support removed)
         SubCommand::Connect(connect) => run_terminal_gui(
             StartCommand {
                 domain: Some(connect.domain_name.clone()),

@@ -99,9 +99,7 @@ fn run() -> anyhow::Result<()> {
     let config = config::configuration();
 
     config.update_ulimit()?;
-    if let Some(value) = &config.default_ssh_auth_sock {
-        std::env::set_var("SSH_AUTH_SOCK", value);
-    }
+    // STRIPPED: default_ssh_auth_sock removed (SSH support stripped)
 
     #[cfg(unix)]
     let mut pid_file = None;
@@ -305,21 +303,22 @@ fn terminate_with_error(err: anyhow::Error) -> ! {
     std::process::exit(1);
 }
 
-mod ossl;
+// STRIPPED: mod ossl;
 
 pub fn spawn_listener() -> anyhow::Result<()> {
-    let config = configuration();
-    for unix_dom in &config.unix_domains {
-        std::env::set_var("WEZTERM_UNIX_SOCKET", unix_dom.socket_path());
-        let mut listener = wezterm_mux_server_impl::local::LocalListener::with_domain(unix_dom)?;
-        thread::spawn(move || {
-            listener.run();
-        });
-    }
+    // STRIPPED: config.unix_domains removed; use a single default unix domain socket.
+    // In Phase 5, this will be replaced with proper daemon socket configuration.
+    let unix_dom = config::UnixDomain::default();
+    std::env::set_var("WEZTERM_UNIX_SOCKET", unix_dom.socket_path());
+    let mut listener = wezterm_mux_server_impl::local::LocalListener::with_domain(&unix_dom)?;
+    thread::spawn(move || {
+        listener.run();
+    });
 
-    for tls_server in &config.tls_servers {
-        ossl::spawn_tls_listener(tls_server)?;
-    }
+    // STRIPPED: TLS server listener (requires openssl/async_ossl)
+    // for tls_server in &config.tls_servers {
+    //     ossl::spawn_tls_listener(tls_server)?;
+    // }
 
     Ok(())
 }

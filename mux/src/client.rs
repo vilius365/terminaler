@@ -34,7 +34,8 @@ impl ClientId {
             pid: unsafe { libc::getpid() as u32 },
             epoch: *EPOCH,
             id,
-            ssh_auth_sock: crate::AgentProxy::default_ssh_auth_sock(),
+            // STRIPPED: SSH agent support removed
+            ssh_auth_sock: std::env::var("SSH_AUTH_SOCK").ok(),
         }
     }
 }

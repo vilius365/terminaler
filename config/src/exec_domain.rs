@@ -1,5 +1,4 @@
 use crate::config::validate_domain_name;
-use luahelper::impl_lua_conversion_dynamic;
 use wezterm_dynamic::{FromDynamic, ToDynamic, Value};
 
 #[derive(Debug, Clone, FromDynamic, ToDynamic)]

@@ -50,7 +50,8 @@ use mux::tab::{
 };
 use mux::window::WindowId as MuxWindowId;
 use mux::{Mux, MuxNotification};
-use mux_lua::MuxPane;
+// STRIPPED: mux_lua removed; use local stub
+use crate::scripting::guiwin::MuxPane;
 use smol::channel::Sender;
 use smol::Timer;
 use std::cell::{RefCell, RefMut};
@@ -312,11 +313,12 @@ impl UserData for PaneInformation {
             Ok(name)
         });
         fields.add_field_method_get("current_working_dir", |_, this| {
+            // STRIPPED: url_funcs removed; return cwd as a string instead of Url object
             if let Some(mux) = Mux::try_get() {
                 if let Some(pane) = mux.get_pane(this.pane_id) {
                     return Ok(pane
                         .get_current_working_dir(CachePolicy::AllowStale)
-                        .map(|url| url_funcs::Url { url }));
+                        .map(|url| url.to_string()));
                 }
             }
             Ok(None)
@@ -1917,7 +1919,7 @@ impl TermWindow {
         let mux = Mux::get();
         let window = GuiWin::new(self);
         let pane = match mux.get_pane(pane_id) {
-            Some(pane) => mux_lua::MuxPane(pane.pane_id()),
+            Some(pane) => MuxPane(pane.pane_id()),
             None => return,
         };
 
@@ -3153,7 +3155,14 @@ impl TermWindow {
                 )]);
             }
             OpenUri(link) => {
-                wezterm_open_url::open_url(link);
+                // STRIPPED: wezterm_open_url removed; open URL via OS shell command
+                log::info!("OpenUri: {}", link);
+                #[cfg(windows)]
+                {
+                    let _ = std::process::Command::new("cmd")
+                        .args(["/C", "start", "", &link])
+                        .spawn();
+                }
             }
             ActivateCommandPalette => {
                 let modal = crate::termwindow::palette::CommandPalette::new(self);
@@ -3198,7 +3207,13 @@ impl TermWindow {
                 };
                 if default_click {
                     log::info!("clicking {}", link);
-                    wezterm_open_url::open_url(&link);
+                    // STRIPPED: wezterm_open_url removed; open URL via OS shell command
+                    #[cfg(windows)]
+                    {
+                        let _ = std::process::Command::new("cmd")
+                            .args(["/C", "start", "", &link])
+                            .spawn();
+                    }
                 }
                 Ok(())
             }

@@ -60,7 +60,7 @@ pub struct LocalProcessInfo {
     pub children: HashMap<u32, LocalProcessInfo>,
 }
 #[cfg(feature = "lua")]
-luahelper::impl_lua_conversion_dynamic!(LocalProcessInfo);
+config::impl_lua_conversion_dynamic!(LocalProcessInfo);
 
 impl LocalProcessInfo {
     /// Walk this sub-tree of processes and return a unique set

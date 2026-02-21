@@ -1,6 +1,6 @@
 use crate::color::ColorPalette;
 use downcast_rs::{impl_downcast, Downcast};
-use wezterm_bidi::ParagraphDirectionHint;
+use wezterm_surface::bidi_stub::ParagraphDirectionHint;
 use wezterm_cell::UnicodeVersion;
 use wezterm_surface::{Line, SequenceNo};
 

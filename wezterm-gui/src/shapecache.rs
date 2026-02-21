@@ -121,7 +121,8 @@ mod test {
     use std::rc::Rc;
     use termwiz::cell::CellAttributes;
     use termwiz::surface::{Line, SEQ_ZERO};
-    use wezterm_bidi::Direction;
+    // STRIPPED: wezterm_bidi removed; use bidi stub
+    use termwiz::surface::bidi_stub::Direction;
     use wezterm_font::shaper::PresentationWidth;
     use wezterm_font::{FontConfiguration, LoadedFont};
 

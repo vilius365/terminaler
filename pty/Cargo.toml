@@ -14,14 +14,15 @@ downcast-rs.workspace = true
 filedescriptor.workspace = true
 libc.workspace = true
 log.workspace = true
-nix = {workspace=true, features=["term", "fs"]}
 serde = {workspace=true, optional=true, features=["derive"]}
-serial2.workspace = true
 shell-words.workspace = true
 
 [features]
 default = []
 serde_support = ["serde"]
+
+[target."cfg(unix)".dependencies]
+nix = {workspace=true, features=["term", "fs"]}
 
 [target."cfg(windows)".dependencies]
 bitflags.workspace = true

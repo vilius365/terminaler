@@ -15,20 +15,20 @@ use crate::keyassignment::{
 };
 use crate::keys::{Key, LeaderKey, Mouse};
 use crate::lua::make_lua_context;
-use crate::ssh::{SshBackend, SshDomain};
-use crate::tls::{TlsDomainClient, TlsDomainServer};
+// STRIPPED: use crate::ssh::{SshBackend, SshDomain};
+// STRIPPED: use crate::tls::{TlsDomainClient, TlsDomainServer};
 use crate::units::Dimension;
-use crate::unix::UnixDomain;
+// STRIPPED: use crate::unix::UnixDomain;
 use crate::wsl::WslDomain;
 use crate::{
     default_config_with_overrides_applied, default_one_point_oh, default_one_point_oh_f64,
     default_true, default_win32_acrylic_accent_color, CellWidth, GpuInfo,
     IntegratedTitleButtonColor, KeyMapPreference, LoadedConfig, MouseEventTriggerMods, RgbaColor,
-    SerialDomain, SystemBackdrop, WebGpuPowerPreference, CONFIG_DIRS, CONFIG_FILE_OVERRIDE,
+    // STRIPPED: SerialDomain,
+    SystemBackdrop, WebGpuPowerPreference, CONFIG_DIRS, CONFIG_FILE_OVERRIDE,
     CONFIG_OVERRIDES, CONFIG_SKIP, HOME_DIR,
 };
 use anyhow::Context;
-use luahelper::impl_lua_conversion_dynamic;
 use mlua::FromLua;
 use portable_pty::CommandBuilder;
 use std::collections::HashMap;
@@ -39,7 +39,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use termwiz::hyperlink;
 use termwiz::surface::CursorShape;
-use wezterm_bidi::ParagraphDirectionHint;
+use wezterm_surface::bidi_stub::ParagraphDirectionHint;
 use wezterm_config_derive::ConfigMeta;
 use wezterm_dynamic::{FromDynamic, ToDynamic};
 use wezterm_input_types::{
@@ -355,27 +355,17 @@ pub struct Config {
     #[dynamic(default)]
     pub exec_domains: Vec<ExecDomain>,
 
-    #[dynamic(default)]
-    pub serial_ports: Vec<SerialDomain>,
+    // STRIPPED: pub serial_ports: Vec<SerialDomain>,
 
-    /// The set of unix domains
-    #[dynamic(default = "UnixDomain::default_unix_domains")]
-    pub unix_domains: Vec<UnixDomain>,
+    // STRIPPED: pub unix_domains: Vec<UnixDomain>,
 
-    #[dynamic(default)]
-    pub ssh_domains: Option<Vec<SshDomain>>,
+    // STRIPPED: pub ssh_domains: Option<Vec<SshDomain>>,
 
-    #[dynamic(default)]
-    pub ssh_backend: SshBackend,
+    // STRIPPED: pub ssh_backend: SshBackend,
 
-    /// When running in server mode, defines configuration for
-    /// each of the endpoints that we'll listen for connections
-    #[dynamic(default)]
-    pub tls_servers: Vec<TlsDomainServer>,
+    // STRIPPED: pub tls_servers: Vec<TlsDomainServer>,
 
-    /// The set of tls domains that we can connect to as a client
-    #[dynamic(default)]
-    pub tls_clients: Vec<TlsDomainClient>,
+    // STRIPPED: pub tls_clients: Vec<TlsDomainClient>,
 
     /// Constrains the rate at which the multiplexer client will
     /// speculatively fetch line data.
@@ -392,11 +382,9 @@ pub struct Config {
     #[dynamic(default = "default_mux_output_parser_buffer_size")]
     pub mux_output_parser_buffer_size: usize,
 
-    #[dynamic(default = "default_true")]
-    pub mux_enable_ssh_agent: bool,
+    // STRIPPED: pub mux_enable_ssh_agent: bool,
 
-    #[dynamic(default)]
-    pub default_ssh_auth_sock: Option<String>,
+    // STRIPPED: pub default_ssh_auth_sock: Option<String>,
 
     /// How many ms to delay after reading a chunk of output
     /// in order to try to coalesce fragmented writes into
@@ -919,16 +907,7 @@ impl Config {
         Self::load_with_overrides(&wezterm_dynamic::Value::default())
     }
 
-    /// It is relatively expensive to parse all the ssh config files,
-    /// so we defer producing the default list until someone explicitly
-    /// asks for it
-    pub fn ssh_domains(&self) -> Vec<SshDomain> {
-        if let Some(domains) = &self.ssh_domains {
-            domains.clone()
-        } else {
-            SshDomain::default_domains()
-        }
-    }
+    // STRIPPED: ssh_domains() method removed
 
     pub fn wsl_domains(&self) -> Vec<WslDomain> {
         if let Some(domains) = &self.wsl_domains {
@@ -1168,8 +1147,9 @@ impl Config {
         match overrides {
             wezterm_dynamic::Value::Object(obj) => {
                 for (key, value) in obj {
-                    let key = luahelper::dynamic_to_lua_value(lua, key.clone())?;
-                    let value = luahelper::dynamic_to_lua_value(lua, value.clone())?;
+                    // STRIPPED: luahelper::dynamic_to_lua_value -> crate::lua::dynamic_to_lua_value
+                    let key = crate::lua::dynamic_to_lua_value(lua, key.clone())?;
+                    let value = crate::lua::dynamic_to_lua_value(lua, value.clone())?;
                     config = setter.call((config, key, value))?;
                 }
                 Ok(config)
@@ -1234,14 +1214,8 @@ impl Config {
             Ok(())
         };
 
-        for d in &self.unix_domains {
-            check_domain(&d.name, "unix domain")?;
-        }
-        if let Some(domains) = &self.ssh_domains {
-            for d in domains {
-                check_domain(&d.name, "ssh domain")?;
-            }
-        }
+        // STRIPPED: unix_domains check removed
+        // STRIPPED: ssh_domains check removed
         for d in &self.exec_domains {
             check_domain(&d.name, "exec domain")?;
         }
@@ -1250,9 +1224,7 @@ impl Config {
                 check_domain(&d.name, "wsl domain")?;
             }
         }
-        for d in &self.tls_clients {
-            check_domain(&d.name, "tls domain")?;
-        }
+        // STRIPPED: tls_clients check removed
         Ok(())
     }
 

@@ -3,16 +3,46 @@ use super::luaerr;
 use crate::termwindow::TermWindowNotif;
 use crate::TermWindow;
 use config::keyassignment::{ClipboardCopyDestination, KeyAssignment};
-use luahelper::*;
+// STRIPPED: luahelper removed; use config::lua directly
+use config::lua::{dynamic_to_lua_value, lua_value_to_dynamic};
 use mlua::{UserData, UserDataMethods, UserDataRef};
 use mux::pane::PaneId;
+use mux::tab::TabId;
 use mux::window::WindowId as MuxWindowId;
 use mux::Mux;
-use mux_lua::MuxPane;
-use termwiz_funcs::lines_to_escapes;
+// STRIPPED: mux_lua removed; define minimal stubs locally
+// STRIPPED: termwiz_funcs removed
 use wezterm_dynamic::{FromDynamic, ToDynamic};
 use wezterm_toast_notification::ToastNotification;
-use window::{Connection, ConnectionOps, DeadKeyStatus, WindowOps, WindowState};
+use window::{DeadKeyStatus, WindowOps, WindowState};
+#[cfg(windows)]
+use window::{Connection, ConnectionOps};
+
+/// Minimal stub for MuxPane (was mux_lua::MuxPane).
+/// Wraps a PaneId for passing between Lua and Rust.
+#[derive(Clone, Copy)]
+pub struct MuxPane(pub PaneId);
+
+impl UserData for MuxPane {}
+
+/// Minimal stub for MuxWindow (was mux_lua::MuxWindow).
+#[derive(Clone, Copy)]
+pub struct MuxWindow(pub MuxWindowId);
+
+impl UserData for MuxWindow {}
+
+/// Minimal stub for MuxTab (was mux_lua::MuxTab).
+#[derive(Clone, Copy)]
+pub struct MuxTab(pub TabId);
+
+impl UserData for MuxTab {}
+
+/// Minimal stub for MuxDomain (was mux_lua::MuxDomain).
+/// Wraps a DomainId for passing between Lua and Rust.
+#[derive(Clone, Copy)]
+pub struct MuxDomain(pub mux::domain::DomainId);
+
+impl UserData for MuxDomain {}
 
 #[derive(Clone)]
 pub struct GuiWin {
@@ -43,14 +73,16 @@ impl UserData for GuiWin {
 
         methods.add_method("window_id", |_, this, _: ()| Ok(this.mux_window_id));
         methods.add_method("mux_window", |_, this, _: ()| {
-            Ok(mux_lua::MuxWindow(this.mux_window_id))
+            // STRIPPED: mux_lua removed; use local MuxWindow stub
+            Ok(MuxWindow(this.mux_window_id))
         });
         methods.add_method("active_tab", |_, this, _: ()| {
             let mux = Mux::try_get().ok_or_else(|| mlua::Error::external("cannot get Mux!?"))?;
             let window = mux.get_window(this.mux_window_id).ok_or_else(|| {
                 mlua::Error::external(format!("invalid window {}", this.mux_window_id))
             })?;
-            Ok(window.get_active().map(|tab| mux_lua::MuxTab(tab.tab_id())))
+            // STRIPPED: mux_lua removed; use local MuxTab stub
+            Ok(window.get_active().map(|tab| MuxTab(tab.tab_id())))
         });
 
         methods.add_method(
@@ -94,7 +126,15 @@ impl UserData for GuiWin {
             },
         );
         methods.add_method("get_appearance", |_, _, _: ()| {
-            Ok(Connection::get().unwrap().get_appearance().to_string())
+            // STRIPPED: Connection is Windows-only; use cfg guard
+            #[cfg(windows)]
+            {
+                Ok(Connection::get().unwrap().get_appearance().to_string())
+            }
+            #[cfg(not(windows))]
+            {
+                Ok("Dark".to_string())
+            }
         });
         methods.add_method("set_right_status", |_, this, status: String| {
             this.window.notify(TermWindowNotif::SetRightStatus(status));
@@ -120,7 +160,7 @@ impl UserData for GuiWin {
                 dpi: usize,
                 is_full_screen: bool,
             }
-            impl_lua_conversion_dynamic!(Dims);
+            config::impl_lua_conversion_dynamic!(Dims);
 
             let dims = Dims {
                 pixel_width: dims.pixel_width,
@@ -155,7 +195,7 @@ impl UserData for GuiWin {
                     tx.try_send(term_window.current_event.to_dynamic()).ok();
                 })));
             let result = rx.recv().await.map_err(mlua::Error::external)?;
-            luahelper::dynamic_to_lua_value(lua, result)
+            dynamic_to_lua_value(lua, result).map_err(mlua::Error::external)
         });
         methods.add_async_method(
             "perform_action",
@@ -190,10 +230,10 @@ impl UserData for GuiWin {
                 .map_err(|e| anyhow::anyhow!("{:#}", e))
                 .map_err(luaerr)?;
 
-            dynamic_to_lua_value(lua, overrides)
+            dynamic_to_lua_value(lua, overrides).map_err(mlua::Error::external)
         });
         methods.add_method("set_config_overrides", |_, this, value: mlua::Value| {
-            let value = lua_value_to_dynamic(value)?;
+            let value = lua_value_to_dynamic(value).map_err(mlua::Error::external)?;
             this.window
                 .notify(TermWindowNotif::SetConfigOverrides(value));
             Ok(())
@@ -325,7 +365,8 @@ impl UserData for GuiWin {
                                 .get_pane(pane_id)
                                 .ok_or_else(|| anyhow::anyhow!("invalid pane {pane_id}"))?;
                             let lines = term_window.selection_lines(&pane);
-                            lines_to_escapes(lines)
+                            // STRIPPED: lines_to_escapes from termwiz_funcs removed; return plain text
+                            Ok(lines.iter().map(|l| l.as_str().to_string()).collect::<Vec<_>>().join("\n"))
                         }
                         tx.try_send(do_it(pane_id, term_window).map_err(|err| format!("{err:#}")))
                             .ok();

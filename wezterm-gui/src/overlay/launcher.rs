@@ -19,12 +19,27 @@ use mux::window::WindowId;
 use mux::Mux;
 use rayon::prelude::*;
 use std::collections::BTreeMap;
-use termwiz::cell::{AttributeChange, CellAttributes};
+use termwiz::cell::{unicode_column_width, AttributeChange, CellAttributes};
 use termwiz::color::ColorAttribute;
 use termwiz::input::{InputEvent, KeyCode, KeyEvent, Modifiers, MouseButtons, MouseEvent};
 use termwiz::surface::{Change, Position};
 use termwiz::terminal::Terminal;
-use termwiz_funcs::truncate_right;
+// STRIPPED: termwiz_funcs removed; define truncate_right locally
+
+/// Truncate a string to at most `max_width` unicode columns.
+fn truncate_right(s: &str, max_width: usize) -> String {
+    let mut result = String::new();
+    let mut width = 0;
+    for c in s.chars() {
+        let cw = unicode_column_width(&c.to_string(), None);
+        if width + cw > max_width {
+            break;
+        }
+        result.push(c);
+        width += cw;
+    }
+    result
+}
 use window::WindowOps;
 
 pub use config::keyassignment::LauncherFlags;

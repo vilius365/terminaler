@@ -24,7 +24,7 @@ hostname.workspace = true
 lazy_static.workspace = true
 libc.workspace = true
 log.workspace = true
-luahelper.workspace = true
+# STRIPPED: luahelper.workspace = true
 metrics.workspace = true
 mlua.workspace = true
 names.workspace = true
@@ -36,17 +36,17 @@ procinfo.workspace = true
 promise.workspace = true
 rangeset.workspace = true
 serde = {workspace=true, features = ["rc", "derive"]}
-serial2.workspace = true
+# STRIPPED: serial2.workspace = true
 shell-words.workspace = true
 smol.workspace = true
 terminfo.workspace = true
-termwiz-funcs.workspace = true
+# STRIPPED: termwiz-funcs.workspace = true
 termwiz.workspace = true
 textwrap.workspace = true
 thiserror.workspace = true
 url.workspace = true
 wezterm-dynamic.workspace = true
-wezterm-ssh.workspace = true
+# STRIPPED: wezterm-ssh.workspace = true
 wezterm-term = { workspace=true, features=["use_serde"] }
 
 [target."cfg(windows)".dependencies]

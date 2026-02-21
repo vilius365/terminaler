@@ -596,7 +596,8 @@ impl super::TermWindow {
         match &element.content {
             ElementContent::Text(s) => {
                 let window = self.window.as_ref().unwrap().clone();
-                let direction = wezterm_bidi::Direction::LeftToRight;
+                // STRIPPED: wezterm_bidi removed; use stub Direction from termwiz::surface
+                let direction = termwiz::surface::bidi_stub::Direction::LeftToRight;
                 let infos = element.font.shape(
                     &s,
                     move || window.notify(TermWindowNotif::InvalidateShapeCache),

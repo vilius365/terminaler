@@ -1,5 +1,5 @@
-mod dbus;
-mod macos;
+// STRIPPED: mod dbus;   -- Linux D-Bus notifications removed (Windows-only)
+// STRIPPED: mod macos;  -- macOS notifications removed (Windows-only)
 mod windows;
 
 #[derive(Debug, Clone)]
@@ -18,19 +18,16 @@ impl ToastNotification {
 
 #[cfg(windows)]
 use crate::windows as backend;
-#[cfg(all(not(target_os = "macos"), not(windows)))]
-use dbus as backend;
-#[cfg(target_os = "macos")]
-use macos as backend;
-
+#[cfg(not(windows))]
 mod nop {
     use super::*;
 
-    #[allow(dead_code)]
     pub fn show_notif(_: ToastNotification) -> Result<(), Box<dyn std::error::Error>> {
         Ok(())
     }
 }
+#[cfg(not(windows))]
+use nop as backend;
 
 pub fn show(notif: ToastNotification) {
     if let Err(err) = backend::show_notif(notif) {
@@ -38,11 +35,11 @@ pub fn show(notif: ToastNotification) {
     }
 }
 
-pub fn persistent_toast_notification_with_click_to_open_url(title: &str, message: &str, url: &str) {
+pub fn persistent_toast_notification_with_click_to_open_url(title: &str, message: &str, _url: &str) {
     show(ToastNotification {
         title: title.to_string(),
         message: message.to_string(),
-        url: Some(url.to_string()),
+        url: Some(_url.to_string()),
         timeout: None,
     });
 }
@@ -55,6 +52,3 @@ pub fn persistent_toast_notification(title: &str, message: &str) {
         timeout: None,
     });
 }
-
-#[cfg(target_os = "macos")]
-pub use macos::initialize as macos_initialize;

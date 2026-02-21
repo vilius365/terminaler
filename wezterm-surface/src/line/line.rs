@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use siphasher::sip128::{Hasher128, SipHasher};
 #[cfg(feature = "appdata")]
 use std::sync::Mutex;
-use wezterm_bidi::{Direction, ParagraphDirectionHint};
+use crate::bidi_stub::{Direction, ParagraphDirectionHint};
 use wezterm_cell::{Cell, CellAttributes, SemanticType, UnicodeVersion};
 
 extern crate alloc;

@@ -3,18 +3,34 @@ use crate::scripting::guiwin::GuiWin;
 use config::configuration;
 use config::keyassignment::{InputSelector, InputSelectorEntry, KeyAssignment};
 use mux::termwiztermtab::TermWizTerminal;
-use mux_lua::MuxPane;
+// STRIPPED: mux_lua removed; use local stub
+use crate::scripting::guiwin::MuxPane;
 use nucleo_matcher::pattern::Pattern;
 use nucleo_matcher::{Matcher, Utf32Str};
 use rayon::prelude::*;
 use std::cell::RefCell;
 use std::rc::Rc;
-use termwiz::cell::{AttributeChange, CellAttributes};
+use termwiz::cell::{unicode_column_width, AttributeChange, CellAttributes};
 use termwiz::color::ColorAttribute;
 use termwiz::input::{InputEvent, KeyCode, KeyEvent, Modifiers, MouseButtons, MouseEvent};
 use termwiz::surface::{Change, Position};
 use termwiz::terminal::Terminal;
-use termwiz_funcs::truncate_right;
+// STRIPPED: termwiz_funcs removed; define truncate_right locally
+
+/// Truncate a string to at most `max_width` unicode columns.
+pub fn truncate_right(s: &str, max_width: usize) -> String {
+    let mut result = String::new();
+    let mut width = 0;
+    for c in s.chars() {
+        let cw = unicode_column_width(&c.to_string(), None);
+        if width + cw > max_width {
+            break;
+        }
+        result.push(c);
+        width += cw;
+    }
+    result
+}
 
 const ROW_OVERHEAD: usize = 3;
 

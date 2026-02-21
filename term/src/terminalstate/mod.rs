@@ -14,7 +14,7 @@ use std::sync::Arc;
 use terminfo::{Database, Value};
 use termwiz::input::KeyboardEncoding;
 use url::Url;
-use wezterm_bidi::ParagraphDirectionHint;
+use wezterm_surface::bidi_stub::ParagraphDirectionHint;
 use wezterm_cell::image::ImageData;
 use wezterm_cell::UnicodeVersion;
 use wezterm_escape_parser::csi::{

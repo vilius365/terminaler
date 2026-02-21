@@ -14,7 +14,8 @@ use std::time::Instant;
 use termwiz::cell::{unicode_column_width, Blink};
 use termwiz::color::LinearRgba;
 use termwiz::surface::CursorShape;
-use wezterm_bidi::Direction;
+// STRIPPED: wezterm_bidi removed; use bidi stub from termwiz::surface
+use termwiz::surface::bidi_stub::Direction;
 use wezterm_term::color::ColorAttribute;
 use wezterm_term::CellAttributes;
 

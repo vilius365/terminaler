@@ -2,7 +2,6 @@ use crate::color::RgbaColor;
 use crate::*;
 use bitflags::*;
 use enum_display_derive::Display;
-use luahelper::impl_lua_conversion_dynamic;
 use std::convert::TryFrom;
 use std::fmt::Display;
 use wezterm_dynamic::{FromDynamic, FromDynamicOptions, ToDynamic, Value};

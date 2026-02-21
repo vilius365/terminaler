@@ -1,6 +1,6 @@
 use crate::sessionhandler::{PduSender, SessionHandler};
 use anyhow::Context;
-use async_ossl::AsyncSslStream;
+// STRIPPED: use async_ossl::AsyncSslStream;
 use codec::{DecodedPdu, Pdu};
 use futures::FutureExt;
 use mux::{Mux, MuxNotification};
@@ -14,7 +14,7 @@ pub trait AsRawDesc: std::os::unix::io::AsRawFd + std::os::fd::AsFd {}
 pub trait AsRawDesc: std::os::windows::io::AsRawSocket + std::os::windows::io::AsSocket {}
 
 impl AsRawDesc for UnixStream {}
-impl AsRawDesc for AsyncSslStream {}
+// STRIPPED: impl AsRawDesc for AsyncSslStream {}
 
 #[derive(Debug)]
 enum Item {

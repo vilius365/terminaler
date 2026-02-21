@@ -18,7 +18,6 @@ ordered-float.workspace = true
 serde = {workspace=true, optional=true}
 siphasher.workspace = true
 unicode-segmentation.workspace = true
-wezterm-bidi.workspace = true
 wezterm-blob-leases = {workspace=true, optional=true}
 wezterm-cell = {workspace = true}
 wezterm-char-props.workspace = true

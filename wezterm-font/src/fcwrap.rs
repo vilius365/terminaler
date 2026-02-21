@@ -197,7 +197,7 @@ impl Pattern {
     }
 
     pub fn get_charset<'a>(&'a self) -> anyhow::Result<CharSetRef<'a>> {
-        let mut c = ptr::null_mut();
+        let mut c: *mut FcCharSet = ptr::null_mut();
         unsafe {
             FcPatternGetCharSet(self.pat, b"charset\0".as_ptr() as *const c_char, 0, &mut c);
         }
@@ -224,7 +224,7 @@ impl Pattern {
 
     pub fn charset_intersect_count(&self, charset: &CharSet) -> anyhow::Result<u32> {
         unsafe {
-            let mut c = ptr::null_mut();
+            let mut c: *mut FcCharSet = ptr::null_mut();
             FcPatternGetCharSet(self.pat, b"charset\0".as_ptr() as *const c_char, 0, &mut c);
             ensure!(!c.is_null(), "pattern has no charset");
             Ok(FcCharSetIntersectCount(c, charset.cset))

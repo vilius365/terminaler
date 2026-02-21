@@ -101,11 +101,8 @@ enum SubCommand {
     #[command(short_flag_alias = 'e', hide = true)]
     BlockingStart(StartCommand),
 
-    #[command(name = "ssh", about = "Establish an ssh session")]
-    Ssh(SshCommand),
-
-    #[command(name = "serial", about = "Open a serial port")]
-    Serial(SerialCommand),
+    // STRIPPED: Ssh(SshCommand), (SSH support removed)
+    // STRIPPED: Serial(SerialCommand), (serial support removed)
 
     #[command(name = "connect", about = "Connect to wezterm multiplexer")]
     Connect(ConnectCommand),
@@ -724,9 +721,7 @@ fn init_config(opts: &Opt) -> anyhow::Result<ConfigHandle> {
     .context("config::common_init")?;
     let config = config::configuration();
     config.update_ulimit()?;
-    if let Some(value) = &config.default_ssh_auth_sock {
-        std::env::set_var("SSH_AUTH_SOCK", value);
-    }
+    // STRIPPED: default_ssh_auth_sock removed (SSH support stripped)
     Ok(config)
 }
 
@@ -747,8 +742,8 @@ fn run() -> anyhow::Result<()> {
         | SubCommand::BlockingStart(_)
         | SubCommand::LsFonts(_)
         | SubCommand::ShowKeys(_)
-        | SubCommand::Ssh(_)
-        | SubCommand::Serial(_)
+        // STRIPPED: SubCommand::Ssh(_) removed (SSH support stripped)
+        // STRIPPED: SubCommand::Serial(_) removed (serial support stripped)
         | SubCommand::Connect(_) => delegate_to_gui(saver),
         SubCommand::ImageCat(cmd) => cmd.run(),
         SubCommand::SetCwd(cmd) => cmd.run(),

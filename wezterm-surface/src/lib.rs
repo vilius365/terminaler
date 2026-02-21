@@ -18,6 +18,7 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
+pub mod bidi_stub;
 pub mod cellcluster;
 pub mod change;
 pub mod hyperlink;

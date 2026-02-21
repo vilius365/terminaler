@@ -24,6 +24,7 @@ use std::io::{BufWriter, Write};
 use std::ops::Range;
 use std::sync::Arc;
 use std::time::Duration;
+use termwiz::caps::{Capabilities, ProbeHints};
 use termwiz::input::{InputEvent, KeyEvent, Modifiers, MouseEvent as TermWizMouseEvent};
 use termwiz::render::terminfo::TerminfoRenderer;
 use termwiz::surface::{Change, Line, SequenceNo};
@@ -452,7 +453,14 @@ pub fn allocate(
 
     let (input_tx, input_rx) = channel();
 
-    let renderer = termwiz_funcs::new_wezterm_terminfo_renderer();
+    // STRIPPED: termwiz_funcs removed; construct renderer directly with TrueColor capabilities
+    let renderer = TerminfoRenderer::new(
+        Capabilities::new_with_hints(
+            ProbeHints::default()
+                .color_level(Some(termwiz::caps::ColorLevel::TrueColor)),
+        )
+        .expect("failed to build termwiz capabilities"),
+    );
 
     let tw_term = TermWizTerminal {
         render_tx: TermWizTerminalRenderTty {
@@ -501,7 +509,14 @@ pub async fn run<
     let (input_tx, input_rx) = channel();
     let should_close_window = window_id.is_none();
 
-    let renderer = termwiz_funcs::new_wezterm_terminfo_renderer();
+    // STRIPPED: termwiz_funcs removed; construct renderer directly with TrueColor capabilities
+    let renderer = TerminfoRenderer::new(
+        Capabilities::new_with_hints(
+            ProbeHints::default()
+                .color_level(Some(termwiz::caps::ColorLevel::TrueColor)),
+        )
+        .expect("failed to build termwiz capabilities"),
+    );
 
     let tw_term = TermWizTerminal {
         render_tx: TermWizTerminalRenderTty {
