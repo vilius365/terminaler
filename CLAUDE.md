@@ -9,8 +9,7 @@ Windows-native terminal multiplexer with predefined snap layouts, workspace temp
 cargo build
 
 # Run (GUI)
-cargo run --bin wezterm-gui       # Phase 0 (pre-rename)
-cargo run --bin terminaler-gui    # Phase 1+ (post-rename)
+cargo run --bin terminaler-gui
 
 # Run tests
 cargo test
@@ -39,52 +38,36 @@ Two-process model: GUI client renders and handles input, daemon holds PTY sessio
 |-------|---------|
 | `mux/` | Multiplexer: tabs, panes, domains. Central orchestration |
 | `bintree/` | Binary tree with Zipper-based cursor. Used for pane layout within tabs |
-| `term/` (wezterm-term) | Terminal emulator core (VT parser, cell grid, scrollback) |
+| `term/` (terminaler-term) | Terminal emulator core (VT parser, cell grid, scrollback) |
 | `termwiz/` | Terminal wizardry - input/output abstractions, surface rendering |
 | `vtparse/` | VT parser state machine |
 | `pty/` (portable-pty) | PTY abstraction. Uses ConPTY on Windows |
 | `codec/` | Mux client-server protocol codec (PDUs over streams) |
-| `wezterm-gui/` | **Main GUI binary**. Window management, rendering pipeline, input handling |
+| `terminaler-gui/` | **Main GUI binary**. Window management, rendering pipeline, input handling |
 | `window/` | Window abstraction layer. Platform backends (Windows = `window/src/os/windows/`) |
-| `wezterm-font/` | Font discovery, shaping (HarfBuzz), rasterization (FreeType) |
-| `wezterm-input-types/` | Input event types (keys, mouse) |
+| `terminaler-font/` | Font discovery, shaping (HarfBuzz), rasterization (FreeType) |
+| `terminaler-input-types/` | Input event types (keys, mouse) |
 | `color-types/` | Color type definitions |
 | `rangeset/` | Range set data structure |
 | `filedescriptor/` | Cross-platform file descriptor abstraction |
 | `promise/` | Promise/future utilities |
-| `wezterm-surface/` | Surface rendering primitives |
-| `wezterm-blob-leases/` | Blob lease memory management |
-| `wezterm-dynamic/` | Dynamic value bridge (keep temporarily, remove later) |
+| `terminaler-surface/` | Surface rendering primitives |
+| `terminaler-blob-leases/` | Blob lease memory management |
+| `terminaler-dynamic/` | Dynamic value bridge (keep temporarily, remove later) |
 | `config/` | Configuration system. **WILL BE REWRITTEN** from Lua to JSON |
 
-### Strip (REMOVE)
+### Already Stripped
 
-| Crate | Reason |
-|-------|--------|
-| `wezterm-ssh/` | SSH client - not needed |
-| `luahelper/` | Lua config helper - replacing with JSON |
-| `sync-color-schemes/` | Scheme sync utility - not needed |
-| `bidi/` | Bidirectional text - strip for simplicity |
-| `wezterm-open-url/` | URL opener - will reimplement simpler |
-| `deps/cairo/` | Cairo graphics - not needed with wgpu |
-| `lua-api-crates/` | All Lua API crates - removing Lua entirely |
+These crates/paths were removed in Phase 0:
+- `wezterm-ssh/`, `luahelper/`, `sync-color-schemes/`, `bidi/`, `wezterm-open-url/`, `deps/cairo/`, `lua-api-crates/`
+- `window/src/os/macos/`, `window/src/os/wayland/`, `window/src/os/x11/`
 
-### Strip (Platform-specific)
+### Future Changes
 
-| Path | Reason |
-|------|--------|
-| `window/src/os/macos/` | macOS backend |
-| `window/src/os/wayland/` | Wayland backend |
-| `window/src/os/x11/` | X11 backend |
-| `window/src/os/x_and_wayland.rs` | X11/Wayland shared code |
-
-### Replace
-
-| Old | New | Purpose |
-|-----|-----|---------|
-| `wezterm-mux-server/` | `terminaler-daemon` | Background daemon for PTY persistence |
-| `wezterm-client/` | `terminaler-client` | GUI client for connecting to daemon |
-| `config/` (Lua loader) | `config/` (JSON loader) | Configuration system |
+| Current | Future | Purpose |
+|---------|--------|---------|
+| `terminaler-mux-server/` | `terminaler-daemon` | Background daemon for PTY persistence (Phase 5) |
+| `config/` (Lua loader) | `config/` (JSON loader) | Configuration system (Phase 1) |
 
 ### New
 
@@ -104,15 +87,15 @@ Two-process model: GUI client renders and handles input, daemon holds PTY sessio
 | `mux/src/tab.rs` | Tab with bintree::Tree pane layout - **ADD snap layout support** |
 | `mux/src/domain.rs` | Domain trait (shell spawning) - **KEEP Local + WSL only** |
 | `bintree/src/lib.rs` | Binary tree (Tree<L,N> enum, cursors) - **UNDERSTAND** |
-| `wezterm-gui/src/termwindow/mod.rs` | Terminal window orchestration - **ADD overlays, hover, drag-drop** |
-| `wezterm-gui/src/termwindow/render/mod.rs` | GPU rendering pipeline - **ADD pane highlight, toast** |
-| `wezterm-gui/src/tabbar.rs` | Tab bar rendering - **RESTYLE** |
+| `terminaler-gui/src/termwindow/mod.rs` | Terminal window orchestration - **ADD overlays, hover, drag-drop** |
+| `terminaler-gui/src/termwindow/render/mod.rs` | GPU rendering pipeline - **ADD pane highlight, toast** |
+| `terminaler-gui/src/tabbar.rs` | Tab bar rendering - **RESTYLE** |
 
 ## Implementation Phases
 
 | Phase | Description | Status |
 |-------|-------------|--------|
-| 0 | Fork setup: clone, rename, strip non-Windows, strip unused crates | **IN PROGRESS** |
+| 0 | Fork setup: clone, rename, strip non-Windows, strip unused crates | **COMPLETE** |
 | 1 | JSON config: replace Lua with serde_json config system | Pending |
 | 2 | Snap layouts: terminaler-layout crate, 8 built-in presets, picker UI | Pending |
 | 3 | UX features: hover highlight, toast, ctrl+scroll font, drag-drop, resize | Pending |
@@ -125,13 +108,12 @@ Two-process model: GUI client renders and handles input, daemon holds PTY sessio
 ## Phase 0 Checklist
 
 - [x] Clone WezTerm repository
-- [ ] Rename project from WezTerm to Terminaler (binary names, crate names, strings)
-- [ ] Strip non-Windows platform code (macos, wayland, x11 from window crate)
-- [ ] Strip SSH, serial, TLS domain code from mux
-- [ ] Remove unused crates (wezterm-ssh, bidi, cairo, luahelper, sync-color-schemes, lua-api-crates)
-- [ ] Remove Lua dependencies (mlua) but keep config structure temporarily
-- [ ] Verify builds on Windows
-- [ ] Initialize git repo and make initial commit
+- [x] Strip non-Windows platform code (macos, wayland, x11 from window crate)
+- [x] Strip SSH, serial, TLS domain code from mux
+- [x] Remove unused crates (wezterm-ssh, bidi, cairo, luahelper, sync-color-schemes, lua-api-crates)
+- [x] Rename project from WezTerm to Terminaler (22 crates, env vars, strings, terminfo)
+- [x] Initialize git repo and make initial commit
+- [x] Verify builds on Windows (cross-compiled x86_64-pc-windows-gnu via mingw-w64)
 
 ## Conventions
 

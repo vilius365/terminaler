@@ -1,0 +1,8 @@
+[target.x86_64-pc-windows-gnu]
+linker = "x86_64-w64-mingw32-gcc"
+rustflags = ["-C", "link-arg=-Wl,--large-address-aware"]
+
+[env]
+# Pass -Wa,-mbig-obj to mingw assembler to handle large compilation units (harfbuzz)
+CXXFLAGS_x86_64_pc_windows_gnu = "-Wa,-mbig-obj"
+CFLAGS_x86_64_pc_windows_gnu = "-Wa,-mbig-obj"
