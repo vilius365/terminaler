@@ -176,7 +176,6 @@ pub struct Palette {
     pub launcher_label_fg: Option<ColorSpec>,
     pub launcher_label_bg: Option<ColorSpec>,
 }
-impl_lua_conversion_dynamic!(Palette);
 
 impl Palette {
     pub fn overlay_with(&self, other: &Self) -> Self {
@@ -687,7 +686,6 @@ pub struct ColorSchemeMetaData {
     #[dynamic(default)]
     pub aliases: Vec<String>,
 }
-impl_lua_conversion_dynamic!(ColorSchemeMetaData);
 
 #[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
 pub struct ColorSchemeFile {
@@ -697,7 +695,6 @@ pub struct ColorSchemeFile {
     #[dynamic(default)]
     pub metadata: ColorSchemeMetaData,
 }
-impl_lua_conversion_dynamic!(ColorSchemeFile);
 
 fn dynamic_to_toml(value: Value) -> anyhow::Result<toml::Value> {
     Ok(match value {

@@ -454,7 +454,6 @@ pub struct Gradient {
     #[dynamic(default)]
     pub noise: Option<usize>,
 }
-impl_lua_conversion_dynamic!(Gradient);
 
 impl Gradient {
     pub fn build(&self) -> anyhow::Result<colorgrad::Gradient> {

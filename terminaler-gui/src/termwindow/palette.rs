@@ -11,8 +11,6 @@ use crate::utilsprites::RenderMetrics;
 use config::keyassignment::KeyAssignment;
 use config::Dimension;
 use frecency::Frecency;
-use config::impl_lua_conversion_dynamic;
-use config::lua::from_lua_value_dynamic;
 // STRIPPED: mux_lua removed; use local stub
 use crate::scripting::guiwin::MuxPane;
 use rayon::prelude::*;
@@ -88,50 +86,14 @@ pub struct UserPaletteEntry {
     pub action: KeyAssignment,
     pub icon: Option<String>,
 }
-impl_lua_conversion_dynamic!(UserPaletteEntry);
 
 fn build_commands(
-    gui_window: GuiWin,
-    pane: Option<MuxPane>,
+    _gui_window: GuiWin,
+    _pane: Option<MuxPane>,
     filter_copy_mode: bool,
 ) -> Vec<ExpandedCommand> {
     let mut commands = CommandDef::actions_for_palette_and_menubar(&config::configuration());
-
-    match config::run_immediate_with_lua_config(|lua| {
-        let mut entries: Vec<UserPaletteEntry> = vec![];
-
-        if let Some(lua) = lua {
-            let result = config::lua::emit_sync_callback(
-                &*lua,
-                ("augment-command-palette".to_string(), (gui_window, pane)),
-            )?;
-
-            if !matches!(&result, mlua::Value::Nil) {
-                entries = from_lua_value_dynamic(result)?;
-            }
-        }
-
-        Ok(entries)
-    }) {
-        Ok(entries) => {
-            for entry in entries {
-                commands.push(ExpandedCommand {
-                    brief: entry.brief.into(),
-                    doc: match entry.doc {
-                        Some(doc) => doc.into(),
-                        None => "".into(),
-                    },
-                    action: entry.action,
-                    keys: vec![],
-                    menubar: &[],
-                    icon: entry.icon.map(Cow::Owned),
-                });
-            }
-        }
-        Err(err) => {
-            log::warn!("augment-command-palette: {err:#}");
-        }
-    }
+    // augment-command-palette Lua callback removed; use built-in commands only
 
     commands.retain(|cmd| {
         if filter_copy_mode {

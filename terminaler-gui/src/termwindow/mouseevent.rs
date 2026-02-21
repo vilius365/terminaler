@@ -11,11 +11,8 @@ use config::MouseEventAltScreen;
 use mux::pane::{Pane, WithPaneLines};
 use mux::tab::SplitDirection;
 use mux::Mux;
-// STRIPPED: mux_lua removed; use local stub
-use crate::scripting::guiwin::MuxPane;
 use std::convert::TryInto;
 use std::ops::Sub;
-use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 use termwiz::hyperlink::Hyperlink;
@@ -407,51 +404,21 @@ impl super::TermWindow {
             Some(pane) => pane,
             None => return,
         };
+        // new-tab-button-click Lua event removed; always use default action
         let action = match button {
             MousePress::Left => Some(KeyAssignment::SpawnTab(SpawnTabDomain::CurrentPaneDomain)),
             MousePress::Right => Some(KeyAssignment::ShowLauncher),
             MousePress::Middle => None,
         };
-
-        async fn dispatch_new_tab_button(
-            lua: Option<Rc<mlua::Lua>>,
-            window: GuiWin,
-            pane: MuxPane,
-            button: MousePress,
-            action: Option<KeyAssignment>,
-        ) -> anyhow::Result<()> {
-            let default_action = match lua {
-                Some(lua) => {
-                    let args = lua.pack_multi((
-                        window.clone(),
-                        pane,
-                        format!("{button:?}"),
-                        action.clone(),
-                    ))?;
-                    config::lua::emit_event(&lua, ("new-tab-button-click".to_string(), args))
-                        .await
-                        .map_err(|e| {
-                            log::error!("while processing new-tab-button-click event: {:#}", e);
-                            e
-                        })?
-                }
-                None => true,
-            };
-            if let (true, Some(assignment)) = (default_action, action) {
-                window.window.notify(TermWindowNotif::PerformAssignment {
-                    pane_id: pane.0,
-                    assignment,
-                    tx: None,
-                });
-            }
-            Ok(())
+        if let Some(assignment) = action {
+            let window = GuiWin::new(self);
+            let pane_id = pane.pane_id();
+            window.window.notify(TermWindowNotif::PerformAssignment {
+                pane_id,
+                assignment,
+                tx: None,
+            });
         }
-        let window = GuiWin::new(self);
-        let pane = MuxPane(pane.pane_id());
-        promise::spawn::spawn(config::with_lua_config_on_main_thread(move |lua| {
-            dispatch_new_tab_button(lua, window, pane, button, action)
-        }))
-        .detach();
     }
 
     pub fn mouse_event_tab_bar(

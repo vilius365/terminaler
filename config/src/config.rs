@@ -14,7 +14,6 @@ use crate::keyassignment::{
     KeyAssignment, KeyTable, KeyTableEntry, KeyTables, MouseEventTrigger, SpawnCommand,
 };
 use crate::keys::{Key, LeaderKey, Mouse};
-use crate::lua::make_lua_context;
 // STRIPPED: use crate::ssh::{SshBackend, SshDomain};
 // STRIPPED: use crate::tls::{TlsDomainClient, TlsDomainServer};
 use crate::units::Dimension;
@@ -22,14 +21,13 @@ use crate::units::Dimension;
 use crate::wsl::WslDomain;
 use crate::{
     default_config_with_overrides_applied, default_one_point_oh, default_one_point_oh_f64,
-    default_true, default_win32_acrylic_accent_color, CellWidth, GpuInfo,
+    default_true, default_win32_acrylic_accent_color, json_to_dynamic, CellWidth, GpuInfo,
     IntegratedTitleButtonColor, KeyMapPreference, LoadedConfig, MouseEventTriggerMods, RgbaColor,
     // STRIPPED: SerialDomain,
     SystemBackdrop, WebGpuPowerPreference, CONFIG_DIRS, CONFIG_FILE_OVERRIDE,
     CONFIG_OVERRIDES, CONFIG_SKIP, HOME_DIR,
 };
 use anyhow::Context;
-use mlua::FromLua;
 use portable_pty::CommandBuilder;
 use std::collections::HashMap;
 use std::ffi::OsStr;
@@ -875,7 +873,6 @@ pub struct Config {
     #[dynamic(default = "default_ulimit_nproc")]
     pub ulimit_nproc: u64,
 }
-impl_lua_conversion_dynamic!(Config);
 
 fn default_one() -> usize {
     1
@@ -985,9 +982,9 @@ impl Config {
         // multiple.  In addition, it spawns a lot of subprocesses,
         // so we do this bit "by-hand"
 
-        let mut paths = vec![PathPossibility::optional(HOME_DIR.join(".terminaler.lua"))];
+        let mut paths = vec![PathPossibility::optional(HOME_DIR.join(".terminaler.json"))];
         for dir in CONFIG_DIRS.iter() {
-            paths.push(PathPossibility::optional(dir.join("terminaler.lua")))
+            paths.push(PathPossibility::optional(dir.join("terminaler.json")))
         }
 
         if cfg!(windows) {
@@ -1001,7 +998,7 @@ impl Config {
             // dir as the executable that will take precedence.
             if let Ok(exe_name) = std::env::current_exe() {
                 if let Some(exe_dir) = exe_name.parent() {
-                    paths.insert(0, PathPossibility::optional(exe_dir.join("terminaler.lua")));
+                    paths.insert(0, PathPossibility::optional(exe_dir.join("terminaler.json")));
                 }
             }
         }
@@ -1025,7 +1022,6 @@ impl Config {
                     return LoadedConfig {
                         config: Err(err),
                         file_name: Some(path_item.path.clone()),
-                        lua: None,
                         warnings: vec![],
                     }
                 }
@@ -1034,7 +1030,7 @@ impl Config {
             }
         }
 
-        // We didn't find (or were asked to skip) a terminaler.lua file, so
+        // We didn't find (or were asked to skip) a config file, so
         // update the environment to make it simpler to understand this
         // state.
         std::env::remove_var("TERMINALER_CONFIG_FILE");
@@ -1044,7 +1040,6 @@ impl Config {
             Err(err) => LoadedConfig {
                 config: Err(err),
                 file_name: None,
-                lua: None,
                 warnings: vec![],
             },
             Ok(cfg) => cfg,
@@ -1060,7 +1055,6 @@ impl Config {
         Ok(LoadedConfig {
             config: Ok(config?),
             file_name: None,
-            lua: Some(make_lua_context(Path::new(""))?),
             warnings,
         })
     }
@@ -1081,25 +1075,51 @@ impl Config {
 
         let mut s = String::new();
         file.read_to_string(&mut s)?;
-        let lua = make_lua_context(p)?;
+
+        // Skip a potential BOM that Windows software may have placed in the file
+        let s = s.trim_start_matches('\u{FEFF}');
+
+        // Strip JSONC comments
+        let s = crate::jsonc::strip_jsonc_comments(s);
 
         let (config, warnings) =
             terminaler_dynamic::Error::capture_warnings(|| -> anyhow::Result<Config> {
-                let cfg: Config;
+                let json_value: serde_json::Value = serde_json::from_str(&s)
+                    .with_context(|| format!("Error parsing JSON from {}", p.display()))?;
 
-                let config: mlua::Value = smol::block_on(
-                    // Skip a potential BOM that Windows software may have placed in the
-                    // file. Note that we can't catch this happening for files that are
-                    // imported via the lua require function.
-                    lua.load(s.trim_start_matches('\u{FEFF}'))
-                        .set_name(p.to_string_lossy())
-                        .eval_async(),
-                )?;
-                let config = Config::apply_overrides_to(&lua, config)?;
-                let config = Config::apply_overrides_obj_to(&lua, config, overrides)?;
-                cfg = Config::from_lua(config, &lua).with_context(|| {
+                let mut dyn_value = json_to_dynamic(&json_value);
+
+                // Apply object overrides
+                if let terminaler_dynamic::Value::Object(ref overrides_obj) = overrides {
+                    if let terminaler_dynamic::Value::Object(ref mut cfg_obj) = dyn_value {
+                        for (key, value) in overrides_obj {
+                            cfg_obj.insert(key.clone(), value.clone());
+                        }
+                    }
+                }
+
+                // Apply CLI --config key=value overrides
+                let cli_overrides = CONFIG_OVERRIDES.lock().unwrap();
+                for (key, value) in cli_overrides.iter() {
+                    let parsed_value: serde_json::Value = serde_json::from_str(value)
+                        .unwrap_or_else(|_| serde_json::Value::String(value.clone()));
+                    let dyn_val = json_to_dynamic(&parsed_value);
+
+                    if let terminaler_dynamic::Value::Object(ref mut obj) = dyn_value {
+                        obj.insert(terminaler_dynamic::Value::String(key.clone()), dyn_val);
+                    }
+                }
+
+                let cfg = Config::from_dynamic(
+                    &dyn_value,
+                    terminaler_dynamic::FromDynamicOptions {
+                        unknown_fields: terminaler_dynamic::UnknownFieldAction::Warn,
+                        deprecated_fields: terminaler_dynamic::UnknownFieldAction::Warn,
+                    },
+                )
+                .with_context(|| {
                     format!(
-                        "Error converting lua value returned by script {} to Config struct",
+                        "Error converting JSON config from {} to Config struct",
                         p.display()
                     )
                 })?;
@@ -1120,78 +1140,8 @@ impl Config {
         Ok(Some(LoadedConfig {
             config: Ok(cfg.compute_extra_defaults(Some(p))),
             file_name: Some(p.to_path_buf()),
-            lua: Some(lua),
             warnings,
         }))
-    }
-
-    pub(crate) fn apply_overrides_obj_to<'l>(
-        lua: &'l mlua::Lua,
-        mut config: mlua::Value<'l>,
-        overrides: &terminaler_dynamic::Value,
-    ) -> anyhow::Result<mlua::Value<'l>> {
-        // config may be a table, or it may be a config builder.
-        // We'll leave it up to lua to call the appropriate
-        // index function as managing that from Rust is a PITA.
-        let setter: mlua::Function = lua
-            .load(
-                r#"
-                    return function(config, key, value)
-                        config[key] = value;
-                        return config;
-                    end
-                    "#,
-            )
-            .eval()?;
-
-        match overrides {
-            terminaler_dynamic::Value::Object(obj) => {
-                for (key, value) in obj {
-                    // STRIPPED: luahelper::dynamic_to_lua_value -> crate::lua::dynamic_to_lua_value
-                    let key = crate::lua::dynamic_to_lua_value(lua, key.clone())?;
-                    let value = crate::lua::dynamic_to_lua_value(lua, value.clone())?;
-                    config = setter.call((config, key, value))?;
-                }
-                Ok(config)
-            }
-            _ => Ok(config),
-        }
-    }
-
-    pub(crate) fn apply_overrides_to<'l>(
-        lua: &'l mlua::Lua,
-        mut config: mlua::Value<'l>,
-    ) -> anyhow::Result<mlua::Value<'l>> {
-        let overrides = CONFIG_OVERRIDES.lock().unwrap();
-        for (key, value) in &*overrides {
-            if value == "nil" {
-                // Literal nil as the value is the same as not specifying the value.
-                // We special case this here as we want to explicitly check for
-                // the value evaluating as nil, as can happen in the case where the
-                // user specifies something like: `--config term=xterm`.
-                // The RHS references a global that doesn't exist and evaluates as
-                // nil. We want to raise this as an error.
-                continue;
-            }
-            let literal = value.escape_debug();
-            let code = format!(
-                r#"
-                local terminaler = require 'terminaler';
-                local value = {value};
-                if value == nil then
-                    error("{literal} evaluated as nil. Check for missing quotes or other syntax issues")
-                end
-                config.{key} = value;
-                return config;
-                "#,
-            );
-            let chunk = lua.load(&code);
-            let chunk = chunk.set_name(format!("--config {}={}", key, value));
-            lua.globals().set("config", config.clone())?;
-            log::debug!("Apply {}={} to config", key, value);
-            config = chunk.eval()?;
-        }
-        Ok(config)
     }
 
     /// Check for logical conflicts in the config

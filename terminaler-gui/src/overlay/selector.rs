@@ -3,13 +3,11 @@ use crate::scripting::guiwin::GuiWin;
 use config::configuration;
 use config::keyassignment::{InputSelector, InputSelectorEntry, KeyAssignment};
 use mux::termwiztermtab::TermWizTerminal;
-// STRIPPED: mux_lua removed; use local stub
 use crate::scripting::guiwin::MuxPane;
 use nucleo_matcher::pattern::Pattern;
 use nucleo_matcher::{Matcher, Utf32Str};
 use rayon::prelude::*;
 use std::cell::RefCell;
-use std::rc::Rc;
 use termwiz::cell::{unicode_column_width, AttributeChange, CellAttributes};
 use termwiz::color::ColorAttribute;
 use termwiz::input::{InputEvent, KeyCode, KeyEvent, Modifiers, MouseButtons, MouseEvent};
@@ -220,16 +218,8 @@ impl SelectorState {
         term.render(&changes)
     }
 
-    fn trigger_event(&self, entry: Option<InputSelectorEntry>) {
-        let name = self.event_name.clone();
-        let window = self.window.clone();
-        let pane = self.pane.clone();
-
-        promise::spawn::spawn_into_main_thread(async move {
-            trampoline(name, window, pane, entry);
-            anyhow::Result::<()>::Ok(())
-        })
-        .detach();
+    fn trigger_event(&self, _entry: Option<InputSelectorEntry>) {
+        // Lua EmitEvent callback removed; selector result is not dispatched
     }
 
     fn launch(&self, active_idx: usize) -> bool {
@@ -397,35 +387,6 @@ impl SelectorState {
 
         Ok(())
     }
-}
-
-fn trampoline(name: String, window: GuiWin, pane: MuxPane, entry: Option<InputSelectorEntry>) {
-    promise::spawn::spawn(async move {
-        config::with_lua_config_on_main_thread(move |lua| do_event(lua, name, window, pane, entry))
-            .await
-    })
-    .detach();
-}
-
-async fn do_event(
-    lua: Option<Rc<mlua::Lua>>,
-    name: String,
-    window: GuiWin,
-    pane: MuxPane,
-    entry: Option<InputSelectorEntry>,
-) -> anyhow::Result<()> {
-    if let Some(lua) = lua {
-        let id = entry.as_ref().map(|entry| entry.id.clone());
-        let label = entry.as_ref().map(|entry| entry.label.to_string());
-
-        let args = lua.pack_multi((window, pane, id, label))?;
-
-        if let Err(err) = config::lua::emit_event(&lua, (name.clone(), args)).await {
-            log::error!("while processing {} event: {:#}", name, err);
-        }
-    }
-
-    Ok(())
 }
 
 pub fn selector(

@@ -26,7 +26,7 @@ libc.workspace = true
 log.workspace = true
 # STRIPPED: luahelper.workspace = true
 metrics.workspace = true
-mlua.workspace = true
+# STRIPPED: mlua.workspace = true
 names.workspace = true
 nix = {workspace=true, features=["term"]}
 parking_lot.workspace = true

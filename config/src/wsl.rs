@@ -12,7 +12,6 @@ pub struct WslDomain {
     pub default_cwd: Option<PathBuf>,
     pub default_prog: Option<Vec<String>>,
 }
-impl_lua_conversion_dynamic!(WslDomain);
 
 impl WslDomain {
     pub fn default_domains() -> Vec<WslDomain> {

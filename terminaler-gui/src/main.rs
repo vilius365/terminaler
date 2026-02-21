@@ -74,7 +74,7 @@ pub use termwindow::{set_window_class, set_window_position, TermWindow, ICON_DAT
     version = config::terminaler_version()
 )]
 struct Opt {
-    /// Skip loading terminaler.lua
+    /// Skip loading terminaler.json
     #[arg(long, short = 'n')]
     skip_config: bool,
 
@@ -242,44 +242,12 @@ async fn connect_to_auto_connect_domains() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn trigger_gui_startup(
-    lua: Option<Rc<mlua::Lua>>,
-    spawn: Option<SpawnCommand>,
-) -> anyhow::Result<()> {
-    if let Some(lua) = lua {
-        let args = lua.pack_multi(spawn)?;
-        config::lua::emit_event(&lua, ("gui-startup".to_string(), args)).await?;
-    }
-    Ok(())
+async fn trigger_and_log_gui_startup(_spawn_command: Option<SpawnCommand>) {
+    // Lua gui-startup event removed; no-op
 }
 
-async fn trigger_and_log_gui_startup(spawn_command: Option<SpawnCommand>) {
-    if let Err(err) =
-        config::with_lua_config_on_main_thread(move |lua| trigger_gui_startup(lua, spawn_command))
-            .await
-    {
-        let message = format!("while processing gui-startup event: {:#}", err);
-        log::error!("{}", message);
-        persistent_toast_notification("Error", &message);
-    }
-}
-
-async fn trigger_gui_attached(lua: Option<Rc<mlua::Lua>>, domain: MuxDomain) -> anyhow::Result<()> {
-    if let Some(lua) = lua {
-        let args = lua.pack_multi(domain)?;
-        config::lua::emit_event(&lua, ("gui-attached".to_string(), args)).await?;
-    }
-    Ok(())
-}
-
-async fn trigger_and_log_gui_attached(domain: MuxDomain) {
-    if let Err(err) =
-        config::with_lua_config_on_main_thread(move |lua| trigger_gui_attached(lua, domain)).await
-    {
-        let message = format!("while processing gui-attached event: {:#}", err);
-        log::error!("{}", message);
-        persistent_toast_notification("Error", &message);
-    }
+async fn trigger_and_log_gui_attached(_domain: MuxDomain) {
+    // Lua gui-attached event removed; no-op
 }
 
 fn cell_pixel_dims(config: &ConfigHandle, dpi: f64) -> anyhow::Result<(usize, usize)> {
@@ -716,7 +684,6 @@ fn main() {
     #[cfg(feature = "dhat-heap")]
     let _profiler = dhat::Profiler::new_heap();
 
-    config::designate_this_as_the_main_thread();
     config::assign_error_callback(mux::connui::show_configuration_error_message);
     notify_on_panic();
     if let Err(e) = run() {
@@ -1085,10 +1052,6 @@ fn run() -> anyhow::Result<()> {
     };
 
     env_bootstrap::bootstrap();
-    // STRIPPED: window_funcs crate removed; skip its registration
-    // config::lua::add_context_setup_func(window_funcs::register);
-    config::lua::add_context_setup_func(crate::scripting::register);
-    config::lua::add_context_setup_func(crate::stats::register);
 
     stats::Stats::init()?;
     let _saver = umask::UmaskSaver::new();

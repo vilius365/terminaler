@@ -1,15 +1,11 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
-#[cfg(feature = "lua")]
-use terminaler_dynamic::{FromDynamic, ToDynamic};
-
 mod linux;
 mod macos;
 mod windows;
 
 #[derive(Debug, Copy, Clone)]
-#[cfg_attr(feature = "lua", derive(FromDynamic, ToDynamic))]
 pub enum LocalProcessStatus {
     Idle,
     Run,
@@ -26,7 +22,6 @@ pub enum LocalProcessStatus {
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "lua", derive(FromDynamic, ToDynamic))]
 pub struct LocalProcessInfo {
     /// The process identifier
     pub pid: u32,
@@ -59,8 +54,6 @@ pub struct LocalProcessInfo {
     /// Child processes, keyed by pid
     pub children: HashMap<u32, LocalProcessInfo>,
 }
-#[cfg(feature = "lua")]
-config::impl_lua_conversion_dynamic!(LocalProcessInfo);
 
 impl LocalProcessInfo {
     /// Walk this sub-tree of processes and return a unique set

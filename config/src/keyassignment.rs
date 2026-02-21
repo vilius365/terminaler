@@ -198,7 +198,6 @@ pub struct SpawnCommand {
 
     pub position: Option<crate::GuiPosition>,
 }
-impl_lua_conversion_dynamic!(SpawnCommand);
 
 impl std::fmt::Debug for SpawnCommand {
     fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -312,7 +311,6 @@ pub enum ClipboardCopyDestination {
     PrimarySelection,
     ClipboardAndPrimarySelection,
 }
-impl_lua_conversion_dynamic!(ClipboardCopyDestination);
 
 impl Default for ClipboardCopyDestination {
     fn default() -> Self {
@@ -646,7 +644,6 @@ pub enum KeyAssignment {
     InputSelector(InputSelector),
     Confirmation(Confirmation),
 }
-impl_lua_conversion_dynamic!(KeyAssignment);
 
 #[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
 pub struct SplitPane {

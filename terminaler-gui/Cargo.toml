@@ -60,7 +60,6 @@ lfucache.workspace = true
 libc.workspace = true
 log.workspace = true
 metrics.workspace = true
-mlua = {workspace=true, features=["send", "serialize"]}
 mux.workspace = true
 nucleo-matcher.workspace = true
 ordered-float.workspace = true

@@ -7,13 +7,11 @@ publish = false
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [features]
 # STRIPPED: default = ["lua"]
-lua = ["dep:config", "dep:terminaler-dynamic"]
+# STRIPPED: lua = ["dep:config", "dep:terminaler-dynamic"]
 
 [dependencies]
 libc.workspace = true
 log.workspace = true
-config = { workspace=true, optional = true }
-terminaler-dynamic = { workspace=true, optional = true, features=["std"]}
 
 [target."cfg(windows)".dependencies]
 ntapi.workspace = true

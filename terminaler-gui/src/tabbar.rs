@@ -1,7 +1,6 @@
 use crate::termwindow::{PaneInformation, TabInformation, UIItem, UIItemType};
 use config::{ConfigHandle, TabBarColors};
 use finl_unicode::grapheme_clusters::Graphemes;
-use mlua::FromLua;
 use termwiz::cell::{unicode_column_width, Cell, CellAttributes};
 use termwiz::color::{AnsiColor, ColorSpec};
 use termwiz::escape::csi::Sgr;
@@ -71,65 +70,6 @@ struct TitleText {
     len: usize,
 }
 
-fn call_format_tab_title(
-    tab: &TabInformation,
-    tab_info: &[TabInformation],
-    pane_info: &[PaneInformation],
-    config: &ConfigHandle,
-    hover: bool,
-    tab_max_width: usize,
-) -> Option<TitleText> {
-    match config::run_immediate_with_lua_config(|lua| {
-        if let Some(lua) = lua {
-            let tabs = lua.create_sequence_from(tab_info.iter().cloned())?;
-            let panes = lua.create_sequence_from(pane_info.iter().cloned())?;
-
-            let v = config::lua::emit_sync_callback(
-                &*lua,
-                (
-                    "format-tab-title".to_string(),
-                    (
-                        tab.clone(),
-                        tabs,
-                        panes,
-                        (**config).clone(),
-                        hover,
-                        tab_max_width,
-                    ),
-                ),
-            )?;
-            match &v {
-                mlua::Value::Nil => Ok(None),
-                mlua::Value::Table(_) => {
-                    // STRIPPED: FormatItem::from_lua not implemented (termwiz_funcs stripped)
-                    // Fall through to string representation
-                    let s = format!("{:?}", v);
-                    let line = parse_status_text(&s, CellAttributes::default());
-                    Ok(Some(TitleText {
-                        items: vec![FormatItem::Text(s)],
-                        len: line.len(),
-                    }))
-                }
-                _ => {
-                    let s = String::from_lua(v, &*lua)?;
-                    let line = parse_status_text(&s, CellAttributes::default());
-                    Ok(Some(TitleText {
-                        len: line.len(),
-                        items: vec![FormatItem::Text(s)],
-                    }))
-                }
-            }
-        } else {
-            Ok(None)
-        }
-    }) {
-        Ok(s) => s,
-        Err(err) => {
-            log::warn!("format-tab-title: {}", err);
-            None
-        }
-    }
-}
 
 /// pct is a percentage in the range 0-100.
 /// We want to map it to one of the nerdfonts:
@@ -160,84 +100,77 @@ fn pct_to_glyph(pct: u8) -> char {
 
 fn compute_tab_title(
     tab: &TabInformation,
-    tab_info: &[TabInformation],
-    pane_info: &[PaneInformation],
+    _tab_info: &[TabInformation],
+    _pane_info: &[PaneInformation],
     config: &ConfigHandle,
-    hover: bool,
-    tab_max_width: usize,
+    _hover: bool,
+    _tab_max_width: usize,
 ) -> TitleText {
-    let title = call_format_tab_title(tab, tab_info, pane_info, config, hover, tab_max_width);
+    let mut items = vec![];
+    let mut len = 0;
 
-    match title {
-        Some(title) => title,
-        None => {
-            let mut items = vec![];
-            let mut len = 0;
+    if let Some(pane) = &tab.active_pane {
+        let mut title = if tab.tab_title.is_empty() {
+            pane.title.clone()
+        } else {
+            tab.tab_title.clone()
+        };
 
-            if let Some(pane) = &tab.active_pane {
-                let mut title = if tab.tab_title.is_empty() {
-                    pane.title.clone()
-                } else {
-                    tab.tab_title.clone()
-                };
-
-                let classic_spacing = if config.use_fancy_tab_bar { "" } else { " " };
-                if config.show_tab_index_in_tab_bar {
-                    let index = format!(
-                        "{classic_spacing}{}: ",
-                        tab.tab_index
-                            + if config.tab_and_split_indices_are_zero_based {
-                                0
-                            } else {
-                                1
-                            }
-                    );
-                    len += unicode_column_width(&index, None);
-                    items.push(FormatItem::Text(index));
-
-                    title = format!("{}{classic_spacing}", title);
-                }
-
-                match pane.progress {
-                    Progress::None => {}
-                    Progress::Percentage(pct) | Progress::Error(pct) => {
-                        let graphic = format!("{} ", pct_to_glyph(pct));
-                        len += unicode_column_width(&graphic, None);
-                        let color = if matches!(pane.progress, Progress::Percentage(_)) {
-                            FormatItem::Foreground(FormatColor::AnsiColor(AnsiColor::Green))
-                        } else {
-                            FormatItem::Foreground(FormatColor::AnsiColor(AnsiColor::Red))
-                        };
-                        items.push(color);
-                        items.push(FormatItem::Text(graphic));
-                        items.push(FormatItem::Foreground(FormatColor::Default));
+        let classic_spacing = if config.use_fancy_tab_bar { "" } else { " " };
+        if config.show_tab_index_in_tab_bar {
+            let index = format!(
+                "{classic_spacing}{}: ",
+                tab.tab_index
+                    + if config.tab_and_split_indices_are_zero_based {
+                        0
+                    } else {
+                        1
                     }
-                    Progress::Indeterminate => {
-                        // TODO: Decide what to do here to indicate this
-                    }
-                }
+            );
+            len += unicode_column_width(&index, None);
+            items.push(FormatItem::Text(index));
 
-                // We have a preferred soft minimum on tab width to make it
-                // easier to click on tab titles, but we'll still go below
-                // this if there are too many tabs to fit the window at
-                // this width.
-                if !config.use_fancy_tab_bar {
-                    while len + unicode_column_width(&title, None) < 5 {
-                        title.push(' ');
-                    }
-                }
-
-                len += unicode_column_width(&title, None);
-                items.push(FormatItem::Text(title));
-            } else {
-                let title = " no pane ".to_string();
-                len += unicode_column_width(&title, None);
-                items.push(FormatItem::Text(title));
-            };
-
-            TitleText { len, items }
+            title = format!("{}{classic_spacing}", title);
         }
-    }
+
+        match pane.progress {
+            Progress::None => {}
+            Progress::Percentage(pct) | Progress::Error(pct) => {
+                let graphic = format!("{} ", pct_to_glyph(pct));
+                len += unicode_column_width(&graphic, None);
+                let color = if matches!(pane.progress, Progress::Percentage(_)) {
+                    FormatItem::Foreground(FormatColor::AnsiColor(AnsiColor::Green))
+                } else {
+                    FormatItem::Foreground(FormatColor::AnsiColor(AnsiColor::Red))
+                };
+                items.push(color);
+                items.push(FormatItem::Text(graphic));
+                items.push(FormatItem::Foreground(FormatColor::Default));
+            }
+            Progress::Indeterminate => {
+                // TODO: Decide what to do here to indicate this
+            }
+        }
+
+        // We have a preferred soft minimum on tab width to make it
+        // easier to click on tab titles, but we'll still go below
+        // this if there are too many tabs to fit the window at
+        // this width.
+        if !config.use_fancy_tab_bar {
+            while len + unicode_column_width(&title, None) < 5 {
+                title.push(' ');
+            }
+        }
+
+        len += unicode_column_width(&title, None);
+        items.push(FormatItem::Text(title));
+    } else {
+        let title = " no pane ".to_string();
+        len += unicode_column_width(&title, None);
+        items.push(FormatItem::Text(title));
+    };
+
+    TitleText { len, items }
 }
 
 fn is_tab_hover(mouse_x: Option<usize>, x: usize, tab_title_len: usize) -> bool {

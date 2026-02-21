@@ -27,7 +27,7 @@ mod cli;
     version = terminaler_version()
 )]
 pub struct Opt {
-    /// Skip loading terminaler.lua
+    /// Skip loading terminaler.json
     #[arg(long, short = 'n')]
     skip_config: bool,
 
@@ -704,7 +704,6 @@ fn terminate_with_error(err: anyhow::Error) -> ! {
 }
 
 fn main() {
-    config::designate_this_as_the_main_thread();
     config::assign_error_callback(mux::connui::show_configuration_error_message);
     if let Err(e) = run() {
         terminate_with_error(e);

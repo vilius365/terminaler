@@ -379,7 +379,6 @@ pub struct FontAttributes {
     #[dynamic(default)]
     pub assume_emoji_presentation: Option<bool>,
 }
-impl_lua_conversion_dynamic!(FontAttributes);
 
 impl std::fmt::Display for FontAttributes {
     fn fmt(&self, fmt: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
@@ -458,7 +457,6 @@ pub struct TextStyle {
     /// the text color for eg: bold text.
     pub foreground: Option<RgbaColor>,
 }
-impl_lua_conversion_dynamic!(TextStyle);
 
 impl Default for TextStyle {
     fn default() -> Self {

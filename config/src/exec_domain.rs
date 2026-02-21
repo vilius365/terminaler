@@ -6,7 +6,6 @@ pub enum ValueOrFunc {
     Value(Value),
     Func(String),
 }
-impl_lua_conversion_dynamic!(ValueOrFunc);
 
 #[derive(Debug, Clone, FromDynamic, ToDynamic)]
 pub struct ExecDomain {
@@ -15,4 +14,3 @@ pub struct ExecDomain {
     pub fixup_command: String,
     pub label: Option<ValueOrFunc>,
 }
-impl_lua_conversion_dynamic!(ExecDomain);

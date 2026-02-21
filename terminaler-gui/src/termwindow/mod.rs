@@ -39,7 +39,6 @@ use config::{
     GeometryOrigin, GuiPosition, TermConfig, WindowCloseConfirmation,
 };
 use lfucache::*;
-use mlua::{FromLua, LuaSerdeExt, UserData, UserDataFields};
 use mux::pane::{
     CachePolicy, CloseReason, Pane, PaneId, Pattern as MuxPattern, PerformAssignmentResult,
 };
@@ -219,42 +218,6 @@ pub struct TabInformation {
     pub tab_title: String,
 }
 
-impl UserData for TabInformation {
-    fn add_fields<'lua, F: UserDataFields<'lua, Self>>(fields: &mut F) {
-        fields.add_field_method_get("tab_id", |_, this| Ok(this.tab_id));
-        fields.add_field_method_get("tab_index", |_, this| Ok(this.tab_index));
-        fields.add_field_method_get("is_active", |_, this| Ok(this.is_active));
-        fields.add_field_method_get("is_last_active", |_, this| Ok(this.is_last_active));
-        fields.add_field_method_get("active_pane", |_, this| {
-            if let Some(pane) = &this.active_pane {
-                Ok(Some(pane.clone()))
-            } else {
-                Ok(None)
-            }
-        });
-        fields.add_field_method_get("panes", |_, this| {
-            let mux = Mux::get();
-            let mut panes = vec![];
-            if let Some(tab) = mux.get_tab(this.tab_id) {
-                panes = tab
-                    .iter_panes()
-                    .iter()
-                    .map(TermWindow::pos_pane_to_pane_info)
-                    .collect();
-            }
-            Ok(panes)
-        });
-        fields.add_field_method_get("window_id", |_, this| Ok(this.window_id));
-        fields.add_field_method_get("tab_title", |_, this| Ok(this.tab_title.clone()));
-        fields.add_field_method_get("window_title", |_, this| {
-            let mux = Mux::get();
-            let window = mux.get_window(this.window_id).ok_or_else(|| {
-                mlua::Error::external(format!("window {} not found", this.window_id))
-            })?;
-            Ok(window.get_title().to_string())
-        });
-    }
-}
 
 /// Data used when synchronously formatting pane and window titles
 #[derive(Debug, Clone)]
@@ -275,71 +238,8 @@ pub struct PaneInformation {
     pub progress: Progress,
 }
 
-impl UserData for PaneInformation {
-    fn add_fields<'lua, F: UserDataFields<'lua, Self>>(fields: &mut F) {
-        fields.add_field_method_get("pane_id", |_, this| Ok(this.pane_id));
-        fields.add_field_method_get("pane_index", |_, this| Ok(this.pane_index));
-        fields.add_field_method_get("is_active", |_, this| Ok(this.is_active));
-        fields.add_field_method_get("is_zoomed", |_, this| Ok(this.is_zoomed));
-        fields.add_field_method_get("has_unseen_output", |_, this| Ok(this.has_unseen_output));
-        fields.add_field_method_get("left", |_, this| Ok(this.left));
-        fields.add_field_method_get("top", |_, this| Ok(this.top));
-        fields.add_field_method_get("width", |_, this| Ok(this.width));
-        fields.add_field_method_get("height", |_, this| Ok(this.height));
-        fields.add_field_method_get("pixel_width", |_, this| Ok(this.pixel_width));
-        fields.add_field_method_get("pixel_height", |_, this| Ok(this.pixel_height));
-        fields.add_field_method_get("progress", |lua, this| lua.to_value(&this.progress));
-        fields.add_field_method_get("title", |_, this| Ok(this.title.clone()));
-        fields.add_field_method_get("user_vars", |_, this| Ok(this.user_vars.clone()));
-        fields.add_field_method_get("foreground_process_name", |_, this| {
-            let mut name = None;
-            if let Some(mux) = Mux::try_get() {
-                if let Some(pane) = mux.get_pane(this.pane_id) {
-                    name = pane.get_foreground_process_name(CachePolicy::AllowStale);
-                }
-            }
-            match name {
-                Some(name) => Ok(name),
-                None => Ok("".to_string()),
-            }
-        });
-        fields.add_field_method_get("tty_name", |_, this| {
-            let mut name = None;
-            if let Some(mux) = Mux::try_get() {
-                if let Some(pane) = mux.get_pane(this.pane_id) {
-                    name = pane.tty_name();
-                }
-            }
-            Ok(name)
-        });
-        fields.add_field_method_get("current_working_dir", |_, this| {
-            // STRIPPED: url_funcs removed; return cwd as a string instead of Url object
-            if let Some(mux) = Mux::try_get() {
-                if let Some(pane) = mux.get_pane(this.pane_id) {
-                    return Ok(pane
-                        .get_current_working_dir(CachePolicy::AllowStale)
-                        .map(|url| url.to_string()));
-                }
-            }
-            Ok(None)
-        });
-        fields.add_field_method_get("domain_name", |_, this| {
-            let mut name = None;
-            if let Some(mux) = Mux::try_get() {
-                if let Some(pane) = mux.get_pane(this.pane_id) {
-                    let domain_id = pane.domain_id();
-                    name = mux
-                        .get_domain(domain_id)
-                        .map(|dom| dom.domain_name().to_string());
-                }
-            }
-            match name {
-                Some(name) => Ok(name),
-                None => Ok("".to_string()),
-            }
-        });
-    }
-}
+// UserData impls for TabInformation and PaneInformation removed (Lua stripped).
+// These structs are used as plain data carriers within the GUI code.
 
 #[derive(Default)]
 pub struct TabState {
@@ -1562,119 +1462,18 @@ impl TermWindow {
     }
 
     fn emit_status_event(&mut self) {
-        self.emit_window_event("update-right-status", None);
-        self.emit_window_event("update-status", None);
+        // Lua event dispatch removed; no-op
     }
 
-    fn schedule_window_event(&mut self, name: &str, pane_id: Option<PaneId>) {
-        let window = GuiWin::new(self);
-        let pane = match pane_id {
-            Some(pane_id) => Mux::get().get_pane(pane_id),
-            None => None,
-        };
-        let pane = match pane {
-            Some(pane) => pane,
-            None => match self.get_active_pane_or_overlay() {
-                Some(pane) => pane,
-                None => return,
-            },
-        };
-        let pane = MuxPane(pane.pane_id());
-        let name = name.to_string();
-
-        async fn do_event(
-            lua: Option<Rc<mlua::Lua>>,
-            name: String,
-            window: GuiWin,
-            pane: MuxPane,
-        ) -> anyhow::Result<()> {
-            let again = if let Some(lua) = lua {
-                let args = lua.pack_multi((window.clone(), pane))?;
-
-                if let Err(err) = config::lua::emit_event(&lua, (name.clone(), args)).await {
-                    log::error!("while processing {} event: {:#}", name, err);
-                }
-                true
-            } else {
-                false
-            };
-
-            window
-                .window
-                .notify(TermWindowNotif::FinishWindowEvent { name, again });
-
-            Ok(())
-        }
-
-        promise::spawn::spawn(config::with_lua_config_on_main_thread(move |lua| {
-            do_event(lua, name, window, pane)
-        }))
-        .detach();
-    }
-
-    /// Called as part of finishing up a callout to lua.
-    /// If again==false it means that there isn't a lua config
-    /// to execute against, so we should just mark as done.
-    /// Otherwise, if there is a queued item, schedule it now.
-    fn finish_window_event(&mut self, name: &str, again: bool) {
-        let state = self
-            .event_states
+    fn finish_window_event(&mut self, name: &str, _again: bool) {
+        // Lua event dispatch removed; clear state
+        self.event_states
             .entry(name.to_string())
-            .or_insert(EventState::None);
-        if again {
-            match state {
-                EventState::InProgress => {
-                    *state = EventState::None;
-                }
-                EventState::InProgressWithQueued(pane) => {
-                    let pane = *pane;
-                    *state = EventState::InProgress;
-                    self.schedule_window_event(name, pane);
-                }
-                EventState::None => {}
-            }
-        } else {
-            *state = EventState::None;
-        }
+            .and_modify(|s| *s = EventState::None);
     }
 
-    pub fn emit_window_event(&mut self, name: &str, pane_id: Option<PaneId>) {
-        if self.get_active_pane_or_overlay().is_none() || self.window.is_none() {
-            return;
-        }
-
-        let state = self
-            .event_states
-            .entry(name.to_string())
-            .or_insert(EventState::None);
-        match state {
-            EventState::InProgress => {
-                // Flag that we want to run again when the currently
-                // executing event calls finish_window_event().
-                *state = EventState::InProgressWithQueued(pane_id);
-                return;
-            }
-            EventState::InProgressWithQueued(other_pane) => {
-                // We've already got one copy executing and another
-                // pending dispatch, so don't queue another.
-                if pane_id != *other_pane {
-                    log::warn!(
-                        "Cannot queue {} event for pane {:?}, as \
-                         there is already an event queued for pane {:?} \
-                         in the same window",
-                        name,
-                        pane_id,
-                        other_pane
-                    );
-                }
-                return;
-            }
-            EventState::None => {
-                // Nothing pending, so schedule a call now
-                *state = EventState::InProgress;
-                self.schedule_window_event(name, pane_id);
-            }
-        }
+    pub fn emit_window_event(&mut self, _name: &str, _pane_id: Option<PaneId>) {
+        // Lua event dispatch removed; no-op
     }
 
     fn check_for_dirty_lines_and_invalidate_selection(&mut self, pane: &Arc<dyn Pane>) {
@@ -1911,47 +1710,12 @@ impl TermWindow {
         return window_id == self.mux_window_id;
     }
 
-    fn emit_user_var_event(&mut self, pane_id: PaneId, name: String, value: String) {
+    fn emit_user_var_event(&mut self, pane_id: PaneId, _name: String, _value: String) {
+        // Lua user-var-changed event removed; just update the title
         if !self.window_contains_pane(pane_id) {
             return;
         }
-
-        let mux = Mux::get();
-        let window = GuiWin::new(self);
-        let pane = match mux.get_pane(pane_id) {
-            Some(pane) => MuxPane(pane.pane_id()),
-            None => return,
-        };
-
-        async fn do_event(
-            lua: Option<Rc<mlua::Lua>>,
-            name: String,
-            value: String,
-            window: GuiWin,
-            pane: MuxPane,
-        ) -> anyhow::Result<()> {
-            if let Some(lua) = lua {
-                let args = lua.pack_multi((window.clone(), pane, name, value))?;
-                if let Err(err) =
-                    config::lua::emit_event(&lua, ("user-var-changed".to_string(), args)).await
-                {
-                    log::error!("while processing user-var-changed event: {:#}", err);
-                }
-            }
-
-            window
-                .window
-                .notify(TermWindowNotif::Apply(Box::new(move |term_window| {
-                    term_window.update_title();
-                })));
-
-            Ok(())
-        }
-
-        promise::spawn::spawn(config::with_lua_config_on_main_thread(move |lua| {
-            do_event(lua, name, value, window, pane)
-        }))
-        .detach();
+        self.update_title();
     }
 
     /// Called by window:set_right_status after the status has
@@ -2019,58 +1783,21 @@ impl TermWindow {
         }
         drop(window);
 
-        let title = match config::run_immediate_with_lua_config(|lua| {
-            if let Some(lua) = lua {
-                let tabs = lua.create_sequence_from(tabs.clone().into_iter())?;
-                let panes = lua.create_sequence_from(panes.clone().into_iter())?;
-
-                let v = config::lua::emit_sync_callback(
-                    &*lua,
-                    (
-                        "format-window-title".to_string(),
-                        (
-                            active_tab.clone(),
-                            active_pane.clone(),
-                            tabs,
-                            panes,
-                            (*self.config).clone(),
-                        ),
-                    ),
-                )?;
-                match &v {
-                    mlua::Value::Nil => Ok(None),
-                    _ => Ok(Some(String::from_lua(v, &*lua)?)),
-                }
+        // format-window-title Lua callback removed; use default title
+        let title = if let (Some(pos), Some(tab)) = (active_pane, active_tab) {
+            if num_tabs == 1 {
+                format!("{}{}", if pos.is_zoomed { "[Z] " } else { "" }, pos.title)
             } else {
-                Ok(None)
+                format!(
+                    "{}[{}/{}] {}",
+                    if pos.is_zoomed { "[Z] " } else { "" },
+                    tab.tab_index + 1,
+                    num_tabs,
+                    pos.title
+                )
             }
-        }) {
-            Ok(s) => s,
-            Err(err) => {
-                log::warn!("format-window-title: {}", err);
-                None
-            }
-        };
-
-        let title = match title {
-            Some(title) => title,
-            None => {
-                if let (Some(pos), Some(tab)) = (active_pane, active_tab) {
-                    if num_tabs == 1 {
-                        format!("{}{}", if pos.is_zoomed { "[Z] " } else { "" }, pos.title)
-                    } else {
-                        format!(
-                            "{}[{}/{}] {}",
-                            if pos.is_zoomed { "[Z] " } else { "" },
-                            tab.tab_index + 1,
-                            num_tabs,
-                            pos.title
-                        )
-                    }
-                } else {
-                    "".to_string()
-                }
-            }
+        } else {
+            "".to_string()
         };
 
         if let Some(window) = self.window.as_ref() {
@@ -2351,22 +2078,8 @@ impl TermWindow {
     }
 
     fn show_debug_overlay(&mut self) {
-        let mux = Mux::get();
-        let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
-            Some(tab) => tab,
-            None => return,
-        };
-
-        let gui_win = GuiWin::new(self);
-
-        let opengl_info = self.opengl_info.as_deref().unwrap_or("Unknown").to_string();
-        let connection_info = self.connection_name.clone();
-
-        let (overlay, future) = start_overlay(self, &tab, move |_tab_id, term| {
-            crate::overlay::show_debug_overlay(term, gui_win, opengl_info, connection_info)
-        });
-        self.assign_overlay(tab.tab_id(), overlay);
-        promise::spawn::spawn(future).detach();
+        // Debug overlay (Lua REPL) removed in Phase 1
+        log::info!("ShowDebugOverlay: Lua REPL overlay has been removed");
     }
 
     fn show_tab_navigator(&mut self) {
@@ -3184,43 +2897,19 @@ impl TermWindow {
         // perform below; here we allow the user to define an `open-uri` event
         // handler that can bypass the normal `open_url` functionality.
         if let Some(link) = self.current_highlight.as_ref().cloned() {
-            let window = GuiWin::new(self);
-            let pane = MuxPane(pane.pane_id());
-
-            async fn open_uri(
-                lua: Option<Rc<mlua::Lua>>,
-                window: GuiWin,
-                pane: MuxPane,
-                link: String,
-            ) -> anyhow::Result<()> {
-                let default_click = match lua {
-                    Some(lua) => {
-                        let args = lua.pack_multi((window, pane, link.clone()))?;
-                        config::lua::emit_event(&lua, ("open-uri".to_string(), args))
-                            .await
-                            .map_err(|e| {
-                                log::error!("while processing open-uri event: {:#}", e);
-                                e
-                            })?
-                    }
-                    None => true,
-                };
-                if default_click {
-                    log::info!("clicking {}", link);
-                    // STRIPPED: terminaler_open_url removed; open URL via OS shell command
-                    #[cfg(windows)]
-                    {
-                        let _ = std::process::Command::new("cmd")
-                            .args(["/C", "start", "", &link])
-                            .spawn();
-                    }
+            // open-uri Lua event removed; always use default OS open behavior
+            let uri = link.uri().to_string();
+            promise::spawn::spawn(async move {
+                log::info!("clicking {}", uri);
+                // STRIPPED: terminaler_open_url removed; open URL via OS shell command
+                #[cfg(windows)]
+                {
+                    let _ = std::process::Command::new("cmd")
+                        .args(["/C", "start", "", &uri])
+                        .spawn();
                 }
-                Ok(())
-            }
-
-            promise::spawn::spawn(config::with_lua_config_on_main_thread(move |lua| {
-                open_uri(lua, window, pane, link.uri().to_string())
-            }))
+                anyhow::Result::<()>::Ok(())
+            })
             .detach();
         }
     }

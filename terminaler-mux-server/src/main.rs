@@ -6,7 +6,6 @@ use mux::Mux;
 use portable_pty::cmdbuilder::CommandBuilder;
 use std::ffi::OsString;
 use std::process::Command;
-use std::rc::Rc;
 use std::sync::Arc;
 use std::thread;
 use terminaler_gui_subcommands::*;
@@ -21,7 +20,7 @@ mod daemonize;
     trailing_var_arg = true,
 )]
 struct Opt {
-    /// Skip loading terminaler.lua
+    /// Skip loading terminaler.json
     #[arg(long, short = 'n')]
     skip_config: bool,
 
@@ -76,7 +75,6 @@ fn run() -> anyhow::Result<()> {
     env_bootstrap::bootstrap();
 
     //stats::Stats::init()?;
-    config::designate_this_as_the_main_thread();
     let _saver = umask::UmaskSaver::new();
 
     let opts = Opt::parse();
@@ -248,14 +246,6 @@ fn run() -> anyhow::Result<()> {
     }
 }
 
-async fn trigger_mux_startup(lua: Option<Rc<mlua::Lua>>) -> anyhow::Result<()> {
-    if let Some(lua) = lua {
-        let args = lua.pack_multi(())?;
-        config::lua::emit_event(&lua, ("mux-startup".to_string(), args)).await?;
-    }
-    Ok(())
-}
-
 async fn async_run(cmd: Option<CommandBuilder>) -> anyhow::Result<()> {
     let mux = Mux::get();
     let config = config::configuration();
@@ -272,12 +262,6 @@ async fn async_run(cmd: Option<CommandBuilder>) -> anyhow::Result<()> {
     });
 
     let domain = mux.default_domain();
-
-    {
-        if let Err(err) = config::with_lua_config_on_main_thread(trigger_mux_startup).await {
-            log::error!("while processing mux-startup event: {:#}", err);
-        }
-    }
 
     let have_panes_in_domain = mux
         .iter_panes()

@@ -329,25 +329,11 @@ impl LocalDomain {
                 position: None,
             };
 
-            let spawn_command = config::with_lua_config_on_main_thread(|lua| async {
-                let lua = lua.ok_or_else(|| anyhow::anyhow!("missing lua context"))?;
-                let value = config::lua::emit_async_callback(
-                    &*lua,
-                    (ed.fixup_command.clone(), (spawn_command.clone())),
-                )
-                .await?;
-                // STRIPPED: luahelper::from_lua_value_dynamic -> config::lua::from_lua_value_dynamic
-                let cmd: SpawnCommand =
-                    config::lua::from_lua_value_dynamic(value).with_context(|| {
-                        format!(
-                            "interpreting SpawnCommand result from ExecDomain {}",
-                            ed.name
-                        )
-                    })?;
-                Ok(cmd)
-            })
-            .await
-            .with_context(|| format!("calling ExecDomain {} function", ed.name))?;
+            log::warn!(
+                "ExecDomain {} fixup_command is not supported without Lua scripting",
+                ed.name
+            );
+            let spawn_command = spawn_command;
 
             // Reinterpret the SpawnCommand into the builder
 
@@ -668,35 +654,12 @@ impl Domain for LocalDomain {
         if let Some(ed) = self.resolve_exec_domain() {
             match &ed.label {
                 Some(ValueOrFunc::Value(terminaler_dynamic::Value::String(s))) => s.to_string(),
-                Some(ValueOrFunc::Func(label_func)) => {
-                    let label = config::with_lua_config_on_main_thread(|lua| async {
-                        let lua = lua.ok_or_else(|| anyhow::anyhow!("missing lua context"))?;
-                        let value = config::lua::emit_async_callback(
-                            &*lua,
-                            (label_func.clone(), (self.name.clone())),
-                        )
-                        .await?;
-                        // STRIPPED: luahelper::from_lua_value_dynamic -> config::lua::from_lua_value_dynamic
-                        let label: String =
-                            config::lua::from_lua_value_dynamic(value).with_context(|| {
-                                format!(
-                                    "interpreting SpawnCommand result from ExecDomain {}",
-                                    ed.name
-                                )
-                            })?;
-                        Ok(label)
-                    })
-                    .await;
-                    match label {
-                        Ok(label) => label,
-                        Err(err) => {
-                            log::error!(
-                                "Error while calling label function for ExecDomain `{}`: {err:#}",
-                                self.name
-                            );
-                            self.name.to_string()
-                        }
-                    }
+                Some(ValueOrFunc::Func(_)) => {
+                    log::warn!(
+                        "ExecDomain {} label Func is not supported without Lua scripting",
+                        self.name
+                    );
+                    self.name.to_string()
                 }
                 _ => self.name.to_string(),
             }

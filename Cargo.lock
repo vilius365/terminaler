@@ -458,16 +458,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bstr"
-version = "1.12.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "63044e1ae8e69f3b5a92c736ca6269b8d12fa7efe39bf34ddb06d102cf0e2cab"
-dependencies = [
- "memchr",
- "serde",
-]
-
-[[package]]
 name = "built"
 version = "0.7.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -758,10 +748,9 @@ dependencies = [
  "lazy_static",
  "libc",
  "log",
- "mlua",
  "nix",
  "notify",
- "ordered-float 4.6.0",
+ "ordered-float",
  "portable-pty",
  "promise",
  "serde",
@@ -1003,7 +992,7 @@ dependencies = [
  "lazy_static",
  "mintex",
  "parking_lot",
- "rustc-hash 1.1.0",
+ "rustc-hash",
  "serde",
  "serde_json",
  "thousands",
@@ -1174,12 +1163,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "env_home"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c7f84e12ccf0a7ddc17a6c41c93326024c42920d7ee630d04950e6926645c0fe"
-
-[[package]]
 name = "env_logger"
 version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1230,17 +1213,6 @@ name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
-
-[[package]]
-name = "erased-serde"
-version = "0.4.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "89e8918065695684b2b0702da20382d5ae6065cf3327bc2d6436bd49a71ce9f3"
-dependencies = [
- "serde",
- "serde_core",
- "typeid",
-]
 
 [[package]]
 name = "errno"
@@ -2519,25 +2491,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lua-src"
-version = "547.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1edaf29e3517b49b8b746701e5648ccb5785cde1c119062cbabbc5d5cd115e42"
-dependencies = [
- "cc",
-]
-
-[[package]]
-name = "luajit-src"
-version = "210.5.12+a4f56a4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b3a8e7962a5368d5f264d045a5a255e90f9aa3fc1941ae15a8d2940d42cac671"
-dependencies = [
- "cc",
- "which",
-]
-
-[[package]]
 name = "malloc_buf"
 version = "0.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2661,36 +2614,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mlua"
-version = "0.9.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d111deb18a9c9bd33e1541309f4742523bfab01d276bfa9a27519f6de9c11dc7"
-dependencies = [
- "bstr",
- "erased-serde",
- "futures-util",
- "mlua-sys",
- "num-traits",
- "once_cell",
- "rustc-hash 2.1.1",
- "serde",
- "serde-value",
-]
-
-[[package]]
-name = "mlua-sys"
-version = "0.6.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "380c1f7e2099cafcf40e51d3a9f20a346977587aa4d012eae1f043149a728a93"
-dependencies = [
- "cc",
- "cfg-if",
- "lua-src",
- "luajit-src",
- "pkg-config",
-]
-
-[[package]]
 name = "moxcms"
 version = "0.7.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2722,7 +2645,6 @@ dependencies = [
  "libc",
  "log",
  "metrics",
- "mlua",
  "names",
  "nix",
  "ntapi",
@@ -2763,7 +2685,7 @@ dependencies = [
  "log",
  "num-traits",
  "once_cell",
- "rustc-hash 1.1.0",
+ "rustc-hash",
  "spirv",
  "strum",
  "thiserror 2.0.17",
@@ -3075,15 +2997,6 @@ dependencies = [
  "libc",
  "pkg-config",
  "vcpkg",
-]
-
-[[package]]
-name = "ordered-float"
-version = "2.10.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "68f19d67e5a2795c94e73e0bb1cc1a7edeb2e28efd39e2e1c9b7a40c1108b11c"
-dependencies = [
- "num-traits",
 ]
 
 [[package]]
@@ -3409,11 +3322,9 @@ dependencies = [
 name = "procinfo"
 version = "0.1.0"
 dependencies = [
- "config",
  "libc",
  "log",
  "ntapi",
- "terminaler-dynamic",
  "winapi",
 ]
 
@@ -3710,12 +3621,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "08d43f7aa6b08d49f382cde6a7982047c3426db949b1424bc4b7ec9ae12c6ce2"
 
 [[package]]
-name = "rustc-hash"
-version = "2.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "357703d41365b4b27c590e3ed91eabb1b663f07c4c084095e60cbed4362dff0d"
-
-[[package]]
 name = "rustc_version"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3824,16 +3729,6 @@ checksum = "9a8e94ea7f378bd32cbbd37198a4a91436180c5bb472411e48b5ec2e2124ae9e"
 dependencies = [
  "serde_core",
  "serde_derive",
-]
-
-[[package]]
-name = "serde-value"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f3a1a3341211875ef120e117ea7fd5228530ae7e7036a779fdc9117be6b3282c"
-dependencies = [
- "ordered-float 2.10.1",
- "serde",
 ]
 
 [[package]]
@@ -4261,7 +4156,7 @@ dependencies = [
  "finl_unicode",
  "image",
  "log",
- "ordered-float 4.6.0",
+ "ordered-float",
  "serde",
  "sha2",
  "terminaler-blob-leases",
@@ -4342,7 +4237,7 @@ version = "0.2.1"
 dependencies = [
  "log",
  "maplit",
- "ordered-float 4.6.0",
+ "ordered-float",
  "strsim",
  "terminaler-dynamic-derive",
  "thiserror 2.0.17",
@@ -4372,7 +4267,7 @@ dependencies = [
  "nix",
  "num-derive",
  "num-traits",
- "ordered-float 4.6.0",
+ "ordered-float",
  "pest",
  "pest_derive",
  "serde",
@@ -4408,7 +4303,7 @@ dependencies = [
  "log",
  "memmap2",
  "metrics",
- "ordered-float 4.6.0",
+ "ordered-float",
  "rangeset",
  "terminaler-color-types",
  "terminaler-input-types",
@@ -4457,10 +4352,9 @@ dependencies = [
  "libc",
  "log",
  "metrics",
- "mlua",
  "mux",
  "nucleo-matcher",
- "ordered-float 4.6.0",
+ "ordered-float",
  "parking_lot",
  "portable-pty",
  "promise",
@@ -4529,7 +4423,6 @@ dependencies = [
  "env-bootstrap",
  "libc",
  "log",
- "mlua",
  "mux",
  "portable-pty",
  "promise",
@@ -4577,7 +4470,7 @@ dependencies = [
  "finl_unicode",
  "fixedbitset",
  "k9",
- "ordered-float 4.6.0",
+ "ordered-float",
  "serde",
  "siphasher",
  "terminaler-blob-leases",
@@ -4609,7 +4502,7 @@ dependencies = [
  "lru",
  "miniz_oxide 0.7.4",
  "num-traits",
- "ordered-float 4.6.0",
+ "ordered-float",
  "serde",
  "terminaler-cell",
  "terminaler-dynamic",
@@ -4687,7 +4580,7 @@ dependencies = [
  "memmem",
  "num-derive",
  "num-traits",
- "ordered-float 4.6.0",
+ "ordered-float",
  "pest",
  "pest_derive",
  "phf",
@@ -4924,12 +4817,6 @@ name = "toml_write"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5d99f8c9a7727884afe522e9bd5edbfc91a3312b36a77b5fb8926e4c31a41801"
-
-[[package]]
-name = "typeid"
-version = "1.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc7d623258602320d5c55d1bc22793b57daff0ec7efc270ea7d55ce1d5f5471c"
 
 [[package]]
 name = "typenum"
@@ -5254,7 +5141,7 @@ dependencies = [
  "portable-atomic",
  "profiling",
  "raw-window-handle",
- "rustc-hash 1.1.0",
+ "rustc-hash",
  "smallvec",
  "thiserror 2.0.17",
  "wgpu-core-deps-apple",
@@ -5322,7 +5209,7 @@ dependencies = [
  "naga",
  "ndk-sys",
  "objc",
- "ordered-float 4.6.0",
+ "ordered-float",
  "parking_lot",
  "portable-atomic",
  "profiling",
@@ -5350,18 +5237,6 @@ dependencies = [
  "log",
  "thiserror 2.0.17",
  "web-sys",
-]
-
-[[package]]
-name = "which"
-version = "7.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "24d643ce3fd3e5b54854602a080f34fb10ab75e0b813ee32d00ca2b44fa74762"
-dependencies = [
- "either",
- "env_home",
- "rustix 1.1.2",
- "winsafe",
 ]
 
 [[package]]
@@ -5912,12 +5787,6 @@ checksum = "80d0f4e272c85def139476380b12f9ac60926689dd2e01d4923222f40580869d"
 dependencies = [
  "winapi",
 ]
-
-[[package]]
-name = "winsafe"
-version = "0.0.19"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d135d17ab770252ad95e9a872d365cf3090e3be864a34ab46f48555993efc904"
 
 [[package]]
 name = "wio"

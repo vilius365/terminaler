@@ -1,9 +1,7 @@
 use crate::scripting::guiwin::GuiWin;
-use config::keyassignment::{Confirmation, KeyAssignment};
+use config::keyassignment::Confirmation;
 use mux::termwiztermtab::TermWizTerminal;
-// STRIPPED: mux_lua removed; use local stub
 use crate::scripting::guiwin::MuxPane;
-use std::rc::Rc;
 use termwiz::cell::AttributeChange;
 use termwiz::color::ColorAttribute;
 use termwiz::input::{InputEvent, KeyCode, KeyEvent, MouseButtons, MouseEvent};
@@ -149,54 +147,10 @@ fn run_confirmation_impl(message: &str, term: &mut TermWizTerminal) -> anyhow::R
 pub fn show_confirmation_overlay(
     mut term: TermWizTerminal,
     args: Confirmation,
-    window: GuiWin,
-    pane: MuxPane,
+    _window: GuiWin,
+    _pane: MuxPane,
 ) -> anyhow::Result<()> {
-    let name = match *args.action {
-        KeyAssignment::EmitEvent(id) => id,
-        _ => anyhow::bail!("Confirmation requires action to be defined by terminaler.action_callback"),
-    };
-
-    if let Ok(confirm) = run_confirmation_impl(&args.message, &mut term) {
-        if confirm {
-            promise::spawn::spawn_into_main_thread(async move {
-                trampoline(name, window, pane);
-                anyhow::Result::<()>::Ok(())
-            })
-            .detach();
-        } else if let Some(key_assignment) = args.cancel {
-            if let KeyAssignment::EmitEvent(id) = *key_assignment {
-                promise::spawn::spawn_into_main_thread(async move {
-                    trampoline(id, window, pane);
-                    anyhow::Result::<()>::Ok(())
-                })
-                .detach();
-            }
-        }
-    }
-    Ok(())
-}
-
-fn trampoline(name: String, window: GuiWin, pane: MuxPane) {
-    promise::spawn::spawn(async move {
-        config::with_lua_config_on_main_thread(move |lua| do_event(lua, name, window, pane)).await
-    })
-    .detach();
-}
-
-async fn do_event(
-    lua: Option<Rc<mlua::Lua>>,
-    name: String,
-    window: GuiWin,
-    pane: MuxPane,
-) -> anyhow::Result<()> {
-    if let Some(lua) = lua {
-        let args = lua.pack_multi((window, pane))?;
-
-        if let Err(err) = config::lua::emit_event(&lua, (name.clone(), args)).await {
-            log::error!("while processing {} event: {:#}", name, err);
-        }
-    }
-
+    // Lua EmitEvent callback removed; confirmation result is ignored (no-op on confirm)
+    run_confirmation_impl(&args.message, &mut term).ok();
     Ok(())
 }
