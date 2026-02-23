@@ -22,6 +22,19 @@ impl WebServerHandle {
         let _ = self.shutdown_tx.send(());
         let _ = self.thread_handle.join();
     }
+
+    /// Signal the web server to shut down without blocking.
+    /// The server thread will exit on its own.
+    pub fn shutdown_nonblocking(self) {
+        let _ = self.shutdown_tx.send(());
+        // Let the thread finish on its own — don't join on the GUI thread.
+        std::thread::Builder::new()
+            .name("web-shutdown".into())
+            .spawn(move || {
+                let _ = self.thread_handle.join();
+            })
+            .ok();
+    }
 }
 
 /// Configuration for starting the web server.
@@ -131,6 +144,9 @@ fn write_status(msg: &str) {
 }
 
 fn web_url_file_path() -> anyhow::Result<std::path::PathBuf> {
+    if let Some(ref dir) = *config::PORTABLE_DIR {
+        return Ok(dir.join("web-url"));
+    }
     if cfg!(windows) {
         let appdata = std::env::var("APPDATA").unwrap_or_else(|_| ".".to_string());
         Ok(std::path::PathBuf::from(appdata)

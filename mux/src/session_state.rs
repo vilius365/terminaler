@@ -78,6 +78,9 @@ pub enum SplitDirectionState {
 
 /// Default session file path.
 pub fn session_file_path() -> PathBuf {
+    if let Some(ref dir) = *config::PORTABLE_DIR {
+        return dir.join("sessions").join("last-session.json");
+    }
     if cfg!(windows) {
         let appdata = std::env::var("APPDATA").unwrap_or_else(|_| ".".to_string());
         PathBuf::from(appdata)

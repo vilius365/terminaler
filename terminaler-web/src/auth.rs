@@ -36,6 +36,9 @@ pub fn load_or_create_token(configured_token: Option<&str>) -> anyhow::Result<St
 }
 
 fn token_file_path() -> anyhow::Result<std::path::PathBuf> {
+    if let Some(ref dir) = *config::PORTABLE_DIR {
+        return Ok(dir.join("web-token"));
+    }
     if cfg!(windows) {
         let appdata = std::env::var("APPDATA").unwrap_or_else(|_| ".".to_string());
         Ok(std::path::PathBuf::from(appdata)

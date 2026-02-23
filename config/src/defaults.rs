@@ -48,6 +48,9 @@ pub fn default_config_content() -> String {
 
 /// Get the default config file path for the current platform.
 pub fn default_config_path() -> std::path::PathBuf {
+    if let Some(ref dir) = *crate::PORTABLE_DIR {
+        return dir.join("terminaler.json");
+    }
     if cfg!(windows) {
         let appdata = std::env::var("APPDATA").unwrap_or_else(|_| ".".to_string());
         std::path::PathBuf::from(appdata)

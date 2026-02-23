@@ -406,6 +406,8 @@ pub struct TermWindow {
 
     connection_name: String,
 
+    web_server_handle: Option<terminaler_web::WebServerHandle>,
+
     gl: Option<Rc<glium::backend::Context>>,
     webgpu: Option<Rc<WebGpuState>>,
     config_subscription: Option<config::ConfigSubscription>,
@@ -627,9 +629,33 @@ impl TermWindow {
 
         let connection_name = Connection::get().unwrap().name();
 
+        // Start web access server if enabled in config
+        let web_server_handle = {
+            let cfg = config::configuration();
+            if let Some(ref web_config) = cfg.web_access {
+                if web_config.enabled {
+                    match terminaler_web::start_web_server(web_config.into()) {
+                        Ok(handle) => {
+                            log::info!("Web access server started from TermWindow");
+                            Some(handle)
+                        }
+                        Err(e) => {
+                            log::error!("Failed to start web access server: {:#}", e);
+                            None
+                        }
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+
         let myself = Self {
             created: Instant::now(),
             connection_name,
+            web_server_handle,
             last_fps_check_time: Instant::now(),
             num_frames: 0,
             last_frame_duration: Duration::ZERO,
@@ -1821,6 +1847,7 @@ impl TermWindow {
             &self.config,
             &self.left_status,
             &self.right_status,
+            self.web_server_handle.is_some(),
         );
         if new_tab_bar != self.tab_bar {
             self.tab_bar = new_tab_bar;
@@ -2236,6 +2263,58 @@ impl TermWindow {
             alphabet: None,
         };
         self.show_launcher_impl(args, 0);
+    }
+
+    fn toggle_remote_access(&mut self) {
+        if let Some(handle) = self.web_server_handle.take() {
+            handle.shutdown_nonblocking();
+            log::info!("Remote access stopped");
+        } else {
+            let cfg = config::configuration();
+            let web_config = cfg
+                .web_access
+                .as_ref()
+                .cloned()
+                .unwrap_or_default();
+            match terminaler_web::start_web_server((&web_config).into()) {
+                Ok(handle) => {
+                    log::info!("Remote access started");
+                    self.web_server_handle = Some(handle);
+                }
+                Err(e) => {
+                    log::error!("Failed to start remote access: {:#}", e);
+                }
+            }
+        }
+        self.update_title_post_status();
+    }
+
+    fn copy_remote_url_to_clipboard(&self) {
+        let url_path = if let Some(ref dir) = *config::PORTABLE_DIR {
+            dir.join("web-url")
+        } else if cfg!(windows) {
+            let appdata = std::env::var("APPDATA").unwrap_or_else(|_| ".".to_string());
+            std::path::PathBuf::from(appdata)
+                .join("Terminaler")
+                .join("web-url")
+        } else {
+            dirs_next::config_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from(".config"))
+                .join("terminaler")
+                .join("web-url")
+        };
+        match std::fs::read_to_string(&url_path) {
+            Ok(url) => {
+                self.copy_to_clipboard(
+                    config::keyassignment::ClipboardCopyDestination::Clipboard,
+                    url.trim().to_string(),
+                );
+                log::info!("Remote access URL copied to clipboard");
+            }
+            Err(e) => {
+                log::warn!("Could not read remote URL file: {:#}", e);
+            }
+        }
     }
 
     fn show_launcher(&mut self) {
@@ -3037,6 +3116,9 @@ impl TermWindow {
             WorkspacePicker => {
                 log::info!("WorkspacePicker: showing workspace picker");
                 self.show_workspace_picker();
+            }
+            ToggleRemoteAccess => {
+                self.toggle_remote_access();
             }
         };
         Ok(PerformAssignmentResult::Handled)

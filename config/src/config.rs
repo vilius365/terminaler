@@ -1689,6 +1689,9 @@ fn default_font_size() -> f64 {
 }
 
 pub(crate) fn compute_cache_dir() -> anyhow::Result<PathBuf> {
+    if let Some(ref dir) = *crate::PORTABLE_DIR {
+        return Ok(dir.join("cache"));
+    }
     if let Some(runtime) = dirs_next::cache_dir() {
         return Ok(runtime.join("terminaler"));
     }
@@ -1697,6 +1700,9 @@ pub(crate) fn compute_cache_dir() -> anyhow::Result<PathBuf> {
 }
 
 pub(crate) fn compute_data_dir() -> anyhow::Result<PathBuf> {
+    if let Some(ref dir) = *crate::PORTABLE_DIR {
+        return Ok(dir.join("data"));
+    }
     if let Some(runtime) = dirs_next::data_dir() {
         return Ok(runtime.join("terminaler"));
     }
@@ -1705,6 +1711,9 @@ pub(crate) fn compute_data_dir() -> anyhow::Result<PathBuf> {
 }
 
 pub(crate) fn compute_runtime_dir() -> anyhow::Result<PathBuf> {
+    if let Some(ref dir) = *crate::PORTABLE_DIR {
+        return Ok(dir.join("data"));
+    }
     if let Some(runtime) = dirs_next::runtime_dir() {
         return Ok(runtime.join("terminaler"));
     }
@@ -1833,8 +1842,8 @@ fn default_clean_exits() -> Vec<u32> {
 
 fn default_inactive_pane_hsb() -> HsbTransform {
     HsbTransform {
-        brightness: 0.8,
-        saturation: 0.9,
+        brightness: 0.4,
+        saturation: 0.75,
         hue: 1.0,
     }
 }

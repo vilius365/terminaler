@@ -71,6 +71,9 @@ lazy_static! {
     pub static ref RUNTIME_DIR: PathBuf = compute_runtime_dir().unwrap();
     pub static ref DATA_DIR: PathBuf = compute_data_dir().unwrap();
     pub static ref CACHE_DIR: PathBuf = compute_cache_dir().unwrap();
+    /// When set, all state paths redirect to the exe's directory (portable mode).
+    /// Triggered by a `terminaler.json` or empty `portable` marker file next to the exe.
+    pub static ref PORTABLE_DIR: Option<PathBuf> = portable_dir();
     static ref CONFIG: Configuration = Configuration::new();
     static ref CONFIG_FILE_OVERRIDE: Mutex<Option<PathBuf>> = Mutex::new(None);
     static ref CONFIG_SKIP: AtomicBool = AtomicBool::new(false);
@@ -78,6 +81,21 @@ lazy_static! {
     static ref SHOW_ERROR: Mutex<Option<ErrorCallback>> =
         Mutex::new(Some(|e| log::error!("{}", e)));
     pub static ref COLOR_SCHEMES: HashMap<String, Palette> = build_default_schemes();
+}
+
+/// Detect portable mode: if `terminaler.json` or `portable` marker file
+/// exists next to the executable, return its parent directory.
+pub fn portable_dir() -> Option<PathBuf> {
+    if !cfg!(windows) {
+        return None;
+    }
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?;
+    if dir.join("terminaler.json").exists() || dir.join("portable").exists() {
+        Some(dir.to_path_buf())
+    } else {
+        None
+    }
 }
 
 fn toml_table_has_numeric_keys(t: &toml::value::Table) -> bool {
