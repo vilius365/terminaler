@@ -2116,7 +2116,7 @@ impl TryFrom<String> for WindowDecorations {
 
 impl Default for WindowDecorations {
     fn default() -> Self {
-        WindowDecorations::TITLE | WindowDecorations::RESIZE
+        WindowDecorations::INTEGRATED_BUTTONS | WindowDecorations::RESIZE
     }
 }
 

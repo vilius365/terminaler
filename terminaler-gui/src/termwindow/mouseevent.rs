@@ -1,6 +1,7 @@
 use crate::tabbar::TabBarItem;
 use crate::termwindow::{
-    GuiWin, MouseCapture, PositionedSplit, ScrollHit, TermWindowNotif, UIItem, UIItemType, TMB,
+    DropZone, GuiWin, MouseCapture, PositionedSplit, ScrollHit, TabDragState, TermWindowNotif,
+    UIItem, UIItemType, TMB,
 };
 use ::window::{
     Modifiers, MouseButtons as WMB, MouseCursor, MouseEvent, MouseEventKind as WMEK, MousePress,
@@ -9,7 +10,7 @@ use ::window::{
 use config::keyassignment::{KeyAssignment, MouseEventTrigger, SpawnTabDomain};
 use config::MouseEventAltScreen;
 use mux::pane::{Pane, WithPaneLines};
-use mux::tab::SplitDirection;
+use mux::tab::{SplitDirection, SplitRequest, SplitSize, TabId};
 use mux::Mux;
 use std::convert::TryInto;
 use std::ops::Sub;
@@ -123,6 +124,18 @@ impl super::TermWindow {
             WMEK::Release(ref press) => {
                 self.current_mouse_capture = None;
                 self.current_mouse_buttons.retain(|p| p != press);
+                if press == &MousePress::Left {
+                    if let Some(tab_drag) = self.tab_drag.take() {
+                        if tab_drag.threshold_exceeded
+                            && tab_drag.target_pane.is_some()
+                            && tab_drag.target_zone.is_some()
+                        {
+                            self.execute_tab_drag_drop(tab_drag);
+                        }
+                        context.invalidate();
+                        return;
+                    }
+                }
                 if press == &MousePress::Left && self.window_drag_position.take().is_some() {
                     // Completed a window drag
                     return;
@@ -156,6 +169,35 @@ impl super::TermWindow {
             }
 
             WMEK::Move => {
+                // Tab drag-to-split: check threshold and track target
+                if let Some(ref tab_drag) = self.tab_drag {
+                    if !tab_drag.threshold_exceeded {
+                        let dx = (event.coords.x - tab_drag.start_coords.0) as f64;
+                        let dy = (event.coords.y - tab_drag.start_coords.1) as f64;
+                        if (dx * dx + dy * dy).sqrt() >= 5.0 {
+                            // Compute the tab index to switch to before
+                            // releasing the borrow on self.tab_drag
+                            let switch_to = {
+                                let mux = Mux::get();
+                                let win = mux.get_window(self.mux_window_id);
+                                win.and_then(|w| w.idx_by_id(tab_drag.dest_tab_id))
+                            };
+                            // Now mutate
+                            self.tab_drag.as_mut().unwrap().threshold_exceeded = true;
+                            if let Some(idx) = switch_to {
+                                self.activate_tab(idx as isize).ok();
+                            }
+                        }
+                    }
+                    // Re-check after potential mutation
+                }
+                if self.tab_drag.as_ref().map_or(false, |td| td.threshold_exceeded) {
+                    self.update_tab_drag_target(&event);
+                    context.set_cursor(Some(MouseCursor::Arrow));
+                    context.invalidate();
+                    return;
+                }
+
                 if let Some(start) = self.window_drag_position.as_ref() {
                     // Dragging the window
                     // Compute the distance since the initial event
@@ -185,14 +227,42 @@ impl super::TermWindow {
             _ => {}
         }
 
-        // Ctrl+scroll: adjust font size instead of scrolling
+        // Long press overlay: intercept clicks when overlay is showing
+        if matches!(event.kind, WMEK::Press(MousePress::Left)) {
+            if self.pane_long_press.as_ref().map_or(false, |lp| lp.revealed) {
+                let pane_id = self.pane_long_press.as_ref().unwrap().pane_id;
+                if let Some(btn) = self.overlay_button_at(&event, pane_id) {
+                    self.pane_long_press = None;
+                    if btn == "close" {
+                        Mux::get().remove_pane(pane_id);
+                    } else if btn == "move-to-tab" {
+                        self.execute_pane_to_tab(pane_id);
+                    } else {
+                        self.apply_snap_layout_to_pane(pane_id, btn);
+                    }
+                } else {
+                    self.pane_long_press = None;
+                }
+                context.invalidate();
+                return;
+            }
+        }
+
+        // Ctrl+scroll: adjust per-pane font size instead of scrolling
         if let WMEK::VertWheel(amount) = event.kind {
             if event.modifiers.contains(Modifiers::CTRL) {
-                if amount > 0 {
-                    self.increase_font_size();
-                } else {
-                    self.decrease_font_size();
+                let pane_id = pane.pane_id();
+                let factor = if amount > 0 { 1.1 } else { 1.0 / 1.1 };
+                let current = self.pane_font_scale(pane_id);
+                let new_scale = (current * factor).clamp(0.5, 3.0);
+                {
+                    let mut states = self.pane_state.borrow_mut();
+                    let state = states.entry(pane_id).or_insert_with(Default::default);
+                    state.font_scale = new_scale;
                 }
+                self.resize_pane_for_font_scale(pane_id);
+                self.shape_generation += 1;
+                self.shape_cache.borrow_mut().clear();
                 context.invalidate();
                 return;
             }
@@ -244,10 +314,20 @@ impl super::TermWindow {
                     x_pixel_offset,
                     y_pixel_offset,
                 },
-                event,
+                event.clone(),
                 context,
                 capture_mouse,
             );
+
+            // Right double-click in terminal area: show pane layout overlay
+            if matches!(event.kind, WMEK::Press(MousePress::Right)) {
+                if let Some(ref click) = self.last_mouse_click {
+                    if click.streak >= 2 && click.button == MouseButton::Right {
+                        self.start_pane_overlay(&event);
+                    }
+                }
+            }
+
         }
 
         if prior_ui_item != ui_item {
@@ -443,7 +523,22 @@ impl super::TermWindow {
         match event.kind {
             WMEK::Press(MousePress::Left) => match item {
                 TabBarItem::Tab { tab_idx, .. } => {
+                    // Capture the currently active tab before switching —
+                    // this is the tab we'll drop into if a drag occurs.
+                    let dest_tab_id = Mux::get()
+                        .get_active_tab_for_window(self.mux_window_id)
+                        .map(|t| t.tab_id());
                     self.activate_tab(tab_idx as isize).ok();
+                    if let Some(dest_tab_id) = dest_tab_id {
+                        self.tab_drag = Some(TabDragState {
+                            source_tab_idx: tab_idx,
+                            dest_tab_id,
+                            target_pane: None,
+                            target_zone: None,
+                            start_coords: (event.coords.x, event.coords.y),
+                            threshold_exceeded: false,
+                        });
+                    }
                 }
                 TabBarItem::NewTabButton { .. } => {
                     self.do_new_tab_button_click(MousePress::Left);
@@ -1022,6 +1117,327 @@ impl super::TermWindow {
                 context.invalidate();
             }
         }
+    }
+
+    fn update_tab_drag_target(&mut self, event: &MouseEvent) {
+        if self.tab_drag.is_none() {
+            return;
+        }
+
+        let panes = self.get_panes_to_render();
+        let (padding_left, padding_top) = self.padding_left_top();
+
+        let tab_bar_height = if self.show_tab_bar {
+            self.tab_bar_pixel_height().unwrap_or(0.)
+        } else {
+            0.
+        };
+        let top_bar_height = if self.config.tab_bar_at_bottom {
+            0.0
+        } else {
+            tab_bar_height
+        };
+
+        let border = self.get_os_border();
+        let top_pixel_y = top_bar_height + padding_top + border.top.get() as f32;
+        let cell_width = self.render_metrics.cell_size.width as f32;
+        let cell_height = self.render_metrics.cell_size.height as f32;
+
+        let mouse_x = event.coords.x as f32;
+        let mouse_y = event.coords.y as f32;
+
+        let mut found_pane = None;
+        let mut found_zone = None;
+
+        for pos in &panes {
+            let pane_left = padding_left + border.left.get() as f32
+                + (pos.left as f32 * cell_width);
+            let pane_top = top_pixel_y + (pos.top as f32 * cell_height);
+            let pane_width = pos.width as f32 * cell_width;
+            let pane_height = pos.height as f32 * cell_height;
+
+            if mouse_x >= pane_left
+                && mouse_x < pane_left + pane_width
+                && mouse_y >= pane_top
+                && mouse_y < pane_top + pane_height
+            {
+                let zone = compute_drop_zone(
+                    mouse_x, mouse_y,
+                    pane_left, pane_top,
+                    pane_width, pane_height,
+                );
+                found_pane = Some(pos.pane.pane_id());
+                found_zone = Some(zone);
+                break;
+            }
+        }
+
+        if let Some(ref mut tab_drag) = self.tab_drag {
+            tab_drag.target_pane = found_pane;
+            tab_drag.target_zone = found_zone;
+        }
+    }
+
+    fn execute_tab_drag_drop(&mut self, tab_drag: TabDragState) {
+        let target_pane_id = match tab_drag.target_pane {
+            Some(id) => id,
+            None => return,
+        };
+        let zone = match tab_drag.target_zone {
+            Some(z) => z,
+            None => return,
+        };
+
+        let mux = Mux::get();
+
+        // Look up source and destination tabs
+        let source_tab;
+        let dest_tab;
+        {
+            let mux_window = match mux.get_window(self.mux_window_id) {
+                Some(w) => w,
+                None => return,
+            };
+
+            source_tab = match mux_window.get_by_idx(tab_drag.source_tab_idx) {
+                Some(tab) => Arc::clone(tab),
+                None => return,
+            };
+
+            // Find the destination tab by the ID we saved before the drag
+            dest_tab = mux_window
+                .idx_by_id(tab_drag.dest_tab_id)
+                .and_then(|idx| mux_window.get_by_idx(idx).map(Arc::clone));
+        }
+
+        let dest_tab = match dest_tab {
+            Some(tab) => tab,
+            None => return,
+        };
+
+        // Don't drop onto the same tab
+        if source_tab.tab_id() == dest_tab.tab_id() {
+            return;
+        }
+
+        // Don't drop onto a zoomed tab
+        if dest_tab.get_zoomed_pane().is_some() {
+            return;
+        }
+
+        // Get the active pane from the source tab (the one we're moving)
+        let source_pane = match source_tab.get_active_pane() {
+            Some(pane) => pane,
+            None => return,
+        };
+        let source_pane_id = source_pane.pane_id();
+
+        // Find the target pane index in the destination tab
+        let target_pane_index = {
+            let panes = dest_tab.iter_panes();
+            match panes.iter().find(|p| p.pane.pane_id() == target_pane_id) {
+                Some(p) => p.index,
+                None => return,
+            }
+        };
+
+        // Build split request from drop zone
+        let request = SplitRequest {
+            direction: match zone {
+                DropZone::Left | DropZone::Right => SplitDirection::Horizontal,
+                DropZone::Top | DropZone::Bottom => SplitDirection::Vertical,
+            },
+            target_is_second: match zone {
+                DropZone::Right | DropZone::Bottom => true,
+                DropZone::Left | DropZone::Top => false,
+            },
+            top_level: false,
+            size: SplitSize::Percent(50),
+        };
+
+        // Remove the pane from its source tab (doesn't kill it)
+        let pane = match source_tab.remove_pane(source_pane_id) {
+            Some(pane) => pane,
+            None => return,
+        };
+
+        // Insert into the target split
+        if let Err(err) = dest_tab.split_and_insert(target_pane_index, request, pane) {
+            log::error!("Failed to split_and_insert during tab drag: {:#}", err);
+            return;
+        }
+
+        // If the source tab is now dead (no panes left), remove it
+        let source_tab_id = source_tab.tab_id();
+        if source_tab.is_dead() {
+            mux.remove_tab(source_tab_id);
+        }
+    }
+
+    fn start_pane_overlay(&mut self, event: &MouseEvent) {
+        let pane_id = match self.pane_id_at_pixel_coords(event.coords.x, event.coords.y) {
+            Some(id) => id,
+            None => return,
+        };
+
+        self.pane_long_press = Some(super::PaneLongPress {
+            pane_id,
+            revealed: true,
+        });
+    }
+
+    fn pane_id_at_pixel_coords(&self, px: isize, py: isize) -> Option<mux::pane::PaneId> {
+        let panes = self.get_panes_to_render();
+        let (padding_left, padding_top) = self.padding_left_top();
+
+        let tab_bar_height = if self.show_tab_bar {
+            self.tab_bar_pixel_height().unwrap_or(0.)
+        } else {
+            0.
+        };
+        let top_bar_height = if self.config.tab_bar_at_bottom {
+            0.0
+        } else {
+            tab_bar_height
+        };
+
+        let border = self.get_os_border();
+        let top_pixel_y = top_bar_height + padding_top + border.top.get() as f32;
+        let cell_width = self.render_metrics.cell_size.width as f32;
+        let cell_height = self.render_metrics.cell_size.height as f32;
+
+        let mx = px as f32;
+        let my = py as f32;
+
+        for pos in &panes {
+            let pane_left =
+                padding_left + border.left.get() as f32 + (pos.left as f32 * cell_width);
+            let pane_top = top_pixel_y + (pos.top as f32 * cell_height);
+            let pane_width = pos.width as f32 * cell_width;
+            let pane_height = pos.height as f32 * cell_height;
+
+            if mx >= pane_left
+                && mx < pane_left + pane_width
+                && my >= pane_top
+                && my < pane_top + pane_height
+            {
+                return Some(pos.pane.pane_id());
+            }
+        }
+        None
+    }
+
+    fn execute_pane_to_tab(&mut self, pane_id: mux::pane::PaneId) {
+        let mux_window_id = self.mux_window_id;
+        promise::spawn::spawn(async move {
+            let mux = Mux::get();
+            if let Err(err) = mux
+                .move_pane_to_new_tab(pane_id, Some(mux_window_id), None)
+                .await
+            {
+                log::error!("Failed to move pane to new tab: {:#}", err);
+            }
+        })
+        .detach();
+    }
+
+    fn overlay_button_at(
+        &self,
+        event: &MouseEvent,
+        pane_id: mux::pane::PaneId,
+    ) -> Option<&'static str> {
+        const BUTTON_NAMES: [&str; 9] = [
+            "close",
+            "hsplit",
+            "vsplit",
+            "quad",
+            "triple-right",
+            "triple-bottom",
+            "dev",
+            "claude-code",
+            "move-to-tab",
+        ];
+
+        let panes = self.get_panes_to_render();
+        let (padding_left, padding_top) = self.padding_left_top();
+
+        let tab_bar_height = if self.show_tab_bar {
+            self.tab_bar_pixel_height().unwrap_or(0.)
+        } else {
+            0.
+        };
+        let top_bar_height = if self.config.tab_bar_at_bottom {
+            0.0
+        } else {
+            tab_bar_height
+        };
+
+        let border = self.get_os_border();
+        let top_pixel_y = top_bar_height + padding_top + border.top.get() as f32;
+        let cell_width = self.render_metrics.cell_size.width as f32;
+        let cell_height = self.render_metrics.cell_size.height as f32;
+
+        let mx = event.coords.x as f32;
+        let my = event.coords.y as f32;
+
+        for pos in &panes {
+            if pos.pane.pane_id() != pane_id {
+                continue;
+            }
+            let pane_left =
+                padding_left + border.left.get() as f32 + (pos.left as f32 * cell_width);
+            let pane_top = top_pixel_y + (pos.top as f32 * cell_height);
+            let pane_width = pos.width as f32 * cell_width;
+            let pane_height = pos.height as f32 * cell_height;
+
+            let btn_size = 44.0f32;
+            let gap = 6.0f32;
+            let cols = 3usize;
+            let rows = 3usize;
+            let grid_w = cols as f32 * btn_size + (cols - 1) as f32 * gap;
+            let grid_h = rows as f32 * btn_size + (rows - 1) as f32 * gap;
+            let cx = pane_left + pane_width / 2.0;
+            let cy = pane_top + pane_height / 2.0;
+            let grid_left = cx - grid_w / 2.0;
+            let grid_top = cy - grid_h / 2.0;
+
+            // Check if inside grid bounds
+            if mx < grid_left || mx >= grid_left + grid_w
+                || my < grid_top || my >= grid_top + grid_h
+            {
+                return None;
+            }
+
+            let rel_x = mx - grid_left;
+            let rel_y = my - grid_top;
+            let col = (rel_x / (btn_size + gap)) as usize;
+            let row = (rel_y / (btn_size + gap)) as usize;
+
+            // Check we're inside a button, not in a gap
+            let btn_left = col as f32 * (btn_size + gap);
+            let btn_top_y = row as f32 * (btn_size + gap);
+            if rel_x > btn_left + btn_size || rel_y > btn_top_y + btn_size {
+                return None;
+            }
+
+            let idx = row * cols + col;
+            return BUTTON_NAMES.get(idx).copied();
+        }
+        None
+    }
+}
+
+fn compute_drop_zone(
+    mouse_x: f32, mouse_y: f32,
+    pane_left: f32, pane_top: f32,
+    pane_width: f32, pane_height: f32,
+) -> DropZone {
+    let rx = (mouse_x - pane_left) / pane_width;
+    let ry = (mouse_y - pane_top) / pane_height;
+    if ry < rx {
+        if ry < 1.0 - rx { DropZone::Top } else { DropZone::Right }
+    } else {
+        if ry < 1.0 - rx { DropZone::Left } else { DropZone::Bottom }
     }
 }
 

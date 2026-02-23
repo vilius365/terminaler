@@ -18,6 +18,7 @@ use crate::keys::{Key, LeaderKey, Mouse};
 // STRIPPED: use crate::tls::{TlsDomainClient, TlsDomainServer};
 use crate::units::Dimension;
 // STRIPPED: use crate::unix::UnixDomain;
+use crate::web::WebAccessConfig;
 use crate::wsl::WslDomain;
 use crate::{
     default_config_with_overrides_applied, default_one_point_oh, default_one_point_oh_f64,
@@ -280,9 +281,9 @@ pub struct Config {
 
     #[dynamic(default)]
     pub display_pixel_geometry: DisplayPixelGeometry,
-    #[dynamic(default)]
+    #[dynamic(default = "default_freetype_load_target")]
     pub freetype_load_target: FreeTypeLoadTarget,
-    #[dynamic(default)]
+    #[dynamic(default = "default_freetype_render_target")]
     pub freetype_render_target: Option<FreeTypeLoadTarget>,
     #[dynamic(default)]
     pub freetype_load_flags: Option<FreeTypeLoadFlags>,
@@ -872,6 +873,18 @@ pub struct Config {
 
     #[dynamic(default = "default_ulimit_nproc")]
     pub ulimit_nproc: u64,
+
+    /// Web access configuration for remote browser-based terminal access
+    #[dynamic(default)]
+    pub web_access: Option<WebAccessConfig>,
+}
+
+fn default_freetype_load_target() -> FreeTypeLoadTarget {
+    FreeTypeLoadTarget::Light
+}
+
+fn default_freetype_render_target() -> Option<FreeTypeLoadTarget> {
+    Some(FreeTypeLoadTarget::HorizontalLcd)
 }
 
 fn default_one() -> usize {

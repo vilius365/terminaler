@@ -11,6 +11,7 @@ members = [
   "terminaler-mux-server",
   "terminaler-surface",
   "terminaler-uds",
+  "terminaler-web",
   "deps/fontconfig",
 ]
 resolver = "2"
@@ -31,6 +32,7 @@ opt-level = 3
 [workspace.dependencies]
 ahash = "0.8"
 anyhow = "1.0"
+axum = { version = "0.8", features = ["ws"] }
 assert_fs = "1.0.4"
 async-channel = "2.3"
 async-executor = "1.11"
@@ -149,6 +151,7 @@ proc-macro2 = "1.0"
 procinfo = { path = "procinfo" }
 promise = { path = "promise" }
 quote = "1.0.2"
+rand = { version = "0.9", default-features = false, features = ["std", "std_rng"] }
 rangeset = { path = "rangeset" }
 ratelim= { path = "ratelim" }
 raw-window-handle = "0.6"
@@ -212,6 +215,7 @@ terminaler-surface = { path = "terminaler-surface" }
 terminaler-term = { path = "term" }
 terminaler-toast-notification = { path = "terminaler-toast-notification" }
 terminaler-uds = { path = "terminaler-uds" }
+terminaler-web = { path = "terminaler-web" }
 terminaler-version = { path = "terminaler-version" }
 wgpu = "25.0.2"
 whoami = "1.5"

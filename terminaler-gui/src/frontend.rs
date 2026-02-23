@@ -153,6 +153,7 @@ impl GuiFrontEnd {
                     if config::configuration().quit_when_all_windows_are_closed {
                         promise::spawn::spawn_into_main_thread(async move {
                             if mux::activity::Activity::count() == 0 {
+                                crate::session::save_current_session();
                                 log::trace!("Mux is now empty, terminate gui");
                                 Connection::get().unwrap().terminate_message_loop();
                             }

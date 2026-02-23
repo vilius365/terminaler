@@ -492,14 +492,14 @@ fn default_inactive_tab_edge_hover() -> RgbaColor {
 fn default_inactive_tab() -> TabBarColor {
     TabBarColor {
         bg_color: (0x33, 0x33, 0x33).into(),
-        fg_color: (0x80, 0x80, 0x80).into(),
+        fg_color: (0xaa, 0xaa, 0xaa).into(),
         ..TabBarColor::default()
     }
 }
 fn default_inactive_tab_hover() -> TabBarColor {
     TabBarColor {
         bg_color: (0x1f, 0x1f, 0x1f).into(),
-        fg_color: (0x90, 0x90, 0x90).into(),
+        fg_color: (0xcc, 0xcc, 0xcc).into(),
         italic: true,
         ..TabBarColor::default()
     }
@@ -507,7 +507,7 @@ fn default_inactive_tab_hover() -> TabBarColor {
 fn default_active_tab() -> TabBarColor {
     TabBarColor {
         bg_color: (0x00, 0x00, 0x00).into(),
-        fg_color: (0xc0, 0xc0, 0xc0).into(),
+        fg_color: (0xff, 0xff, 0xff).into(),
         ..TabBarColor::default()
     }
 }

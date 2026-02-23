@@ -1,6 +1,6 @@
 use crate::colorease::ColorEase;
 use crate::customglyph::{BlockKey, *};
-use crate::glyphcache::{CachedGlyph, GlyphCache};
+use crate::glyphcache::{CachedGlyph, CellMetricKey, GlyphCache};
 use crate::quad::{
     HeapQuadAllocator, QuadAllocator, QuadImpl, QuadTrait, TripleLayerQuadAllocator,
     TripleLayerQuadAllocatorTrait,
@@ -790,6 +790,7 @@ impl crate::TermWindow {
         let key = BorrowedShapeCacheKey {
             style,
             text: &cluster.text,
+            metric: CellMetricKey::from(metrics),
         };
         let glyph_info = match self.lookup_cached_shape(&key) {
             Some(Ok(info)) => info,

@@ -1012,7 +1012,10 @@ impl WindowOps for Window {
         };
 
         const BASE_BORDER: ULength = ULength::new(0);
-        let is_resize = config.window_decorations == WindowDecorations::RESIZE;
+        let is_custom_chrome = config.window_decorations == WindowDecorations::RESIZE
+            || config
+                .window_decorations
+                .contains(WindowDecorations::INTEGRATED_BUTTONS);
 
         let title_font = {
             let font = TITLE_FONT.lock().expect("locking title_font");
@@ -1027,13 +1030,13 @@ impl WindowOps for Window {
                 font_and_size: title_font,
             },
             border_dimensions: Some(parameters::Border {
-                top: if is_resize && !*IS_WIN10 && !is_full_screen {
+                top: if is_custom_chrome && !*IS_WIN10 && !is_full_screen {
                     BASE_BORDER + ULength::new(1)
                 } else {
                     BASE_BORDER
                 },
                 left: BASE_BORDER,
-                bottom: if is_resize && *IS_WIN10 && !is_full_screen {
+                bottom: if is_custom_chrome && *IS_WIN10 && !is_full_screen {
                     BASE_BORDER + ULength::new(2)
                 } else {
                     BASE_BORDER
@@ -1443,20 +1446,35 @@ fn apply_theme(hwnd: HWND) -> Option<LRESULT> {
                 SystemBackdrop::Tabbed => DWM_SYSTEMBACKDROP_TYPE::DWMSBT_TABBEDWINDOW,
             };
 
-            let margins = match inner.config.window_decorations {
-                WindowDecorations::TITLE => -1,
-                _ => 0,
+            let margins = if inner.config.window_decorations == WindowDecorations::TITLE {
+                MARGINS {
+                    cxLeftWidth: -1,
+                    cxRightWidth: -1,
+                    cyTopHeight: -1,
+                    cyBottomHeight: -1,
+                }
+            } else if inner
+                .config
+                .window_decorations
+                .contains(WindowDecorations::INTEGRATED_BUTTONS)
+                || inner.config.window_decorations == WindowDecorations::RESIZE
+            {
+                MARGINS {
+                    cxLeftWidth: 0,
+                    cxRightWidth: 0,
+                    cyTopHeight: 1,
+                    cyBottomHeight: 0,
+                }
+            } else {
+                MARGINS {
+                    cxLeftWidth: 0,
+                    cxRightWidth: 0,
+                    cyTopHeight: 0,
+                    cyBottomHeight: 0,
+                }
             };
 
-            DwmExtendFrameIntoClientArea(
-                hwnd,
-                &MARGINS {
-                    cxLeftWidth: margins,
-                    cxRightWidth: margins,
-                    cyTopHeight: margins,
-                    cyBottomHeight: margins,
-                },
-            );
+            DwmExtendFrameIntoClientArea(hwnd, &margins);
 
             // Apply Acrylic or Mica Backdrop
             if *IS_WIN11_22H2 {

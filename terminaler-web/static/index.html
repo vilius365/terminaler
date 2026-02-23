@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Terminaler</title>
+    <link rel="stylesheet" href="xterm.css">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body { height: 100%; overflow: hidden; background: #1a1a2e; color: #e0e0e0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+
+        #app { display: flex; flex-direction: column; height: 100%; }
+
+        #header {
+            display: flex; align-items: center; gap: 8px;
+            padding: 6px 12px; background: #16213e; border-bottom: 1px solid #0f3460;
+            flex-shrink: 0; overflow-x: auto; white-space: nowrap;
+        }
+        #header .logo { font-weight: 700; font-size: 14px; color: #e94560; margin-right: 8px; }
+        #status {
+            margin-left: auto; font-size: 12px; padding: 2px 8px;
+            border-radius: 10px; flex-shrink: 0;
+        }
+        #status.connected { background: #1b4332; color: #95d5b2; }
+        #status.disconnected { background: #5c1a1a; color: #f4a0a0; }
+
+        #pane-bar {
+            display: flex; gap: 4px; align-items: center; overflow-x: auto;
+        }
+        .pane-btn {
+            padding: 4px 12px; border: 1px solid #0f3460; border-radius: 4px;
+            background: #1a1a2e; color: #c0c0c0; cursor: pointer;
+            font-size: 13px; white-space: nowrap; transition: all 0.15s;
+        }
+        .pane-btn:hover { background: #0f3460; color: #fff; }
+        .pane-btn.active { background: #e94560; color: #fff; border-color: #e94560; }
+
+        #terminal-container {
+            flex: 1; padding: 4px; position: relative; overflow: hidden;
+        }
+        #terminal-container .xterm { height: 100%; }
+
+        #no-panes {
+            display: flex; align-items: center; justify-content: center;
+            height: 100%; color: #666; font-size: 18px;
+        }
+
+        @media (max-width: 600px) {
+            #header { padding: 4px 8px; }
+            .pane-btn { padding: 3px 8px; font-size: 12px; }
+        }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <div id="header">
+            <span class="logo">Terminaler</span>
+            <div id="pane-bar"></div>
+            <span id="status" class="disconnected">Disconnected</span>
+        </div>
+        <div id="terminal-container">
+            <div id="no-panes">No panes available</div>
+        </div>
+    </div>
+
+    <script src="xterm.min.js"></script>
+    <script src="xterm-addon-fit.min.js"></script>
+    <script>
+    (function() {
+        'use strict';
+
+        const params = new URLSearchParams(window.location.search);
+        const token = params.get('token') || '';
+
+        let ws = null;
+        let term = null;
+        let fitAddon = null;
+        let currentPaneId = null;
+        let panes = [];
+        let reconnectTimer = null;
+        let reconnectDelay = 1000;
+
+        const statusEl = document.getElementById('status');
+        const paneBar = document.getElementById('pane-bar');
+        const termContainer = document.getElementById('terminal-container');
+        const noPanesEl = document.getElementById('no-panes');
+
+        function initTerminal() {
+            if (term) return;
+            term = new Terminal({
+                cursorBlink: true,
+                fontSize: 14,
+                fontFamily: "'Cascadia Code', 'Consolas', 'Courier New', monospace",
+                theme: {
+                    background: '#1a1a2e',
+                    foreground: '#e0e0e0',
+                    cursor: '#e94560',
+                    selectionBackground: 'rgba(233, 69, 96, 0.3)',
+                },
+                allowProposedApi: true,
+            });
+            fitAddon = new FitAddon.FitAddon();
+            term.loadAddon(fitAddon);
+
+            noPanesEl.style.display = 'none';
+            const termEl = document.createElement('div');
+            termEl.id = 'xterm-host';
+            termEl.style.height = '100%';
+            termContainer.appendChild(termEl);
+            term.open(termEl);
+            fitAddon.fit();
+
+            // Send keyboard input to server
+            term.onData(function(data) {
+                if (ws && ws.readyState === WebSocket.OPEN && currentPaneId !== null) {
+                    ws.send(JSON.stringify({ type: 'input', pane_id: currentPaneId, data: data }));
+                }
+            });
+
+            // Handle resize
+            term.onResize(function(size) {
+                if (ws && ws.readyState === WebSocket.OPEN && currentPaneId !== null) {
+                    ws.send(JSON.stringify({
+                        type: 'resize', pane_id: currentPaneId,
+                        cols: size.cols, rows: size.rows
+                    }));
+                }
+            });
+
+            window.addEventListener('resize', function() {
+                if (fitAddon) fitAddon.fit();
+            });
+        }
+
+        function setStatus(connected) {
+            statusEl.textContent = connected ? 'Connected' : 'Disconnected';
+            statusEl.className = connected ? 'connected' : 'disconnected';
+        }
+
+        function updatePaneBar() {
+            paneBar.innerHTML = '';
+            panes.forEach(function(pane) {
+                const btn = document.createElement('button');
+                btn.className = 'pane-btn' + (pane.id === currentPaneId ? ' active' : '');
+                btn.textContent = pane.title || ('Pane ' + pane.id);
+                btn.onclick = function() { attachPane(pane.id); };
+                paneBar.appendChild(btn);
+            });
+
+            if (panes.length === 0) {
+                noPanesEl.style.display = 'flex';
+                if (term) {
+                    const termEl = document.getElementById('xterm-host');
+                    if (termEl) termEl.style.display = 'none';
+                }
+            } else {
+                noPanesEl.style.display = 'none';
+                const termEl = document.getElementById('xterm-host');
+                if (termEl) termEl.style.display = '';
+            }
+        }
+
+        function attachPane(paneId) {
+            if (!ws || ws.readyState !== WebSocket.OPEN) return;
+            currentPaneId = paneId;
+            initTerminal();
+            term.clear();
+            ws.send(JSON.stringify({ type: 'attach', pane_id: paneId }));
+            updatePaneBar();
+            term.focus();
+        }
+
+        function connect() {
+            if (reconnectTimer) {
+                clearTimeout(reconnectTimer);
+                reconnectTimer = null;
+            }
+
+            const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = proto + '//' + window.location.host + '/ws?token=' + encodeURIComponent(token);
+
+            ws = new WebSocket(wsUrl);
+
+            ws.onopen = function() {
+                setStatus(true);
+                reconnectDelay = 1000;
+                // Request pane list
+                ws.send(JSON.stringify({ type: 'list_panes' }));
+            };
+
+            ws.onmessage = function(event) {
+                var msg;
+                try { msg = JSON.parse(event.data); } catch(e) { return; }
+
+                switch (msg.type) {
+                    case 'pane_list':
+                        panes = msg.panes || [];
+                        updatePaneBar();
+                        // Auto-attach to first pane if none selected
+                        if (currentPaneId === null && panes.length > 0) {
+                            attachPane(panes[0].id);
+                        }
+                        break;
+
+                    case 'output':
+                        if (term && msg.data) {
+                            // If cols/rows provided (full refresh), resize terminal
+                            if (msg.cols && msg.rows) {
+                                term.resize(msg.cols, msg.rows);
+                                setTimeout(function() { if (fitAddon) fitAddon.fit(); }, 50);
+                            }
+                            term.write(msg.data);
+                        }
+                        break;
+
+                    case 'pane_removed':
+                        if (msg.pane_id === currentPaneId) {
+                            currentPaneId = null;
+                            if (term) term.clear();
+                            // Auto-attach to another pane
+                            if (panes.length > 0) {
+                                var remaining = panes.filter(function(p) { return p.id !== msg.pane_id; });
+                                if (remaining.length > 0) attachPane(remaining[0].id);
+                            }
+                        }
+                        break;
+                }
+            };
+
+            ws.onclose = function() {
+                setStatus(false);
+                reconnectTimer = setTimeout(function() {
+                    reconnectDelay = Math.min(reconnectDelay * 2, 30000);
+                    connect();
+                }, reconnectDelay);
+            };
+
+            ws.onerror = function() {
+                ws.close();
+            };
+        }
+
+        // Start connection
+        connect();
+    })();
+    </script>
+</body>
+</html>

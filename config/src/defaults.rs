@@ -34,6 +34,13 @@ pub fn default_config_content() -> String {
     //         "action": { "SpawnTab": "CurrentPaneDomain" }
     //     }
     // ]
+
+    // Web access: view and control terminals from a browser
+    // "web_access": {
+    //     "enabled": true,
+    //     "bind_address": "127.0.0.1:9876"
+    //     // "token": "your-secret-token"  // auto-generated if omitted
+    // }
 }
 "#
     .to_string()

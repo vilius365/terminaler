@@ -265,6 +265,16 @@ impl crate::TermWindow {
             }
         }
 
+        if self.tab_drag.is_some() {
+            self.paint_drop_zone_overlay(&mut layers)
+                .context("paint_drop_zone_overlay")?;
+        }
+
+        if self.pane_long_press.as_ref().map_or(false, |lp| lp.revealed) {
+            self.paint_pane_remove_overlay(&mut layers)
+                .context("paint_pane_remove_overlay")?;
+        }
+
         if self.show_tab_bar {
             self.paint_tab_bar(&mut layers).context("paint_tab_bar")?;
         }

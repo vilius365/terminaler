@@ -1,6 +1,7 @@
 use crate::domain::DomainId;
 use crate::pane::*;
 use crate::renderable::StableCursorPosition;
+use crate::session_state::{PaneLayoutNode, SplitDirectionState};
 use crate::{Mux, MuxNotification, WindowId};
 use bintree::PathBranch;
 use config::configuration;
@@ -283,6 +284,64 @@ fn pane_tree(
     }
 }
 
+/// Convert a bintree into a PaneLayoutNode for session persistence.
+/// Captures actual split directions and size ratios from the tree.
+fn convert_tree_to_session_layout(
+    tree: &Tree,
+    active: Option<&Arc<dyn Pane>>,
+) -> PaneLayoutNode {
+    match tree {
+        Tree::Empty => PaneLayoutNode::Pane {
+            cwd: None,
+            command: None,
+            is_active: false,
+        },
+        Tree::Leaf(pane) => {
+            let cwd = pane
+                .get_current_working_dir(CachePolicy::AllowStale)
+                .and_then(|u| u.to_file_path().ok())
+                .map(|p| p.into());
+            let is_active = active.map_or(false, |a| a.pane_id() == pane.pane_id());
+            PaneLayoutNode::Pane {
+                cwd,
+                command: None,
+                is_active,
+            }
+        }
+        Tree::Node { left, right, data } => {
+            let data = data.unwrap();
+            let direction = match data.direction {
+                SplitDirection::Horizontal => SplitDirectionState::Horizontal,
+                SplitDirection::Vertical => SplitDirectionState::Vertical,
+            };
+            let ratio = match data.direction {
+                SplitDirection::Horizontal => {
+                    let total = data.first.cols as f64 + data.second.cols as f64;
+                    if total > 0.0 {
+                        data.first.cols as f64 / total
+                    } else {
+                        0.5
+                    }
+                }
+                SplitDirection::Vertical => {
+                    let total = data.first.rows as f64 + data.second.rows as f64;
+                    if total > 0.0 {
+                        data.first.rows as f64 / total
+                    } else {
+                        0.5
+                    }
+                }
+            };
+            PaneLayoutNode::Split {
+                direction,
+                ratio,
+                first: Box::new(convert_tree_to_session_layout(left, active)),
+                second: Box::new(convert_tree_to_session_layout(right, active)),
+            }
+        }
+    }
+}
+
 fn build_from_pane_tree<F>(
     tree: bintree::Tree<PaneEntry, SplitDirectionAndSize>,
     active: &mut Option<Arc<dyn Pane>>,
@@ -553,6 +612,13 @@ impl Tab {
 
     pub fn codec_pane_tree(&self) -> PaneNode {
         self.inner.lock().codec_pane_tree()
+    }
+
+    /// Returns the pane layout tree for session persistence.
+    /// Unlike codec_pane_tree, this produces a PaneLayoutNode that captures
+    /// actual split directions and size ratios from the bintree.
+    pub fn session_layout_tree(&self) -> PaneLayoutNode {
+        self.inner.lock().session_layout_tree()
     }
 
     /// Returns a count of how many panes are in this tab
@@ -855,6 +921,18 @@ impl TabInner {
             )
         } else {
             PaneNode::Empty
+        }
+    }
+
+    fn session_layout_tree(&mut self) -> PaneLayoutNode {
+        let active = self.get_active_pane();
+        match self.pane.as_ref() {
+            Some(tree) => convert_tree_to_session_layout(tree, active.as_ref()),
+            None => PaneLayoutNode::Pane {
+                cwd: None,
+                command: None,
+                is_active: false,
+            },
         }
     }
 

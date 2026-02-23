@@ -105,6 +105,15 @@ pub fn save_session(state: &SessionState) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Delete the session file (called after successful restore).
+pub fn delete_session() -> anyhow::Result<()> {
+    let path = session_file_path();
+    if path.exists() {
+        std::fs::remove_file(&path)?;
+    }
+    Ok(())
+}
+
 /// Load session state from a JSON file.
 pub fn load_session() -> anyhow::Result<Option<SessionState>> {
     let path = session_file_path();

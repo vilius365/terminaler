@@ -151,6 +151,31 @@ pub enum TermWindowNotif {
     },
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DropZone {
+    Left,
+    Right,
+    Top,
+    Bottom,
+}
+
+#[derive(Clone, Debug)]
+pub struct TabDragState {
+    pub source_tab_idx: usize,
+    /// The tab that was active before the drag started (drop target).
+    pub dest_tab_id: TabId,
+    pub target_pane: Option<PaneId>,
+    pub target_zone: Option<DropZone>,
+    pub start_coords: (isize, isize),
+    pub threshold_exceeded: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct PaneLongPress {
+    pub pane_id: PaneId,
+    pub revealed: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum UIItemType {
     TabBar(TabBarItem),
@@ -190,7 +215,6 @@ pub struct OverlayState {
     pub key_table_state: KeyTableState,
 }
 
-#[derive(Default)]
 pub struct PaneState {
     /// If is_some(), the top row of the visible screen.
     /// Otherwise, the viewport is at the bottom of the
@@ -204,6 +228,21 @@ pub struct PaneState {
 
     bell_start: Option<Instant>,
     pub mouse_terminal_coords: Option<(ClickPosition, StableRowIndex)>,
+    /// Per-pane font scale factor (1.0 = default, >1.0 = larger, <1.0 = smaller)
+    pub font_scale: f64,
+}
+
+impl Default for PaneState {
+    fn default() -> Self {
+        Self {
+            viewport: None,
+            selection: Selection::default(),
+            overlay: None,
+            bell_start: None,
+            mouse_terminal_coords: None,
+            font_scale: 1.0,
+        }
+    }
 }
 
 /// Data used when synchronously formatting pane and window titles
@@ -308,6 +347,9 @@ pub struct TermWindow {
     tab_state: RefCell<HashMap<TabId, TabState>>,
     pane_state: RefCell<HashMap<PaneId, PaneState>>,
     semantic_zones: HashMap<PaneId, SemanticZoneCache>,
+    /// Cached FontConfiguration + RenderMetrics for each unique per-pane font scale.
+    /// Key = (font_scale * 100.0).round() as u32 to avoid float hashing.
+    scaled_font_configs: HashMap<u32, (Rc<FontConfiguration>, RenderMetrics)>,
 
     window_background: Vec<LoadedBackgroundLayer>,
 
@@ -342,6 +384,8 @@ pub struct TermWindow {
 
     ui_items: Vec<UIItem>,
     dragging: Option<(UIItem, MouseEvent)>,
+    pub tab_drag: Option<TabDragState>,
+    pub pane_long_press: Option<PaneLongPress>,
 
     modal: RefCell<Option<Rc<dyn Modal>>>,
 
@@ -384,6 +428,8 @@ impl TermWindow {
         let mux = Mux::get();
         match self.config.window_close_confirmation {
             WindowCloseConfirmation::NeverPrompt => {
+                // Save session state before closing
+                crate::session::save_current_session();
                 // Immediately kill the tabs and allow the window to close
                 mux.kill_window(self.mux_window_id);
                 window.close();
@@ -435,6 +481,8 @@ impl TermWindow {
             self.current_mouse_buttons.clear();
             self.current_mouse_capture = None;
             self.is_click_to_focus_window = false;
+            self.tab_drag = None;
+            self.pane_long_press = None;
 
             for state in self.pane_state.borrow_mut().values_mut() {
                 state.mouse_terminal_coords.take();
@@ -683,8 +731,11 @@ impl TermWindow {
             scheduled_animation: RefCell::new(None),
             allow_images: AllowImage::Yes,
             semantic_zones: HashMap::new(),
+            scaled_font_configs: HashMap::new(),
             ui_items: vec![],
             dragging: None,
+            tab_drag: None,
+            pane_long_press: None,
             last_ui_item: None,
             is_click_to_focus_window: false,
             key_table_state: KeyTableState::default(),
@@ -1621,6 +1672,9 @@ impl TermWindow {
             }
         }
 
+        // Clear cached per-pane scaled configs so they rebuild with new settings
+        self.scaled_font_configs.clear();
+
         if let Some(window) = self.window.as_ref().map(|w| w.clone()) {
             self.load_os_parameters();
             self.apply_scale_change(&dimensions, self.fonts.get_font_scale());
@@ -2154,6 +2208,22 @@ impl TermWindow {
                 }),
             );
         }
+    }
+
+    pub fn apply_snap_layout_to_pane(&mut self, pane_id: PaneId, name: &str) {
+        let mux = Mux::get();
+        let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
+            Some(tab) => tab,
+            None => return,
+        };
+        // Activate the target pane so apply_snap_layout splits from it
+        let panes = tab.iter_panes();
+        if let Some(pos) = panes.iter().find(|p| p.pane.pane_id() == pane_id) {
+            tab.set_active_idx(pos.index);
+        }
+        drop(tab);
+        drop(mux);
+        self.apply_snap_layout(name);
     }
 
     fn show_workspace_picker(&mut self) {
@@ -3077,6 +3147,39 @@ impl TermWindow {
         RefMut::map(self.pane_state.borrow_mut(), |state| {
             state.entry(pane_id).or_insert_with(PaneState::default)
         })
+    }
+
+    fn font_scale_key(scale: f64) -> u32 {
+        (scale * 100.0).round() as u32
+    }
+
+    pub fn get_or_create_scaled_config(
+        &mut self,
+        scale: f64,
+    ) -> (Rc<FontConfiguration>, RenderMetrics) {
+        let key = Self::font_scale_key(scale);
+        if let Some(entry) = self.scaled_font_configs.get(&key) {
+            return entry.clone();
+        }
+        let dpi = self.dimensions.dpi;
+        let fonts = Rc::new(
+            FontConfiguration::new(Some(self.config.clone()), dpi)
+                .expect("FontConfiguration::new for scaled config"),
+        );
+        fonts.change_scaling(scale, dpi);
+        let metrics =
+            RenderMetrics::new(&fonts).expect("RenderMetrics::new for scaled config");
+        self.scaled_font_configs
+            .insert(key, (Rc::clone(&fonts), metrics));
+        (fonts, metrics)
+    }
+
+    pub fn pane_font_scale(&self, pane_id: PaneId) -> f64 {
+        self.pane_state
+            .borrow()
+            .get(&pane_id)
+            .map(|s| s.font_scale)
+            .unwrap_or(1.0)
     }
 
     pub fn tab_state(&self, tab_id: TabId) -> RefMut<'_, TabState> {

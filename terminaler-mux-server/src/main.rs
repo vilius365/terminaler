@@ -304,5 +304,23 @@ pub fn spawn_listener() -> anyhow::Result<()> {
     //     ossl::spawn_tls_listener(tls_server)?;
     // }
 
+    // Start web access server if enabled (keep handle alive to prevent shutdown)
+    let config = configuration();
+    let _web_server_handle = match config.web_access {
+        Some(ref web_config) if web_config.enabled => {
+            match terminaler_web::start_web_server(web_config.into()) {
+                Ok(handle) => {
+                    log::info!("Web access server started");
+                    Some(handle)
+                }
+                Err(e) => {
+                    log::error!("Failed to start web access server: {:#}", e);
+                    None
+                }
+            }
+        }
+        _ => None,
+    };
+
     Ok(())
 }

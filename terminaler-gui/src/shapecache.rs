@@ -1,5 +1,5 @@
 use crate::customglyph::BlockKey;
-use crate::glyphcache::CachedGlyph;
+use crate::glyphcache::{CachedGlyph, CellMetricKey};
 use config::TextStyle;
 use std::rc::Rc;
 use terminaler_font::shaper::GlyphInfo;
@@ -9,6 +9,7 @@ use terminaler_font::units::*;
 pub struct ShapeCacheKey {
     pub style: TextStyle,
     pub text: String,
+    pub metric: CellMetricKey,
 }
 
 #[derive(Debug, PartialEq)]
@@ -62,6 +63,7 @@ impl ShapedInfo {
 pub struct BorrowedShapeCacheKey<'a> {
     pub style: &'a TextStyle,
     pub text: &'a str,
+    pub metric: CellMetricKey,
 }
 
 impl<'a> BorrowedShapeCacheKey<'a> {
@@ -69,6 +71,7 @@ impl<'a> BorrowedShapeCacheKey<'a> {
         ShapeCacheKey {
             style: self.style.clone(),
             text: self.text.to_owned(),
+            metric: self.metric,
         }
     }
 }
@@ -82,6 +85,7 @@ impl ShapeCacheKeyTrait for ShapeCacheKey {
         BorrowedShapeCacheKey {
             style: &self.style,
             text: &self.text,
+            metric: self.metric,
         }
     }
 }

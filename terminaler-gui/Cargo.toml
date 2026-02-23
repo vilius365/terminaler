@@ -94,6 +94,7 @@ terminaler-gui-subcommands.workspace = true
 terminaler-layout.workspace = true
 terminaler-mux-server-impl.workspace = true
 terminaler-term.workspace = true
+terminaler-web.workspace = true
 terminaler-toast-notification.workspace = true
 wgpu.workspace = true
 window.workspace = true

@@ -184,6 +184,36 @@ async fn spawn_tab_in_domain_if_mux_is_empty(
         }
     }
 
+    let config = config::configuration();
+    config.update_ulimit()?;
+
+    let dpi = config.dpi.unwrap_or_else(|| ::window::default_dpi());
+    let size = config.initial_size(dpi as u32, Some(cell_pixel_dims(&config, dpi)?));
+
+    // Try to restore a previous session (only when no explicit command was given)
+    if cmd.is_none() && !is_connecting {
+        if let Some(session) = crate::session::load_previous_session() {
+            if !session.windows.is_empty() {
+                log::info!(
+                    "Restoring previous session ({} windows)",
+                    session.windows.len()
+                );
+                // Attach the domain before restoring
+                domain.attach(None).await?;
+                match crate::session::restore_session(&session, &domain, size).await {
+                    Ok(()) => {
+                        trigger_and_log_gui_attached(MuxDomain(domain.domain_id())).await;
+                        return Ok(());
+                    }
+                    Err(e) => {
+                        log::error!("Session restore failed, starting fresh: {:#}", e);
+                        // Fall through to normal spawn
+                    }
+                }
+            }
+        }
+    }
+
     let window_id = {
         // Force the builder to notify the frontend early,
         // so that the attach await below doesn't block it.
@@ -196,9 +226,6 @@ async fn spawn_tab_in_domain_if_mux_is_empty(
         let builder = mux.new_empty_window(workspace.clone(), position);
         *builder
     };
-
-    let config = config::configuration();
-    config.update_ulimit()?;
 
     domain.attach(Some(window_id)).await?;
 
@@ -217,14 +244,8 @@ async fn spawn_tab_in_domain_if_mux_is_empty(
         true
     });
 
-    let dpi = config.dpi.unwrap_or_else(|| ::window::default_dpi());
     let _tab = domain
-        .spawn(
-            config.initial_size(dpi as u32, Some(cell_pixel_dims(&config, dpi)?)),
-            cmd,
-            None,
-            window_id,
-        )
+        .spawn(size, cmd, None, window_id)
         .await?;
     trigger_and_log_gui_attached(MuxDomain(domain.domain_id())).await;
     Ok(())
@@ -273,6 +294,26 @@ async fn async_run_terminal_gui(
     ))?;
     if let Err(err) = spawn_mux_server(unix_socket_path, should_publish) {
         log::warn!("{:#}", err);
+    }
+
+    // Start web access server if enabled.
+    // Leak the handle so the server runs for the process lifetime —
+    // this async fn returns after setup, dropping all locals.
+    {
+        let config = config::configuration();
+        if let Some(ref web_config) = config.web_access {
+            if web_config.enabled {
+                match terminaler_web::start_web_server(web_config.into()) {
+                    Ok(handle) => {
+                        log::info!("Web access server started");
+                        std::mem::forget(handle);
+                    }
+                    Err(e) => {
+                        log::error!("Failed to start web access server: {:#}", e);
+                    }
+                }
+            }
+        }
     }
 
     if !opts.no_auto_connect {

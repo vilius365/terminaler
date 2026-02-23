@@ -13,6 +13,8 @@ use config::VisualBellTarget;
 use mux::pane::{PaneId, WithPaneLines};
 use mux::renderable::{RenderableDimensions, StableCursorPosition};
 use mux::tab::PositionedPane;
+use std::rc::Rc;
+use terminaler_font::FontConfiguration;
 use ordered_float::NotNan;
 use std::time::Instant;
 use terminaler_dynamic::Value;
@@ -221,43 +223,59 @@ impl crate::TermWindow {
             }
         }
 
-        // Draw a subtle border around the active pane to indicate focus
+        // Draw a soft inner glow around the active pane to indicate focus.
+        // Multiple concentric bands with decreasing alpha create a feathered
+        // edge effect that works well with Windows 11 rounded corners.
         if pos.is_active {
-            let border_color = palette.cursor_border.to_linear().mul_alpha(0.6);
-            let b = 2.0_f32; // border thickness in pixels
+            let base_color = palette.cursor_border.to_linear();
+            let glow_width = 10.0_f32; // total glow depth in pixels
+            let bands: u32 = 7;
+            let band_size = glow_width / bands as f32;
+            let peak_alpha = 0.45_f32;
             let r = &background_rect;
-            // Top edge
-            self.filled_rectangle(
-                layers,
-                2,
-                euclid::rect(r.origin.x, r.origin.y, r.size.width, b),
-                border_color,
-            )
-            .context("active pane border top")?;
-            // Bottom edge
-            self.filled_rectangle(
-                layers,
-                2,
-                euclid::rect(r.origin.x, r.origin.y + r.size.height - b, r.size.width, b),
-                border_color,
-            )
-            .context("active pane border bottom")?;
-            // Left edge
-            self.filled_rectangle(
-                layers,
-                2,
-                euclid::rect(r.origin.x, r.origin.y, b, r.size.height),
-                border_color,
-            )
-            .context("active pane border left")?;
-            // Right edge
-            self.filled_rectangle(
-                layers,
-                2,
-                euclid::rect(r.origin.x + r.size.width - b, r.origin.y, b, r.size.height),
-                border_color,
-            )
-            .context("active pane border right")?;
+
+            for i in 0..bands {
+                let inset = i as f32 * band_size;
+                // Quadratic falloff: strongest at edges, fading toward center
+                let t = 1.0 - (i as f32 / (bands - 1) as f32);
+                let alpha = peak_alpha * t * t;
+                let color = base_color.mul_alpha(alpha);
+
+                let x = r.origin.x + inset;
+                let y = r.origin.y + inset;
+                let w = (r.size.width - 2.0 * inset).max(0.0);
+                let h = (r.size.height - 2.0 * inset).max(0.0);
+
+                if w < band_size * 2.0 || h < band_size * 2.0 {
+                    break;
+                }
+
+                // Top edge
+                self.filled_rectangle(
+                    layers, 2, euclid::rect(x, y, w, band_size), color,
+                )
+                .context("active pane glow")?;
+                // Bottom edge
+                self.filled_rectangle(
+                    layers, 2, euclid::rect(x, y + h - band_size, w, band_size), color,
+                )
+                .context("active pane glow")?;
+                // Left edge (between top and bottom to avoid corner overlap)
+                let inner_h = h - 2.0 * band_size;
+                if inner_h > 0.0 {
+                    self.filled_rectangle(
+                        layers, 2, euclid::rect(x, y + band_size, band_size, inner_h), color,
+                    )
+                    .context("active pane glow")?;
+                    // Right edge
+                    self.filled_rectangle(
+                        layers, 2,
+                        euclid::rect(x + w - band_size, y + band_size, band_size, inner_h),
+                        color,
+                    )
+                    .context("active pane glow")?;
+                }
+            }
         }
 
         // TODO: we only have a single scrollbar in a single position.
@@ -328,6 +346,57 @@ impl crate::TermWindow {
             .context("filled_rectangle")?;
         }
 
+        // --- Per-pane font scaling for text rendering ---
+        // Background/borders above used base metrics to keep pane boundaries static.
+        // For text rendering, swap to scaled fonts/metrics if this pane has a custom scale.
+        let pane_scale = self.pane_font_scale(pane_id);
+        let is_scaled = (pane_scale - 1.0).abs() > 0.001;
+
+        // Pre-compute left_pixel_x with BASE metrics before any font swap
+        let left_pixel_x = padding_left
+            + border.left.get() as f32
+            + (pos.left as f32 * self.render_metrics.cell_size.width as f32);
+
+        let adjusted_top_pixel_y;
+        let orig_fonts;
+        let orig_metrics;
+
+        if is_scaled {
+            let base_cell_height = self.render_metrics.cell_size.height as f32;
+            adjusted_top_pixel_y = top_pixel_y + pos.top as f32 * base_cell_height;
+
+            orig_fonts = Some(Rc::clone(&self.fonts));
+            orig_metrics = Some(self.render_metrics);
+
+            let (pane_fonts, pane_metrics) = self.get_or_create_scaled_config(pane_scale);
+            self.fonts = pane_fonts;
+            self.render_metrics = pane_metrics;
+        } else {
+            adjusted_top_pixel_y = top_pixel_y;
+            orig_fonts = None;
+            orig_metrics = None;
+        }
+
+        // For scaled panes, shadow pos with top=0 (absorbed into adjusted_top_pixel_y)
+        let _adjusted_pos;
+        let pos: &PositionedPane = if is_scaled {
+            _adjusted_pos = PositionedPane {
+                index: pos.index,
+                is_active: pos.is_active,
+                is_zoomed: pos.is_zoomed,
+                left: 0,
+                top: 0,
+                width: pos.width,
+                height: pos.height,
+                pixel_width: pos.pixel_width,
+                pixel_height: pos.pixel_height,
+                pane: pos.pane.clone(),
+            };
+            &_adjusted_pos
+        } else {
+            pos
+        };
+
         let (selrange, rectangular) = {
             let sel = self.selection(pos.pane.pane_id());
             (sel.range.clone(), sel.rectangular)
@@ -341,6 +410,7 @@ impl crate::TermWindow {
         let cursor_is_default_color =
             palette.cursor_fg == global_cursor_fg && palette.cursor_bg == global_cursor_bg;
 
+        let render_error;
         {
             let stable_range = match current_viewport {
                 Some(top) => top..top + dims.viewport_rows as StableRowIndex,
@@ -376,16 +446,12 @@ impl crate::TermWindow {
                 error: Option<anyhow::Error>,
             }
 
-            let left_pixel_x = padding_left
-                + border.left.get() as f32
-                + (pos.left as f32 * self.render_metrics.cell_size.width as f32);
-
             let mut render = LineRender {
                 term_window: self,
                 selrange,
                 rectangular,
                 dims,
-                top_pixel_y,
+                top_pixel_y: adjusted_top_pixel_y,
                 left_pixel_x,
                 pos,
                 pane_id,
@@ -605,9 +671,17 @@ impl crate::TermWindow {
             }
 
             pos.pane.with_lines_mut(stable_range.clone(), &mut render);
-            if let Some(error) = render.error.take() {
-                return Err(error).context("error while calling with_lines_mut");
-            }
+            render_error = render.error.take();
+        }
+
+        // Restore original fonts/metrics if we swapped for per-pane scaling
+        if let (Some(of), Some(om)) = (orig_fonts, orig_metrics) {
+            self.fonts = of;
+            self.render_metrics = om;
+        }
+
+        if let Some(error) = render_error {
+            return Err(error).context("error while calling with_lines_mut");
         }
 
         /*
@@ -725,4 +799,261 @@ impl crate::TermWindow {
             content: ComputedElementContent::Children(vec![]),
         })
     }
+
+    pub fn paint_drop_zone_overlay(
+        &mut self,
+        layers: &mut crate::quad::TripleLayerQuadAllocator,
+    ) -> anyhow::Result<()> {
+        use crate::termwindow::DropZone;
+
+        let tab_drag = match self.tab_drag.as_ref() {
+            Some(td) if td.threshold_exceeded => td,
+            _ => return Ok(()),
+        };
+        let target_pane_id = match tab_drag.target_pane {
+            Some(id) => id,
+            None => return Ok(()),
+        };
+        let zone = match tab_drag.target_zone {
+            Some(z) => z,
+            None => return Ok(()),
+        };
+
+        let panes = self.get_panes_to_render();
+        let target_pos = match panes.iter().find(|p| p.pane.pane_id() == target_pane_id) {
+            Some(pos) => pos,
+            None => return Ok(()),
+        };
+
+        let (padding_left, padding_top) = self.padding_left_top();
+
+        let tab_bar_height = if self.show_tab_bar {
+            self.tab_bar_pixel_height()
+                .context("tab_bar_pixel_height")?
+        } else {
+            0.
+        };
+        let top_bar_height = if self.config.tab_bar_at_bottom {
+            0.0
+        } else {
+            tab_bar_height
+        };
+
+        let border = self.get_os_border();
+        let top_pixel_y = top_bar_height + padding_top + border.top.get() as f32;
+        let cell_width = self.render_metrics.cell_size.width as f32;
+        let cell_height = self.render_metrics.cell_size.height as f32;
+
+        let pane_left = padding_left + border.left.get() as f32
+            + (target_pos.left as f32 * cell_width);
+        let pane_top = top_pixel_y + (target_pos.top as f32 * cell_height);
+        let pane_width = target_pos.width as f32 * cell_width;
+        let pane_height = target_pos.height as f32 * cell_height;
+
+        let overlay_rect = match zone {
+            DropZone::Left => euclid::rect(
+                pane_left, pane_top,
+                pane_width / 2.0, pane_height,
+            ),
+            DropZone::Right => euclid::rect(
+                pane_left + pane_width / 2.0, pane_top,
+                pane_width / 2.0, pane_height,
+            ),
+            DropZone::Top => euclid::rect(
+                pane_left, pane_top,
+                pane_width, pane_height / 2.0,
+            ),
+            DropZone::Bottom => euclid::rect(
+                pane_left, pane_top + pane_height / 2.0,
+                pane_width, pane_height / 2.0,
+            ),
+        };
+
+        // Semi-transparent accent color (blue at 30% alpha)
+        let color = window::color::LinearRgba(0.2, 0.4, 0.8, 0.3);
+
+        self.filled_rectangle(layers, 2, overlay_rect, color)
+            .context("paint_drop_zone_overlay")?;
+
+        Ok(())
+    }
+
+    pub fn paint_pane_remove_overlay(
+        &mut self,
+        layers: &mut crate::quad::TripleLayerQuadAllocator,
+    ) -> anyhow::Result<()> {
+        let lp = match self.pane_long_press.as_ref() {
+            Some(lp) if lp.revealed => lp,
+            _ => return Ok(()),
+        };
+        let target_pane_id = lp.pane_id;
+
+        let panes = self.get_panes_to_render();
+        let target_pos = match panes.iter().find(|p| p.pane.pane_id() == target_pane_id) {
+            Some(pos) => pos,
+            None => {
+                // Pane no longer exists, clear state
+                self.pane_long_press = None;
+                return Ok(());
+            }
+        };
+
+        let (padding_left, padding_top) = self.padding_left_top();
+
+        let tab_bar_height = if self.show_tab_bar {
+            self.tab_bar_pixel_height()
+                .context("tab_bar_pixel_height")?
+        } else {
+            0.
+        };
+        let top_bar_height = if self.config.tab_bar_at_bottom {
+            0.0
+        } else {
+            tab_bar_height
+        };
+
+        let border = self.get_os_border();
+        let top_pixel_y = top_bar_height + padding_top + border.top.get() as f32;
+        let cell_width = self.render_metrics.cell_size.width as f32;
+        let cell_height = self.render_metrics.cell_size.height as f32;
+
+        let pane_left = padding_left + border.left.get() as f32
+            + (target_pos.left as f32 * cell_width);
+        let pane_top = top_pixel_y + (target_pos.top as f32 * cell_height);
+        let pane_width = target_pos.width as f32 * cell_width;
+        let pane_height = target_pos.height as f32 * cell_height;
+
+        // Matte light grey overlay over the entire pane
+        let dim_color = window::color::LinearRgba(0.85, 0.85, 0.85, 0.05);
+        self.filled_rectangle(
+            layers,
+            2,
+            euclid::rect(pane_left, pane_top, pane_width, pane_height),
+            dim_color,
+        )
+        .context("paint_pane_remove_overlay dim")?;
+
+        // 3×3 button grid centered in pane
+        // Each button 44×44px, 6px gaps → grid 144×144
+        let btn_size = 44.0f32;
+        let gap = 6.0f32;
+        let cols = 3;
+        let rows = 3;
+        let grid_w = (cols as f32) * btn_size + ((cols - 1) as f32) * gap;
+        let grid_h = (rows as f32) * btn_size + ((rows - 1) as f32) * gap;
+        let cx = pane_left + pane_width / 2.0;
+        let cy = pane_top + pane_height / 2.0;
+        let grid_left = cx - grid_w / 2.0;
+        let grid_top = cy - grid_h / 2.0;
+
+        let white = window::color::LinearRgba(1.0, 1.0, 1.0, 0.95);
+        let close_bg = window::color::LinearRgba(0.85, 0.15, 0.15, 0.95);
+        let layout_bg = window::color::LinearRgba(0.2, 0.25, 0.35, 0.95);
+        let tab_bg = window::color::LinearRgba(0.15, 0.45, 0.65, 0.95);
+
+        for row in 0..rows {
+            for col in 0..cols {
+                let idx = row * cols + col;
+                let bl = grid_left + col as f32 * (btn_size + gap);
+                let bt = grid_top + row as f32 * (btn_size + gap);
+
+                let bg = match idx {
+                    0 => close_bg,
+                    8 => tab_bg,
+                    _ => layout_bg,
+                };
+                self.filled_rectangle(
+                    layers, 2,
+                    euclid::rect(bl, bt, btn_size, btn_size),
+                    bg,
+                ).context("overlay button bg")?;
+
+                let ix = bl + 4.0; // interior origin x (4px padding)
+                let iy = bt + 4.0; // interior origin y
+                // Interior is 36×36
+
+                match idx {
+                    0 => {
+                        // Close: white × (diagonal cross) drawn as
+                        // small squares stepping along both diagonals
+                        let seg = 4.0f32; // square size
+                        let steps = 5u32; // number of squares per diagonal
+                        let span = 20.0f32; // total diagonal extent
+                        let bcx = bl + btn_size / 2.0;
+                        let bcy = bt + btn_size / 2.0;
+                        let start = -span / 2.0;
+                        let step_d = span / (steps - 1) as f32;
+                        for i in 0..steps {
+                            let d = start + i as f32 * step_d;
+                            // Top-left to bottom-right diagonal
+                            self.filled_rectangle(layers, 2,
+                                euclid::rect(bcx + d - seg / 2.0, bcy + d - seg / 2.0, seg, seg),
+                                white,
+                            )?;
+                            // Top-right to bottom-left diagonal
+                            self.filled_rectangle(layers, 2,
+                                euclid::rect(bcx - d - seg / 2.0, bcy + d - seg / 2.0, seg, seg),
+                                white,
+                            )?;
+                        }
+                    }
+                    1 => {
+                        // hsplit: two vertical halves
+                        self.filled_rectangle(layers, 2, euclid::rect(ix, iy, 17.0, 36.0), white)?;
+                        self.filled_rectangle(layers, 2, euclid::rect(ix + 19.0, iy, 17.0, 36.0), white)?;
+                    }
+                    2 => {
+                        // vsplit: two horizontal halves
+                        self.filled_rectangle(layers, 2, euclid::rect(ix, iy, 36.0, 17.0), white)?;
+                        self.filled_rectangle(layers, 2, euclid::rect(ix, iy + 19.0, 36.0, 17.0), white)?;
+                    }
+                    3 => {
+                        // quad: four quadrants
+                        self.filled_rectangle(layers, 2, euclid::rect(ix, iy, 17.0, 17.0), white)?;
+                        self.filled_rectangle(layers, 2, euclid::rect(ix + 19.0, iy, 17.0, 17.0), white)?;
+                        self.filled_rectangle(layers, 2, euclid::rect(ix, iy + 19.0, 17.0, 17.0), white)?;
+                        self.filled_rectangle(layers, 2, euclid::rect(ix + 19.0, iy + 19.0, 17.0, 17.0), white)?;
+                    }
+                    4 => {
+                        // triple-right: big left, two stacked right
+                        self.filled_rectangle(layers, 2, euclid::rect(ix, iy, 21.0, 36.0), white)?;
+                        self.filled_rectangle(layers, 2, euclid::rect(ix + 23.0, iy, 13.0, 17.0), white)?;
+                        self.filled_rectangle(layers, 2, euclid::rect(ix + 23.0, iy + 19.0, 13.0, 17.0), white)?;
+                    }
+                    5 => {
+                        // triple-bottom: big top, two side-by-side bottom
+                        self.filled_rectangle(layers, 2, euclid::rect(ix, iy, 36.0, 21.0), white)?;
+                        self.filled_rectangle(layers, 2, euclid::rect(ix, iy + 23.0, 17.0, 13.0), white)?;
+                        self.filled_rectangle(layers, 2, euclid::rect(ix + 19.0, iy + 23.0, 17.0, 13.0), white)?;
+                    }
+                    6 => {
+                        // dev: big left, two stacked right (top bigger)
+                        self.filled_rectangle(layers, 2, euclid::rect(ix, iy, 19.0, 36.0), white)?;
+                        self.filled_rectangle(layers, 2, euclid::rect(ix + 21.0, iy, 15.0, 21.0), white)?;
+                        self.filled_rectangle(layers, 2, euclid::rect(ix + 21.0, iy + 23.0, 15.0, 13.0), white)?;
+                    }
+                    7 => {
+                        // claude-code: big top, thin bottom
+                        self.filled_rectangle(layers, 2, euclid::rect(ix, iy, 36.0, 26.0), white)?;
+                        self.filled_rectangle(layers, 2, euclid::rect(ix, iy + 28.0, 36.0, 8.0), white)?;
+                    }
+                    8 => {
+                        // move-to-tab: upward arrow (pop out to new tab)
+                        // Arrow shaft: centered vertical bar
+                        self.filled_rectangle(layers, 2, euclid::rect(ix + 15.0, iy + 10.0, 6.0, 22.0), white)?;
+                        // Arrow head: three stacked rects forming a chevron
+                        self.filled_rectangle(layers, 2, euclid::rect(ix + 11.0, iy + 10.0, 14.0, 4.0), white)?;
+                        self.filled_rectangle(layers, 2, euclid::rect(ix + 7.0, iy + 14.0, 6.0, 4.0), white)?;
+                        self.filled_rectangle(layers, 2, euclid::rect(ix + 23.0, iy + 14.0, 6.0, 4.0), white)?;
+                        self.filled_rectangle(layers, 2, euclid::rect(ix + 3.0, iy + 18.0, 6.0, 4.0), white)?;
+                        self.filled_rectangle(layers, 2, euclid::rect(ix + 27.0, iy + 18.0, 6.0, 4.0), white)?;
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        Ok(())
+    }
+
 }

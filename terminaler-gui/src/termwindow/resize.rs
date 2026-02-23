@@ -299,6 +299,19 @@ impl super::TermWindow {
             }
         };
         self.resize_overlays();
+
+        // Re-resize any panes that have a per-pane font scale
+        let scaled_panes: Vec<_> = self
+            .pane_state
+            .borrow()
+            .iter()
+            .filter(|(_, s)| (s.font_scale - 1.0).abs() > 0.001)
+            .map(|(id, _)| *id)
+            .collect();
+        for pane_id in scaled_panes {
+            self.resize_pane_for_font_scale(pane_id);
+        }
+
         self.invalidate_fancy_tab_bar();
         self.update_title();
 
@@ -467,6 +480,27 @@ impl super::TermWindow {
     }
 
     pub fn reset_font_size(&mut self) {
+        // Reset per-pane font scale for the active pane
+        if let Some(pane) = self.get_active_pane_or_overlay() {
+            let pane_id = pane.pane_id();
+            let had_scale = {
+                let mut states = self.pane_state.borrow_mut();
+                if let Some(state) = states.get_mut(&pane_id) {
+                    let had = (state.font_scale - 1.0).abs() > 0.001;
+                    state.font_scale = 1.0;
+                    had
+                } else {
+                    false
+                }
+            };
+            if had_scale {
+                self.resize_pane_for_font_scale(pane_id);
+                self.shape_generation += 1;
+                self.shape_cache.borrow_mut().clear();
+                return;
+            }
+        }
+        // If the active pane had no per-pane scale, fall through to global reset
         self.pending_scale_changes
             .push_back(ScaleChange::Absolute(1.0));
         self.apply_pending_scale_changes();
@@ -552,6 +586,33 @@ impl super::TermWindow {
                 pixel_max: self.dimensions.pixel_width as f32,
             },
         )
+    }
+
+    /// Resize a pane's PTY to account for its per-pane font scale.
+    /// The pane's pixel area stays the same but cell count changes with font size.
+    pub fn resize_pane_for_font_scale(&mut self, pane_id: mux::pane::PaneId) {
+        let scale = self.pane_font_scale(pane_id);
+        let (_, pane_metrics) = self.get_or_create_scaled_config(scale);
+        let cell_w = pane_metrics.cell_size.width as usize;
+        let cell_h = pane_metrics.cell_size.height as usize;
+
+        let mux = Mux::get();
+        if let Some(tab) = mux.get_active_tab_for_window(self.mux_window_id) {
+            for pos in tab.iter_panes() {
+                if pos.pane.pane_id() == pane_id {
+                    let cols = pos.pixel_width / cell_w.max(1);
+                    let rows = pos.pixel_height / cell_h.max(1);
+                    pos.pane.resize(TerminalSize {
+                        cols,
+                        rows,
+                        pixel_width: pos.pixel_width,
+                        pixel_height: pos.pixel_height,
+                        dpi: self.dimensions.dpi as u32,
+                    }).ok();
+                    break;
+                }
+            }
+        }
     }
 }
 

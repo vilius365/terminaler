@@ -24,6 +24,7 @@ terminaler-blob-leases = {workspace=true, features=["simple_tempdir"]}
 terminaler-mux-server-impl.workspace = true
 terminaler-gui-subcommands.workspace = true
 terminaler-term.workspace = true
+terminaler-web.workspace = true
 
 [target."cfg(windows)".dependencies]
 winapi = { workspace=true, features = [ "winuser" ]}
