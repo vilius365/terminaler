@@ -1,3 +1,4 @@
+use crate::color::LinearRgba;
 use crate::customglyph::*;
 use crate::tabbar::{TabBarItem, TabEntry};
 use crate::termwindow::box_model::*;
@@ -286,6 +287,74 @@ impl crate::TermWindow {
                                 .into(),
                         })
                     }),
+                TabBarItem::RemoteAccess { active } => {
+                    let label = if active {
+                        let addr = self.config.web_access.as_ref()
+                            .map(|w| w.bind_address.as_str())
+                            .unwrap_or("127.0.0.1:9876");
+                        format!("Remote \u{00b7} {}", addr)
+                    } else {
+                        "Remote".to_string()
+                    };
+                    Element::new(&font, ElementContent::Text(label))
+                        .vertical_align(VerticalAlign::Middle)
+                        .item_type(UIItemType::TabBar(item.item.clone()))
+                        .margin(BoxDimension {
+                            left: Dimension::Cells(0.5),
+                            right: Dimension::Cells(0.),
+                            top: Dimension::Cells(0.2),
+                            bottom: Dimension::Cells(0.),
+                        })
+                        .padding(BoxDimension {
+                            left: Dimension::Cells(0.5),
+                            right: Dimension::Cells(0.5),
+                            top: Dimension::Cells(0.2),
+                            bottom: Dimension::Cells(0.25),
+                        })
+                        .border(BoxDimension::new(Dimension::Pixels(1.)))
+                        .colors(if active {
+                            ElementColors {
+                                border: BorderColor::new(
+                                    LinearRgba(0.40, 0.70, 0.38, 1.0),
+                                ),
+                                bg: LinearRgba(0.30, 0.60, 0.28, 1.0).into(),
+                                text: InheritableColor::Color(
+                                    LinearRgba(0.95, 0.95, 0.95, 1.0),
+                                ),
+                            }
+                        } else {
+                            ElementColors {
+                                border: BorderColor::new(
+                                    LinearRgba(0.35, 0.35, 0.40, 1.0),
+                                ),
+                                bg: bar_colors.bg.clone(),
+                                text: InheritableColor::Color(
+                                    LinearRgba(0.50, 0.50, 0.55, 1.0),
+                                ),
+                            }
+                        })
+                        .hover_colors(Some(if active {
+                            ElementColors {
+                                border: BorderColor::new(
+                                    LinearRgba(0.45, 0.75, 0.43, 1.0),
+                                ),
+                                bg: LinearRgba(0.35, 0.65, 0.33, 1.0).into(),
+                                text: InheritableColor::Color(
+                                    LinearRgba(1.0, 1.0, 1.0, 1.0),
+                                ),
+                            }
+                        } else {
+                            ElementColors {
+                                border: BorderColor::new(
+                                    LinearRgba(0.45, 0.45, 0.50, 1.0),
+                                ),
+                                bg: LinearRgba(0.25, 0.25, 0.30, 1.0).into(),
+                                text: InheritableColor::Color(
+                                    LinearRgba(0.75, 0.75, 0.80, 1.0),
+                                ),
+                            }
+                        }))
+                }
                 TabBarItem::WindowButton(button) => window_button_element(
                     button,
                     self.window_state.contains(window::WindowState::MAXIMIZED),
@@ -353,6 +422,7 @@ impl crate::TermWindow {
                     };
                     left_eles.push(elem);
                 }
+                TabBarItem::RemoteAccess { .. } => right_eles.push(item_to_elem(item)),
                 _ => left_eles.push(item_to_elem(item)),
             }
         }

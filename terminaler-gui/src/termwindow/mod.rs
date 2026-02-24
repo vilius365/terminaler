@@ -1847,7 +1847,7 @@ impl TermWindow {
             &self.config,
             &self.left_status,
             &self.right_status,
-            self.web_server_handle.is_some(),
+            self.web_server_handle.as_ref().map(|h| h.bind_address()),
         );
         if new_tab_bar != self.tab_bar {
             self.tab_bar = new_tab_bar;
@@ -2202,39 +2202,84 @@ impl TermWindow {
         };
 
         let splits = terminaler_layout::collect_splits(&layout.root);
-        let size = self.terminal_size;
-        let window_id = self.mux_window_id;
+        if splits.is_empty() {
+            return;
+        }
 
         let mux = Mux::get();
         let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
             Some(tab) => tab,
             None => return,
         };
+        let initial_pane_id = match tab.get_active_pane() {
+            Some(p) => p.pane_id(),
+            None => return,
+        };
+        drop(tab);
+        drop(mux);
 
         let term_config = Arc::new(TermConfig::with_config(self.config.clone()));
 
-        // Apply splits: spawn panes and split the current tab
-        for split in &splits {
-            let direction = match split.direction {
-                terminaler_layout::SplitDirection::Horizontal => {
-                    mux::tab::SplitDirection::Horizontal
-                }
-                terminaler_layout::SplitDirection::Vertical => {
-                    mux::tab::SplitDirection::Vertical
-                }
-            };
-            let percent = (split.ratio * 100.0) as u8;
+        // Apply all splits in a single async task so each split completes
+        // before the next begins, and we can target the correct pane by ID.
+        promise::spawn::spawn(async move {
+            let mux = Mux::get();
+            // Track pane IDs in creation order so pane_index lookups work.
+            let mut pane_ids: Vec<PaneId> = vec![initial_pane_id];
 
-            self.spawn_command(
-                &config::keyassignment::SpawnCommand::default(),
-                SpawnWhere::SplitPane(mux::tab::SplitRequest {
-                    direction,
-                    target_is_second: true,
-                    size: MuxSplitSize::Percent(percent),
-                    top_level: false,
-                }),
-            );
-        }
+            for split in &splits {
+                let target_pane_id = match pane_ids.get(split.pane_index) {
+                    Some(&id) => id,
+                    None => {
+                        log::error!(
+                            "snap layout: invalid pane_index {} (have {} panes)",
+                            split.pane_index,
+                            pane_ids.len()
+                        );
+                        break;
+                    }
+                };
+
+                let direction = match split.direction {
+                    terminaler_layout::SplitDirection::Horizontal => {
+                        SplitDirection::Horizontal
+                    }
+                    terminaler_layout::SplitDirection::Vertical => {
+                        SplitDirection::Vertical
+                    }
+                };
+                // ratio is the first child's share; Percent is the size of the
+                // new (second) child, so invert.
+                let percent = ((1.0 - split.ratio) * 100.0) as u8;
+
+                let (new_pane, _size) = match mux
+                    .split_pane(
+                        target_pane_id,
+                        SplitRequest {
+                            direction,
+                            target_is_second: true,
+                            size: MuxSplitSize::Percent(percent),
+                            top_level: false,
+                        },
+                        mux::domain::SplitSource::Spawn {
+                            command: None,
+                            command_dir: None,
+                        },
+                        config::keyassignment::SpawnTabDomain::CurrentPaneDomain,
+                    )
+                    .await
+                {
+                    Ok(result) => result,
+                    Err(err) => {
+                        log::error!("snap layout split failed: {:#}", err);
+                        break;
+                    }
+                };
+                new_pane.set_config(term_config.clone());
+                pane_ids.push(new_pane.pane_id());
+            }
+        })
+        .detach();
     }
 
     pub fn apply_snap_layout_to_pane(&mut self, pane_id: PaneId, name: &str) {

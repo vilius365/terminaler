@@ -14,9 +14,15 @@ use std::thread::JoinHandle;
 pub struct WebServerHandle {
     shutdown_tx: tokio::sync::oneshot::Sender<()>,
     thread_handle: JoinHandle<()>,
+    bind_address: String,
 }
 
 impl WebServerHandle {
+    /// The address the web server is listening on (e.g. "127.0.0.1:9876").
+    pub fn bind_address(&self) -> &str {
+        &self.bind_address
+    }
+
     /// Signal the web server to shut down and wait for the thread to finish.
     pub fn shutdown(self) {
         let _ = self.shutdown_tx.send(());
@@ -133,6 +139,7 @@ pub fn start_web_server(config: WebConfig) -> anyhow::Result<WebServerHandle> {
     Ok(WebServerHandle {
         shutdown_tx,
         thread_handle,
+        bind_address: config.bind_address,
     })
 }
 
