@@ -22,7 +22,8 @@ use crate::web::WebAccessConfig;
 use crate::wsl::WslDomain;
 use crate::{
     default_config_with_overrides_applied, default_one_point_oh, default_one_point_oh_f64,
-    default_true, default_win32_acrylic_accent_color, json_to_dynamic, CellWidth, GpuInfo,
+    default_true, default_win32_acrylic_accent_color, default_window_background_opacity,
+    json_to_dynamic, CellWidth, GpuInfo,
     IntegratedTitleButtonColor, KeyMapPreference, LoadedConfig, MouseEventTriggerMods, RgbaColor,
     // STRIPPED: SerialDomain,
     SystemBackdrop, WebGpuPowerPreference, CONFIG_DIRS, CONFIG_FILE_OVERRIDE,
@@ -572,7 +573,7 @@ pub struct Config {
     /// This only works on systems with a compositing window manager.
     /// Setting opacity to a value other than 1.0 can impact render
     /// performance.
-    #[dynamic(default = "default_one_point_oh")]
+    #[dynamic(default = "default_window_background_opacity")]
     pub window_background_opacity: f32,
 
     /// inactive_pane_hue, inactive_pane_saturation and

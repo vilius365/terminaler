@@ -292,9 +292,9 @@ impl Default for BackgroundOrigin {
 
 #[derive(Debug, Copy, Clone, FromDynamic, ToDynamic, PartialEq, Default)]
 pub enum SystemBackdrop {
-    #[default]
     Auto,
     Disable,
+    #[default]
     Acrylic,
     Mica,
     Tabbed,

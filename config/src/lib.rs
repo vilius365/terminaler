@@ -696,6 +696,10 @@ fn default_one_point_oh() -> f32 {
     1.0
 }
 
+fn default_window_background_opacity() -> f32 {
+    0.85
+}
+
 fn default_true() -> bool {
     true
 }

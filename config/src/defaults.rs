@@ -16,6 +16,13 @@ pub fn default_config_content() -> String {
     // "initial_rows": 24,
     // "initial_cols": 80,
 
+    // Window transparency (Windows 11 glass effect)
+    // Backdrop type: "Auto", "Disable", "Acrylic", "Mica", "Tabbed"
+    // Default: "Acrylic"
+    // "win32_system_backdrop": "Acrylic",
+    // Background opacity: 0.0 (fully transparent) to 1.0 (opaque). Default: 0.85
+    // "window_background_opacity": 0.85,
+
     // Color scheme: use built-in "dark" or "light" themes
     // or define custom colors below
     // "color_scheme": "dark",
