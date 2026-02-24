@@ -183,8 +183,8 @@ impl crate::TermWindow {
                         line_width: metrics.underline_height.max(2),
                         poly: SizedPoly {
                             poly: CHEVRON_DOWN,
-                            width: Dimension::Pixels(metrics.cell_size.height as f32 / 3.),
-                            height: Dimension::Pixels(metrics.cell_size.height as f32 / 3.),
+                            width: Dimension::Pixels(metrics.cell_size.height as f32 / 2.),
+                            height: Dimension::Pixels(metrics.cell_size.height as f32 / 2.),
                         },
                     },
                 )
@@ -197,8 +197,8 @@ impl crate::TermWindow {
                     bottom: Dimension::Cells(0.),
                 })
                 .padding(BoxDimension {
-                    left: Dimension::Cells(0.25),
-                    right: Dimension::Cells(0.25),
+                    left: Dimension::Cells(0.5),
+                    right: Dimension::Cells(0.5),
                     top: Dimension::Cells(0.2),
                     bottom: Dimension::Cells(0.25),
                 })

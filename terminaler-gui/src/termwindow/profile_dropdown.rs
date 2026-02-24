@@ -119,8 +119,8 @@ impl ProfileDropdown {
     ) -> anyhow::Result<Vec<ComputedElement>> {
         let font = term_window
             .fonts
-            .command_palette_font()
-            .expect("to resolve command palette font");
+            .title_font()
+            .expect("to resolve title font for dropdown");
         let metrics = RenderMetrics::with_font_metrics(&font.metrics());
 
         let solid_bg: InheritableColor = term_window
@@ -158,10 +158,10 @@ impl ProfileDropdown {
                         text,
                     })
                     .padding(BoxDimension {
-                        left: Dimension::Cells(0.5),
-                        right: Dimension::Cells(1.0),
-                        top: Dimension::Cells(0.15),
-                        bottom: Dimension::Cells(0.15),
+                        left: Dimension::Cells(0.75),
+                        right: Dimension::Cells(1.5),
+                        top: Dimension::Cells(0.35),
+                        bottom: Dimension::Cells(0.35),
                     })
                     .display(DisplayType::Block),
             );
@@ -179,10 +179,10 @@ impl ProfileDropdown {
                 text: InheritableColor::Color(LinearRgba(0.5, 0.5, 0.55, 1.0)),
             })
             .padding(BoxDimension {
-                left: Dimension::Cells(0.5),
-                right: Dimension::Cells(0.5),
-                top: Dimension::Cells(0.3),
-                bottom: Dimension::Cells(0.15),
+                left: Dimension::Cells(0.75),
+                right: Dimension::Cells(0.75),
+                top: Dimension::Cells(0.4),
+                bottom: Dimension::Cells(0.25),
             })
             .display(DisplayType::Block),
         );
@@ -239,8 +239,17 @@ impl ProfileDropdown {
 
         let dimensions = term_window.dimensions;
 
-        // Width: fit content, minimum 200px, max 400px
-        let desired_width = 300f32.min(dimensions.pixel_width as f32 * 0.4).max(200.);
+        // Width: based on longest label + padding, with sensible bounds
+        let max_label_chars = entries
+            .iter()
+            .map(|e| e.label.len() + 4) // +4 for checkmark prefix + padding
+            .max()
+            .unwrap_or(20)
+            .max("Right-click to set default".len() + 2);
+        let content_width = max_label_chars as f32 * metrics.cell_size.width as f32;
+        let desired_width = content_width
+            .max(250.)
+            .min(dimensions.pixel_width as f32 * 0.5);
 
         // Clamp X so dropdown doesn't overflow right edge
         let dropdown_x = anchor_x.min(dimensions.pixel_width as f32 - desired_width);

@@ -492,7 +492,7 @@ impl TabBarState {
             x += width;
 
             // Dropdown chevron next to "+"
-            let dropdown_label = " \u{25BE} ";
+            let dropdown_label = " \u{25BC} ";
             let hover = is_tab_hover(mouse_x, x, unicode_column_width(dropdown_label, None));
             let dropdown_line = parse_status_text(
                 dropdown_label,
