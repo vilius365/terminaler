@@ -388,6 +388,8 @@ pub struct TermWindow {
     dragging: Option<(UIItem, MouseEvent)>,
     pub tab_drag: Option<TabDragState>,
     pub pane_long_press: Option<PaneLongPress>,
+    pub hovered_pane_id: Option<mux::pane::PaneId>,
+    pub toast_expanded_for: Option<mux::pane::PaneId>,
 
     modal: RefCell<Option<Rc<dyn Modal>>>,
 
@@ -768,6 +770,8 @@ impl TermWindow {
             dragging: None,
             tab_drag: None,
             pane_long_press: None,
+            hovered_pane_id: None,
+            toast_expanded_for: None,
             last_ui_item: None,
             is_click_to_focus_window: false,
             key_table_state: KeyTableState::default(),

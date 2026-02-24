@@ -225,8 +225,96 @@ impl super::TermWindow {
                     self.drag_ui_item(item, start_event, x, y, event, context);
                     return;
                 }
+
+                // Update hovered pane for toast toolbar
+                let new_hovered = self.pane_id_at_pixel_coords(event.coords.x, event.coords.y);
+                if new_hovered != self.hovered_pane_id {
+                    self.hovered_pane_id = new_hovered;
+                    self.toast_expanded_for = None;
+                    context.invalidate();
+                }
+
+                // Toast expand/collapse logic
+                if let Some((pane_id, btn)) = self.toast_button_at(&event) {
+                    if btn == "trigger" && self.toast_expanded_for != Some(pane_id) {
+                        self.toast_expanded_for = Some(pane_id);
+                        context.invalidate();
+                    }
+                    context.set_cursor(Some(MouseCursor::Hand));
+                    return;
+                } else if let Some(expanded_id) = self.toast_expanded_for {
+                    // Collapse if cursor is outside expanded toast + margin
+                    use crate::termwindow::render::pane::{
+                        TOAST_COLLAPSE_MARGIN, TOAST_HEIGHT, TOAST_WIDTH,
+                    };
+                    let collapsed = 'collapse: {
+                        let panes = self.get_panes_to_render();
+                        let pos = match panes.iter().find(|p| p.pane.pane_id() == expanded_id) {
+                            Some(p) => p,
+                            None => break 'collapse true,
+                        };
+                        let cell_w = self.render_metrics.cell_size.width as f32;
+                        let cell_h = self.render_metrics.cell_size.height as f32;
+                        let (pad_l, pad_t) = self.padding_left_top();
+                        let tab_h = if self.show_tab_bar {
+                            self.tab_bar_pixel_height().unwrap_or(0.)
+                        } else { 0. };
+                        let top_h = if self.config.tab_bar_at_bottom { 0.0 } else { tab_h };
+                        let bdr = self.get_os_border();
+                        let top_py = top_h + pad_t + bdr.top.get() as f32;
+                        let t_bg_y = if pos.top == 0 {
+                            top_py - pad_t
+                        } else {
+                            top_py + (pos.top as f32 * cell_h) - (cell_h / 2.0)
+                        };
+                        let t_bg_right = if pos.left + pos.width >= self.terminal_size.cols as usize {
+                            self.dimensions.pixel_width as f32
+                        } else {
+                            let (bx, wd) = if pos.left == 0 {
+                                (0.0f32, pad_l + bdr.left.get() as f32 + (cell_w / 2.0))
+                            } else {
+                                (pad_l + bdr.left.get() as f32 - (cell_w / 2.0)
+                                    + (pos.left as f32 * cell_w), cell_w)
+                            };
+                            bx + (pos.width as f32 * cell_w) + wd
+                        };
+                        let tl = t_bg_right - TOAST_WIDTH;
+                        let tt = t_bg_y;
+                        let mx = event.coords.x as f32;
+                        let my = event.coords.y as f32;
+                        mx < tl - TOAST_COLLAPSE_MARGIN
+                            || mx > t_bg_right + TOAST_COLLAPSE_MARGIN
+                            || my < tt - TOAST_COLLAPSE_MARGIN
+                            || my > tt + TOAST_HEIGHT + TOAST_COLLAPSE_MARGIN
+                    };
+                    if collapsed {
+                        self.toast_expanded_for = None;
+                        context.invalidate();
+                    }
+                }
             }
             _ => {}
+        }
+
+        // Toast toolbar: intercept clicks on toast buttons
+        if matches!(event.kind, WMEK::Press(MousePress::Left)) {
+            if let Some((pane_id, btn)) = self.toast_button_at(&event) {
+                if btn == "trigger" {
+                    self.toast_expanded_for = Some(pane_id);
+                    context.invalidate();
+                    return;
+                } else if btn == "close" {
+                    Mux::get().remove_pane(pane_id);
+                } else if btn == "move-to-tab" {
+                    self.execute_pane_to_tab(pane_id);
+                } else {
+                    self.apply_snap_layout_to_pane(pane_id, btn);
+                }
+                self.toast_expanded_for = None;
+                self.hovered_pane_id = None;
+                context.invalidate();
+                return;
+            }
         }
 
         // Long press overlay: intercept clicks when overlay is showing
@@ -356,6 +444,8 @@ impl super::TermWindow {
 
     pub fn mouse_leave_impl(&mut self, context: &dyn WindowOps) {
         self.current_mouse_event = None;
+        self.hovered_pane_id = None;
+        self.toast_expanded_for = None;
         self.update_title();
         context.set_cursor(Some(MouseCursor::Arrow));
         context.invalidate();
@@ -1389,6 +1479,7 @@ impl super::TermWindow {
             None => return,
         };
 
+        self.toast_expanded_for = None;
         self.pane_long_press = Some(super::PaneLongPress {
             pane_id,
             revealed: true,
@@ -1533,6 +1624,140 @@ impl super::TermWindow {
             return BUTTON_NAMES.get(idx).copied();
         }
         None
+    }
+
+    fn toast_button_at(
+        &self,
+        event: &MouseEvent,
+    ) -> Option<(mux::pane::PaneId, &'static str)> {
+        use crate::termwindow::render::pane::{
+            TOAST_BTN_SIZE, TOAST_BUTTON_NAMES, TOAST_COLLAPSED_WIDTH, TOAST_COUNT, TOAST_GAP,
+            TOAST_HEIGHT, TOAST_MIN_PANE_HEIGHT, TOAST_MIN_PANE_WIDTH, TOAST_PADDING, TOAST_WIDTH,
+        };
+
+        let hovered_id = self.hovered_pane_id?;
+
+        // Don't hit-test if long-press overlay is active on this pane
+        if self
+            .pane_long_press
+            .as_ref()
+            .map_or(false, |lp| lp.revealed && lp.pane_id == hovered_id)
+        {
+            return None;
+        }
+
+        let panes = self.get_panes_to_render();
+        let pos = panes.iter().find(|p| p.pane.pane_id() == hovered_id)?;
+
+        let cell_width = self.render_metrics.cell_size.width as f32;
+        let cell_height = self.render_metrics.cell_size.height as f32;
+        let (padding_left, padding_top) = self.padding_left_top();
+
+        let tab_bar_height = if self.show_tab_bar {
+            self.tab_bar_pixel_height().unwrap_or(0.)
+        } else {
+            0.
+        };
+        let top_bar_height = if self.config.tab_bar_at_bottom {
+            0.0
+        } else {
+            tab_bar_height
+        };
+
+        let border = self.get_os_border();
+        let top_pixel_y = top_bar_height + padding_top + border.top.get() as f32;
+
+        // Visual bounds matching paint_toast_toolbar (same as build_pane background_rect)
+        let (bg_x, width_delta) = if pos.left == 0 {
+            (0.0f32, padding_left + border.left.get() as f32 + (cell_width / 2.0))
+        } else {
+            (
+                padding_left + border.left.get() as f32 - (cell_width / 2.0)
+                    + (pos.left as f32 * cell_width),
+                cell_width,
+            )
+        };
+        let bg_y = if pos.top == 0 {
+            top_pixel_y - padding_top
+        } else {
+            top_pixel_y + (pos.top as f32 * cell_height) - (cell_height / 2.0)
+        };
+        let bg_right = if pos.left + pos.width >= self.terminal_size.cols as usize {
+            self.dimensions.pixel_width as f32
+        } else {
+            bg_x + (pos.width as f32 * cell_width) + width_delta
+        };
+        let bg_bottom = if pos.top + pos.height >= self.terminal_size.rows as usize {
+            self.dimensions.pixel_height as f32
+        } else {
+            let height_delta = if pos.top == 0 {
+                padding_top + (cell_height / 2.0)
+            } else {
+                cell_height
+            };
+            bg_y + (pos.height as f32 * cell_height) + height_delta
+        };
+
+        let pane_visual_width = bg_right - bg_x;
+        let pane_visual_height = bg_bottom - bg_y;
+
+        // Same size guard as rendering
+        if pane_visual_width < TOAST_MIN_PANE_WIDTH || pane_visual_height < TOAST_MIN_PANE_HEIGHT {
+            return None;
+        }
+
+        let mx = event.coords.x as f32;
+        let my = event.coords.y as f32;
+
+        let is_expanded = self.toast_expanded_for == Some(hovered_id)
+            && pane_visual_width >= TOAST_WIDTH + 10.0;
+
+        if is_expanded {
+            // --- Expanded: full 9-button hit-test ---
+            let toast_left = bg_right - TOAST_WIDTH;
+            let toast_top = bg_y;
+
+            if mx < toast_left
+                || mx >= toast_left + TOAST_WIDTH
+                || my < toast_top
+                || my >= toast_top + TOAST_HEIGHT
+            {
+                return None;
+            }
+
+            let rel_x = mx - toast_left - TOAST_PADDING;
+            let rel_y = my - toast_top - TOAST_PADDING;
+
+            if rel_x < 0.0 || rel_y < 0.0 || rel_y >= TOAST_BTN_SIZE {
+                return None;
+            }
+
+            let idx = (rel_x / (TOAST_BTN_SIZE + TOAST_GAP)) as usize;
+            if idx >= TOAST_COUNT {
+                return None;
+            }
+
+            let btn_left = idx as f32 * (TOAST_BTN_SIZE + TOAST_GAP);
+            if rel_x > btn_left + TOAST_BTN_SIZE {
+                return None;
+            }
+
+            Some((hovered_id, TOAST_BUTTON_NAMES[idx]))
+        } else {
+            // --- Collapsed: single trigger pill ---
+            let pill_left = bg_right - TOAST_COLLAPSED_WIDTH;
+            let pill_top = bg_y;
+
+            if mx >= pill_left
+                && mx < pill_left + TOAST_COLLAPSED_WIDTH
+                && my >= pill_top
+                && my < pill_top + TOAST_HEIGHT
+            {
+                Some((hovered_id, "trigger"))
+            } else {
+                None
+            }
+        }
     }
 }
 

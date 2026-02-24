@@ -1,3 +1,4 @@
+use crate::customglyph::{BlockAlpha, BlockCoord, Poly, PolyCommand, PolyStyle};
 use crate::quad::{HeapQuadAllocator, QuadTrait, TripleLayerQuadAllocator};
 use crate::selection::SelectionRange;
 use crate::termwindow::box_model::*;
@@ -21,6 +22,144 @@ use terminaler_dynamic::Value;
 use terminaler_term::color::{ColorAttribute, ColorPalette};
 use terminaler_term::{Line, StableRowIndex};
 use window::color::LinearRgba;
+
+// ---------------------------------------------------------------------------
+// Overlay icon definitions.  Close and move-to-tab use poly_quad (single
+// shapes with no thin gaps — they rasterise correctly at any size).  Layout
+// icons use filled_rectangle (direct GPU quads — no rasterisation).
+// ---------------------------------------------------------------------------
+
+/// Shorthand for a filled Poly with Full intensity.
+macro_rules! filled_poly {
+    ($path:expr) => {
+        Poly {
+            path: $path,
+            intensity: BlockAlpha::Full,
+            style: PolyStyle::Fill,
+        }
+    };
+}
+
+/// Generates a 10-element PolyCommand array for a rounded rectangle.
+macro_rules! rounded_rect_path {
+    ($x:expr, $y:expr, $w:expr, $h:expr, $r:expr, $d:expr) => {
+        [
+            PolyCommand::MoveTo(BlockCoord::Frac($x + $r, $d), BlockCoord::Frac($y, $d)),
+            PolyCommand::LineTo(BlockCoord::Frac($x + $w - $r, $d), BlockCoord::Frac($y, $d)),
+            PolyCommand::QuadTo {
+                control: (BlockCoord::Frac($x + $w, $d), BlockCoord::Frac($y, $d)),
+                to: (BlockCoord::Frac($x + $w, $d), BlockCoord::Frac($y + $r, $d)),
+            },
+            PolyCommand::LineTo(BlockCoord::Frac($x + $w, $d), BlockCoord::Frac($y + $h - $r, $d)),
+            PolyCommand::QuadTo {
+                control: (BlockCoord::Frac($x + $w, $d), BlockCoord::Frac($y + $h, $d)),
+                to: (BlockCoord::Frac($x + $w - $r, $d), BlockCoord::Frac($y + $h, $d)),
+            },
+            PolyCommand::LineTo(BlockCoord::Frac($x + $r, $d), BlockCoord::Frac($y + $h, $d)),
+            PolyCommand::QuadTo {
+                control: (BlockCoord::Frac($x, $d), BlockCoord::Frac($y + $h, $d)),
+                to: (BlockCoord::Frac($x, $d), BlockCoord::Frac($y + $h - $r, $d)),
+            },
+            PolyCommand::LineTo(BlockCoord::Frac($x, $d), BlockCoord::Frac($y + $r, $d)),
+            PolyCommand::QuadTo {
+                control: (BlockCoord::Frac($x, $d), BlockCoord::Frac($y, $d)),
+                to: (BlockCoord::Frac($x + $r, $d), BlockCoord::Frac($y, $d)),
+            },
+            PolyCommand::Close,
+        ]
+    };
+}
+
+// -- Close icon: two diagonal parallelograms forming an X (36×36) --
+const ICON_CLOSE: &[Poly] = &[
+    // Top-left → bottom-right diagonal
+    filled_poly!(&[
+        PolyCommand::MoveTo(BlockCoord::Frac(10, 36), BlockCoord::Frac(7, 36)),
+        PolyCommand::LineTo(BlockCoord::Frac(29, 36), BlockCoord::Frac(26, 36)),
+        PolyCommand::LineTo(BlockCoord::Frac(26, 36), BlockCoord::Frac(29, 36)),
+        PolyCommand::LineTo(BlockCoord::Frac(7, 36), BlockCoord::Frac(10, 36)),
+        PolyCommand::Close,
+    ]),
+    // Top-right → bottom-left diagonal
+    filled_poly!(&[
+        PolyCommand::MoveTo(BlockCoord::Frac(26, 36), BlockCoord::Frac(7, 36)),
+        PolyCommand::LineTo(BlockCoord::Frac(7, 36), BlockCoord::Frac(26, 36)),
+        PolyCommand::LineTo(BlockCoord::Frac(10, 36), BlockCoord::Frac(29, 36)),
+        PolyCommand::LineTo(BlockCoord::Frac(29, 36), BlockCoord::Frac(10, 36)),
+        PolyCommand::Close,
+    ]),
+];
+
+// ---------------------------------------------------------------------------
+// Toast toolbar constants (pub(crate) for hit-testing in mouseevent.rs)
+// ---------------------------------------------------------------------------
+pub(crate) const TOAST_BTN_SIZE: f32 = 30.0;
+pub(crate) const TOAST_ICON_SIZE: f32 = 24.0;
+pub(crate) const TOAST_ICON_INSET: f32 = (TOAST_BTN_SIZE - TOAST_ICON_SIZE) / 2.0;
+pub(crate) const TOAST_GAP: f32 = 2.0;
+pub(crate) const TOAST_PADDING: f32 = 4.0;
+pub(crate) const TOAST_COUNT: usize = 9;
+/// Total width: padding + 9*btn + 8*gap + padding
+pub(crate) const TOAST_WIDTH: f32 =
+    TOAST_PADDING * 2.0 + TOAST_COUNT as f32 * TOAST_BTN_SIZE + (TOAST_COUNT - 1) as f32 * TOAST_GAP;
+/// Total height: padding + btn + padding
+pub(crate) const TOAST_HEIGHT: f32 = TOAST_PADDING * 2.0 + TOAST_BTN_SIZE;
+/// Collapsed trigger: padding + one button + padding
+pub(crate) const TOAST_COLLAPSED_WIDTH: f32 = TOAST_PADDING * 2.0 + TOAST_BTN_SIZE;
+/// Extra margin around expanded toast before auto-collapse
+pub(crate) const TOAST_COLLAPSE_MARGIN: f32 = 8.0;
+/// Minimum pane pixel width to show the toast (collapsed trigger fits in small panes)
+pub(crate) const TOAST_MIN_PANE_WIDTH: f32 = TOAST_COLLAPSED_WIDTH + 10.0;
+/// Minimum pane pixel height to show the toast
+pub(crate) const TOAST_MIN_PANE_HEIGHT: f32 = TOAST_HEIGHT + 10.0;
+
+pub(crate) const TOAST_BUTTON_NAMES: [&str; TOAST_COUNT] = [
+    "close",
+    "hsplit",
+    "vsplit",
+    "quad",
+    "triple-right",
+    "triple-bottom",
+    "dev",
+    "claude-code",
+    "move-to-tab",
+];
+
+// ---------------------------------------------------------------------------
+// Layout icons as fractional rectangles — rendered directly as GPU quads via
+// filled_rectangle, bypassing the poly rasteriser entirely.  Each rect is
+// (x_frac, y_frac, w_frac, h_frac) relative to the icon area.
+// ---------------------------------------------------------------------------
+const TOAST_LAYOUT_RECTS: [&[(f32, f32, f32, f32)]; 7] = [
+    // hsplit: two vertical halves
+    &[(0.0, 0.0, 0.46, 1.0), (0.54, 0.0, 0.46, 1.0)],
+    // vsplit: two horizontal halves
+    &[(0.0, 0.0, 1.0, 0.46), (0.0, 0.54, 1.0, 0.46)],
+    // quad: four quadrants
+    &[(0.0, 0.0, 0.46, 0.46), (0.54, 0.0, 0.46, 0.46),
+      (0.0, 0.54, 0.46, 0.46), (0.54, 0.54, 0.46, 0.46)],
+    // triple-right: big left + two right
+    &[(0.0, 0.0, 0.62, 1.0), (0.71, 0.0, 0.29, 0.46), (0.71, 0.54, 0.29, 0.46)],
+    // triple-bottom: big top + two bottom
+    &[(0.0, 0.0, 1.0, 0.62), (0.0, 0.71, 0.46, 0.29), (0.54, 0.71, 0.46, 0.29)],
+    // dev: left + right-top big + right-bottom small
+    &[(0.0, 0.0, 0.46, 1.0), (0.54, 0.0, 0.46, 0.62), (0.54, 0.71, 0.46, 0.29)],
+    // claude-code: big top + thin bottom
+    &[(0.0, 0.0, 1.0, 0.71), (0.0, 0.79, 1.0, 0.21)],
+];
+
+// -- Move-to-tab icon: upward arrow (triangle head + rounded shaft) --
+const ICON_MOVE_TAB: &[Poly] = &[
+    // Arrowhead (triangle pointing up)
+    filled_poly!(&[
+        PolyCommand::MoveTo(BlockCoord::Frac(18, 36), BlockCoord::Frac(2, 36)),
+        PolyCommand::LineTo(BlockCoord::Frac(32, 36), BlockCoord::Frac(18, 36)),
+        PolyCommand::LineTo(BlockCoord::Frac(4, 36), BlockCoord::Frac(18, 36)),
+        PolyCommand::Close,
+    ]),
+    // Shaft (rounded rect, overlaps into arrowhead)
+    filled_poly!(&rounded_rect_path!(14, 16, 8, 18, 3, 36)),
+];
 
 impl crate::TermWindow {
     fn paint_pane_box_model(&mut self, pos: &PositionedPane) -> anyhow::Result<()> {
@@ -227,12 +366,16 @@ impl crate::TermWindow {
         // Multiple concentric bands with decreasing alpha create a feathered
         // edge effect that works well with Windows 11 rounded corners.
         if pos.is_active {
-            let base_color = palette.cursor_border.to_linear();
-            let glow_width = 10.0_f32; // total glow depth in pixels
-            let bands: u32 = 7;
+            let base_color = window::color::LinearRgba(0.7, 0.7, 0.7, 1.0);
+            let glow_width = 4.0_f32; // total glow depth in pixels
+            let bands: u32 = 4;
             let band_size = glow_width / bands as f32;
-            let peak_alpha = 0.45_f32;
+            let peak_alpha = 0.55_f32;
             let r = &background_rect;
+            let glow_x = r.origin.x;
+            let glow_y = r.origin.y;
+            let glow_w = r.size.width;
+            let glow_h = r.size.height;
 
             for i in 0..bands {
                 let inset = i as f32 * band_size;
@@ -241,10 +384,10 @@ impl crate::TermWindow {
                 let alpha = peak_alpha * t * t;
                 let color = base_color.mul_alpha(alpha);
 
-                let x = r.origin.x + inset;
-                let y = r.origin.y + inset;
-                let w = (r.size.width - 2.0 * inset).max(0.0);
-                let h = (r.size.height - 2.0 * inset).max(0.0);
+                let x = glow_x + inset;
+                let y = glow_y + inset;
+                let w = (glow_w - 2.0 * inset).max(0.0);
+                let h = (glow_h - 2.0 * inset).max(0.0);
 
                 if w < band_size * 2.0 || h < band_size * 2.0 {
                     break;
@@ -283,7 +426,7 @@ impl crate::TermWindow {
         // do a per-pane scrollbar.  That will require more extensive
         // changes to ScrollHit, mouse positioning, PositionedPane
         // and tab size calculation.
-        if pos.is_active && self.show_scroll_bar {
+        if pos.is_active && self.show_scroll_bar && dims.scrollback_rows > dims.viewport_rows {
             let thumb_y_offset = top_bar_height as usize + border.top.get();
 
             let min_height = self.min_scroll_bar_height();
@@ -298,7 +441,7 @@ impl crate::TermWindow {
             );
             let abs_thumb_top = thumb_y_offset + info.top;
             let thumb_size = info.height;
-            let color = palette.scrollbar_thumb.to_linear();
+            let color = window::color::LinearRgba(0.6, 0.6, 0.6, 1.0);
 
             // Adjust the scrollbar thumb position
             let config = &self.config;
@@ -332,13 +475,14 @@ impl crate::TermWindow {
                 item_type: UIItemType::BelowScrollThumb,
             });
 
+            let thumb_width = padding.min(6.0);
             self.filled_rectangle(
                 layers,
                 2,
                 euclid::rect(
-                    thumb_x as f32,
+                    thumb_x as f32 + padding - thumb_width,
                     abs_thumb_top as f32,
-                    padding,
+                    thumb_width,
                     thumb_size as f32,
                 ),
                 color,
@@ -934,9 +1078,9 @@ impl crate::TermWindow {
         .context("paint_pane_remove_overlay dim")?;
 
         // 3×3 button grid centered in pane
-        // Each button 44×44px, 6px gaps → grid 144×144
-        let btn_size = 44.0f32;
-        let gap = 6.0f32;
+        // Each button 60×60px, 8px gaps → grid 196×196
+        let btn_size = 60.0f32;
+        let gap = 8.0f32;
         let cols = 3;
         let rows = 3;
         let grid_w = (cols as f32) * btn_size + ((cols - 1) as f32) * gap;
@@ -946,10 +1090,12 @@ impl crate::TermWindow {
         let grid_left = cx - grid_w / 2.0;
         let grid_top = cy - grid_h / 2.0;
 
-        let white = window::color::LinearRgba(1.0, 1.0, 1.0, 0.95);
+        let white = window::color::LinearRgba(1.0, 1.0, 1.0, 0.85);
         let close_bg = window::color::LinearRgba(0.85, 0.15, 0.15, 0.95);
         let layout_bg = window::color::LinearRgba(0.2, 0.25, 0.35, 0.95);
         let tab_bg = window::color::LinearRgba(0.15, 0.45, 0.65, 0.95);
+        let icon_sz: euclid::Size2D<f32, window::PixelUnit> = euclid::size2(48.0, 48.0);
+        let icon_area = 48.0f32;
 
         for row in 0..rows {
             for col in 0..cols {
@@ -957,6 +1103,7 @@ impl crate::TermWindow {
                 let bl = grid_left + col as f32 * (btn_size + gap);
                 let bt = grid_top + row as f32 * (btn_size + gap);
 
+                // Button background (filled rect)
                 let bg = match idx {
                     0 => close_bg,
                     8 => tab_bg,
@@ -968,88 +1115,230 @@ impl crate::TermWindow {
                     bg,
                 ).context("overlay button bg")?;
 
-                let ix = bl + 4.0; // interior origin x (4px padding)
-                let iy = bt + 4.0; // interior origin y
-                // Interior is 36×36
+                // Icon foreground (6px padding → 48×48 interior)
+                let ix = bl + 6.0;
+                let iy = bt + 6.0;
 
-                match idx {
-                    0 => {
-                        // Close: white × (diagonal cross) drawn as
-                        // small squares stepping along both diagonals
-                        let seg = 4.0f32; // square size
-                        let steps = 5u32; // number of squares per diagonal
-                        let span = 20.0f32; // total diagonal extent
-                        let bcx = bl + btn_size / 2.0;
-                        let bcy = bt + btn_size / 2.0;
-                        let start = -span / 2.0;
-                        let step_d = span / (steps - 1) as f32;
-                        for i in 0..steps {
-                            let d = start + i as f32 * step_d;
-                            // Top-left to bottom-right diagonal
-                            self.filled_rectangle(layers, 2,
-                                euclid::rect(bcx + d - seg / 2.0, bcy + d - seg / 2.0, seg, seg),
-                                white,
-                            )?;
-                            // Top-right to bottom-left diagonal
-                            self.filled_rectangle(layers, 2,
-                                euclid::rect(bcx - d - seg / 2.0, bcy + d - seg / 2.0, seg, seg),
-                                white,
-                            )?;
-                        }
+                if idx == 0 {
+                    // Close: X shape via poly_quad
+                    self.poly_quad(
+                        layers, 2, euclid::point2(ix, iy),
+                        ICON_CLOSE, 1, icon_sz, white,
+                    ).context("overlay close icon")?;
+                } else if idx == 8 {
+                    // Move-to-tab: arrow via poly_quad
+                    self.poly_quad(
+                        layers, 2, euclid::point2(ix, iy),
+                        ICON_MOVE_TAB, 1, icon_sz, white,
+                    ).context("overlay move-tab icon")?;
+                } else if idx >= 1 && idx <= 7 {
+                    // Layout icons: filled_rectangle quads
+                    for &(xf, yf, wf, hf) in TOAST_LAYOUT_RECTS[idx - 1] {
+                        self.filled_rectangle(
+                            layers, 2,
+                            euclid::rect(
+                                ix + xf * icon_area,
+                                iy + yf * icon_area,
+                                wf * icon_area,
+                                hf * icon_area,
+                            ),
+                            white,
+                        ).context("overlay layout icon")?;
                     }
-                    1 => {
-                        // hsplit: two vertical halves
-                        self.filled_rectangle(layers, 2, euclid::rect(ix, iy, 17.0, 36.0), white)?;
-                        self.filled_rectangle(layers, 2, euclid::rect(ix + 19.0, iy, 17.0, 36.0), white)?;
-                    }
-                    2 => {
-                        // vsplit: two horizontal halves
-                        self.filled_rectangle(layers, 2, euclid::rect(ix, iy, 36.0, 17.0), white)?;
-                        self.filled_rectangle(layers, 2, euclid::rect(ix, iy + 19.0, 36.0, 17.0), white)?;
-                    }
-                    3 => {
-                        // quad: four quadrants
-                        self.filled_rectangle(layers, 2, euclid::rect(ix, iy, 17.0, 17.0), white)?;
-                        self.filled_rectangle(layers, 2, euclid::rect(ix + 19.0, iy, 17.0, 17.0), white)?;
-                        self.filled_rectangle(layers, 2, euclid::rect(ix, iy + 19.0, 17.0, 17.0), white)?;
-                        self.filled_rectangle(layers, 2, euclid::rect(ix + 19.0, iy + 19.0, 17.0, 17.0), white)?;
-                    }
-                    4 => {
-                        // triple-right: big left, two stacked right
-                        self.filled_rectangle(layers, 2, euclid::rect(ix, iy, 21.0, 36.0), white)?;
-                        self.filled_rectangle(layers, 2, euclid::rect(ix + 23.0, iy, 13.0, 17.0), white)?;
-                        self.filled_rectangle(layers, 2, euclid::rect(ix + 23.0, iy + 19.0, 13.0, 17.0), white)?;
-                    }
-                    5 => {
-                        // triple-bottom: big top, two side-by-side bottom
-                        self.filled_rectangle(layers, 2, euclid::rect(ix, iy, 36.0, 21.0), white)?;
-                        self.filled_rectangle(layers, 2, euclid::rect(ix, iy + 23.0, 17.0, 13.0), white)?;
-                        self.filled_rectangle(layers, 2, euclid::rect(ix + 19.0, iy + 23.0, 17.0, 13.0), white)?;
-                    }
-                    6 => {
-                        // dev: big left, two stacked right (top bigger)
-                        self.filled_rectangle(layers, 2, euclid::rect(ix, iy, 19.0, 36.0), white)?;
-                        self.filled_rectangle(layers, 2, euclid::rect(ix + 21.0, iy, 15.0, 21.0), white)?;
-                        self.filled_rectangle(layers, 2, euclid::rect(ix + 21.0, iy + 23.0, 15.0, 13.0), white)?;
-                    }
-                    7 => {
-                        // claude-code: big top, thin bottom
-                        self.filled_rectangle(layers, 2, euclid::rect(ix, iy, 36.0, 26.0), white)?;
-                        self.filled_rectangle(layers, 2, euclid::rect(ix, iy + 28.0, 36.0, 8.0), white)?;
-                    }
-                    8 => {
-                        // move-to-tab: upward arrow (pop out to new tab)
-                        // Arrow shaft: centered vertical bar
-                        self.filled_rectangle(layers, 2, euclid::rect(ix + 15.0, iy + 10.0, 6.0, 22.0), white)?;
-                        // Arrow head: three stacked rects forming a chevron
-                        self.filled_rectangle(layers, 2, euclid::rect(ix + 11.0, iy + 10.0, 14.0, 4.0), white)?;
-                        self.filled_rectangle(layers, 2, euclid::rect(ix + 7.0, iy + 14.0, 6.0, 4.0), white)?;
-                        self.filled_rectangle(layers, 2, euclid::rect(ix + 23.0, iy + 14.0, 6.0, 4.0), white)?;
-                        self.filled_rectangle(layers, 2, euclid::rect(ix + 3.0, iy + 18.0, 6.0, 4.0), white)?;
-                        self.filled_rectangle(layers, 2, euclid::rect(ix + 27.0, iy + 18.0, 6.0, 4.0), white)?;
-                    }
-                    _ => {}
                 }
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn paint_toast_toolbar(
+        &mut self,
+        layers: &mut crate::quad::TripleLayerQuadAllocator,
+    ) -> anyhow::Result<()> {
+        let hovered_id = match self.hovered_pane_id {
+            Some(id) => id,
+            None => return Ok(()),
+        };
+
+        // Don't show toast if long-press overlay is active on the same pane
+        if self
+            .pane_long_press
+            .as_ref()
+            .map_or(false, |lp| lp.revealed && lp.pane_id == hovered_id)
+        {
+            return Ok(());
+        }
+
+        // Don't show toast during tab drag
+        if self
+            .tab_drag
+            .as_ref()
+            .map_or(false, |td| td.threshold_exceeded)
+        {
+            return Ok(());
+        }
+
+        let panes = self.get_panes_to_render();
+        let target_pos = match panes.iter().find(|p| p.pane.pane_id() == hovered_id) {
+            Some(pos) => pos,
+            None => return Ok(()),
+        };
+
+        let cell_width = self.render_metrics.cell_size.width as f32;
+        let cell_height = self.render_metrics.cell_size.height as f32;
+        let (padding_left, padding_top) = self.padding_left_top();
+
+        let tab_bar_height = if self.show_tab_bar {
+            self.tab_bar_pixel_height()
+                .context("tab_bar_pixel_height")?
+        } else {
+            0.
+        };
+        let top_bar_height = if self.config.tab_bar_at_bottom {
+            0.0
+        } else {
+            tab_bar_height
+        };
+
+        let border = self.get_os_border();
+        let top_pixel_y = top_bar_height + padding_top + border.top.get() as f32;
+
+        // Compute true visual pane bounds (same logic as build_pane background_rect)
+        let pos = target_pos;
+
+        let (bg_x, _width_delta) = if pos.left == 0 {
+            (0.0f32, padding_left + border.left.get() as f32 + (cell_width / 2.0))
+        } else {
+            (
+                padding_left + border.left.get() as f32 - (cell_width / 2.0)
+                    + (pos.left as f32 * cell_width),
+                cell_width,
+            )
+        };
+        let bg_y = if pos.top == 0 {
+            top_pixel_y - padding_top
+        } else {
+            top_pixel_y + (pos.top as f32 * cell_height) - (cell_height / 2.0)
+        };
+        let bg_right = if pos.left + pos.width >= self.terminal_size.cols as usize {
+            self.dimensions.pixel_width as f32
+        } else {
+            bg_x + (pos.width as f32 * cell_width) + _width_delta
+        };
+        let bg_bottom = if pos.top + pos.height >= self.terminal_size.rows as usize {
+            self.dimensions.pixel_height as f32
+        } else {
+            let height_delta = if pos.top == 0 {
+                padding_top + (cell_height / 2.0)
+            } else {
+                cell_height
+            };
+            bg_y + (pos.height as f32 * cell_height) + height_delta
+        };
+
+        let pane_visual_width = bg_right - bg_x;
+        let pane_visual_height = bg_bottom - bg_y;
+
+        // Skip if pane too small
+        if pane_visual_width < TOAST_MIN_PANE_WIDTH || pane_visual_height < TOAST_MIN_PANE_HEIGHT {
+            return Ok(());
+        }
+
+        let is_expanded = self.toast_expanded_for == Some(hovered_id)
+            && pane_visual_width >= TOAST_WIDTH + 10.0;
+
+        let bg_color = window::color::LinearRgba(0.12, 0.14, 0.12, 0.55);
+        let btn_bg = window::color::LinearRgba(1.0, 1.0, 1.0, 0.10);
+        let white = window::color::LinearRgba(1.0, 1.0, 1.0, 0.92);
+        let icon_sz: euclid::Size2D<f32, window::PixelUnit> =
+            euclid::size2(TOAST_ICON_SIZE, TOAST_ICON_SIZE);
+
+        if is_expanded {
+            // --- Expanded: full 9-button toolbar ---
+            let toast_left = bg_right - TOAST_WIDTH;
+            let toast_top = bg_y;
+
+            self.filled_rectangle(
+                layers, 2,
+                euclid::rect(toast_left, toast_top, TOAST_WIDTH, TOAST_HEIGHT),
+                bg_color,
+            ).context("toast toolbar bg")?;
+
+            let close_btn_bg = window::color::LinearRgba(0.85, 0.2, 0.2, 0.45);
+
+            for i in 0..TOAST_COUNT {
+                let bx = toast_left + TOAST_PADDING + i as f32 * (TOAST_BTN_SIZE + TOAST_GAP);
+                let by = toast_top + TOAST_PADDING;
+
+                let bg = if i == 0 { close_btn_bg } else { btn_bg };
+                self.filled_rectangle(
+                    layers, 2,
+                    euclid::rect(bx, by, TOAST_BTN_SIZE, TOAST_BTN_SIZE),
+                    bg,
+                ).context("toast btn bg")?;
+
+                let ix = bx + TOAST_ICON_INSET;
+                let iy = by + TOAST_ICON_INSET;
+
+                if i == 0 {
+                    self.poly_quad(
+                        layers, 2, euclid::point2(ix, iy),
+                        ICON_CLOSE, 1, icon_sz, white,
+                    ).context("toast close icon")?;
+                } else if i == 8 {
+                    self.poly_quad(
+                        layers, 2, euclid::point2(ix, iy),
+                        ICON_MOVE_TAB, 1, icon_sz, white,
+                    ).context("toast move-tab icon")?;
+                } else {
+                    for &(xf, yf, wf, hf) in TOAST_LAYOUT_RECTS[i - 1] {
+                        self.filled_rectangle(
+                            layers, 2,
+                            euclid::rect(
+                                ix + xf * TOAST_ICON_SIZE,
+                                iy + yf * TOAST_ICON_SIZE,
+                                wf * TOAST_ICON_SIZE,
+                                hf * TOAST_ICON_SIZE,
+                            ),
+                            white,
+                        ).context("toast layout icon")?;
+                    }
+                }
+            }
+        } else {
+            // --- Collapsed: single trigger pill (quad layout icon) ---
+            let pill_left = bg_right - TOAST_COLLAPSED_WIDTH;
+            let pill_top = bg_y;
+
+            self.filled_rectangle(
+                layers, 2,
+                euclid::rect(pill_left, pill_top, TOAST_COLLAPSED_WIDTH, TOAST_HEIGHT),
+                bg_color,
+            ).context("toast trigger bg")?;
+
+            let bx = pill_left + TOAST_PADDING;
+            let by = pill_top + TOAST_PADDING;
+            self.filled_rectangle(
+                layers, 2,
+                euclid::rect(bx, by, TOAST_BTN_SIZE, TOAST_BTN_SIZE),
+                btn_bg,
+            ).context("toast trigger btn bg")?;
+
+            // Quad layout icon (index 2 = TOAST_LAYOUT_RECTS[2])
+            let ix = bx + TOAST_ICON_INSET;
+            let iy = by + TOAST_ICON_INSET;
+            for &(xf, yf, wf, hf) in TOAST_LAYOUT_RECTS[2] {
+                self.filled_rectangle(
+                    layers, 2,
+                    euclid::rect(
+                        ix + xf * TOAST_ICON_SIZE,
+                        iy + yf * TOAST_ICON_SIZE,
+                        wf * TOAST_ICON_SIZE,
+                        hf * TOAST_ICON_SIZE,
+                    ),
+                    white,
+                ).context("toast trigger icon")?;
             }
         }
 
