@@ -42,7 +42,8 @@ impl super::TermWindow {
             | UIItemType::AboveScrollThumb
             | UIItemType::BelowScrollThumb
             | UIItemType::ScrollThumb
-            | UIItemType::Split(_) => {}
+            | UIItemType::Split(_)
+            | UIItemType::ProfileDropdownItem(_) => {}
         }
     }
 
@@ -53,7 +54,8 @@ impl super::TermWindow {
             | UIItemType::AboveScrollThumb
             | UIItemType::BelowScrollThumb
             | UIItemType::ScrollThumb
-            | UIItemType::Split(_) => {}
+            | UIItemType::Split(_)
+            | UIItemType::ProfileDropdownItem(_) => {}
         }
     }
 
@@ -297,6 +299,25 @@ impl super::TermWindow {
             None
         };
 
+        // Dismiss profile dropdown on any click outside dropdown items
+        if matches!(event.kind, WMEK::Press(_)) {
+            if let Some(modal) = self.get_modal() {
+                if modal
+                    .downcast_ref::<crate::termwindow::profile_dropdown::ProfileDropdown>()
+                    .is_some()
+                {
+                    let is_dropdown_item = ui_item.as_ref().map_or(false, |item| {
+                        matches!(item.item_type, UIItemType::ProfileDropdownItem(_))
+                    });
+                    if !is_dropdown_item {
+                        self.cancel_modal();
+                        context.invalidate();
+                        // Don't return — let the click propagate to whatever was under it
+                    }
+                }
+            }
+        }
+
         if let Some(item) = ui_item.clone() {
             if capture_mouse {
                 self.current_mouse_capture = Some(MouseCapture::UI);
@@ -319,13 +340,11 @@ impl super::TermWindow {
                 capture_mouse,
             );
 
-            // Right double-click in terminal area: show pane layout overlay
-            if matches!(event.kind, WMEK::Press(MousePress::Right)) {
-                if let Some(ref click) = self.last_mouse_click {
-                    if click.streak >= 2 && click.button == MouseButton::Right {
-                        self.start_pane_overlay(&event);
-                    }
-                }
+            // Ctrl+Right-click in terminal area: show pane layout overlay
+            if matches!(event.kind, WMEK::Press(MousePress::Right))
+                && event.modifiers.contains(Modifiers::CTRL)
+            {
+                self.start_pane_overlay(&event);
             }
 
         }
@@ -473,6 +492,9 @@ impl super::TermWindow {
             UIItemType::CloseTab(idx) => {
                 self.mouse_event_close_tab(idx, event, context);
             }
+            UIItemType::ProfileDropdownItem(idx) => {
+                self.mouse_event_profile_dropdown_item(idx, event, context);
+            }
         }
     }
 
@@ -497,9 +519,14 @@ impl super::TermWindow {
             Some(pane) => pane,
             None => return,
         };
-        // new-tab-button-click Lua event removed; always use default action
+        // Left click: use custom default profile if set, otherwise current domain
+        // Right click: show full launcher
         let action = match button {
-            MousePress::Left => Some(KeyAssignment::SpawnTab(SpawnTabDomain::CurrentPaneDomain)),
+            MousePress::Left => Some(
+                self.default_profile_action
+                    .clone()
+                    .unwrap_or(KeyAssignment::SpawnTab(SpawnTabDomain::CurrentPaneDomain)),
+            ),
             MousePress::Right => Some(KeyAssignment::ShowLauncher),
             MousePress::Middle => None,
         };
@@ -514,6 +541,61 @@ impl super::TermWindow {
         }
     }
 
+    fn do_new_tab_dropdown_click(&mut self) {
+        // Find the chevron button's UIItem to anchor the dropdown position
+        let anchor = match self.last_ui_item.clone() {
+            Some(item) => item,
+            None => return,
+        };
+        let modal = crate::termwindow::profile_dropdown::ProfileDropdown::new(self, &anchor);
+        self.set_modal(std::rc::Rc::new(modal));
+    }
+
+    fn mouse_event_profile_dropdown_item(
+        &mut self,
+        idx: usize,
+        event: MouseEvent,
+        context: &dyn WindowOps,
+    ) {
+        use crate::termwindow::profile_dropdown::ProfileDropdown;
+
+        match event.kind {
+            WMEK::Press(MousePress::Left) => {
+                // Left click: spawn tab with this profile
+                if let Some(modal) = self.get_modal() {
+                    if let Some(dropdown) = modal.downcast_ref::<ProfileDropdown>() {
+                        if let Some(entry) = dropdown.entries.get(idx) {
+                            let action = entry.action.clone();
+                            self.cancel_modal();
+                            if let Some(pane) = self.get_active_pane_or_overlay() {
+                                if let Err(err) = self.perform_key_assignment(&pane, &action) {
+                                    log::error!("Error spawning from profile dropdown: {err:#}");
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            WMEK::Press(MousePress::Right) => {
+                // Right click: set as default profile for "+" button
+                if let Some(modal) = self.get_modal() {
+                    if let Some(dropdown) = modal.downcast_ref::<ProfileDropdown>() {
+                        if let Some(entry) = dropdown.entries.get(idx) {
+                            self.default_profile_action = Some(entry.action.clone());
+                            log::info!(
+                                "Default profile set to: {}",
+                                entry.label
+                            );
+                            self.cancel_modal();
+                            context.invalidate();
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
     pub fn mouse_event_tab_bar(
         &mut self,
         item: TabBarItem,
@@ -522,6 +604,9 @@ impl super::TermWindow {
     ) {
         match event.kind {
             WMEK::Press(MousePress::Left) => match item {
+                TabBarItem::RemoteAccess { .. } => {
+                    self.toggle_remote_access();
+                }
                 TabBarItem::Tab { tab_idx, .. } => {
                     // Capture the currently active tab before switching —
                     // this is the tab we'll drop into if a drag occurs.
@@ -542,6 +627,9 @@ impl super::TermWindow {
                 }
                 TabBarItem::NewTabButton { .. } => {
                     self.do_new_tab_button_click(MousePress::Left);
+                }
+                TabBarItem::NewTabDropdown => {
+                    self.do_new_tab_dropdown_click();
                 }
                 TabBarItem::None | TabBarItem::LeftStatus | TabBarItem::RightStatus => {
                     let maximized = self
@@ -596,14 +684,24 @@ impl super::TermWindow {
                 TabBarItem::None
                 | TabBarItem::LeftStatus
                 | TabBarItem::RightStatus
+                | TabBarItem::NewTabDropdown
+                | TabBarItem::RemoteAccess { .. }
                 | TabBarItem::WindowButton(_) => {}
             },
             WMEK::Press(MousePress::Right) => match item {
+                TabBarItem::RemoteAccess { .. } => {
+                    if self.web_server_handle.is_some() {
+                        self.copy_remote_url_to_clipboard();
+                    }
+                }
                 TabBarItem::Tab { .. } => {
                     self.show_tab_navigator();
                 }
                 TabBarItem::NewTabButton { .. } => {
                     self.do_new_tab_button_click(MousePress::Right);
+                }
+                TabBarItem::NewTabDropdown => {
+                    self.do_new_tab_dropdown_click();
                 }
                 TabBarItem::None
                 | TabBarItem::LeftStatus
@@ -626,7 +724,9 @@ impl super::TermWindow {
                 }
                 TabBarItem::WindowButton(_)
                 | TabBarItem::Tab { .. }
-                | TabBarItem::NewTabButton { .. } => {}
+                | TabBarItem::NewTabButton { .. }
+                | TabBarItem::NewTabDropdown
+                | TabBarItem::RemoteAccess { .. } => {}
             },
             WMEK::VertWheel(n) => {
                 if self.config.mouse_wheel_scrolls_tabs {
@@ -909,15 +1009,24 @@ impl super::TermWindow {
             || event.coords.y < 0
             || event.coords.y as usize > self.dimensions.pixel_height;
 
-        context.set_cursor(Some(if self.current_highlight.is_some() {
-            // When hovering over a hyperlink, show an appropriate
-            // mouse cursor to give the cue that it is clickable
-            MouseCursor::Hand
-        } else if pane.is_mouse_grabbed() || outside_window {
-            MouseCursor::Arrow
-        } else {
-            MouseCursor::Text
-        }));
+        context.set_cursor(Some(
+            if self.pane_long_press.as_ref().map_or(false, |lp| lp.revealed) {
+                let pane_id = self.pane_long_press.as_ref().unwrap().pane_id;
+                if self.overlay_button_at(&event, pane_id).is_some() {
+                    MouseCursor::Hand
+                } else {
+                    MouseCursor::Arrow
+                }
+            } else if self.current_highlight.is_some() {
+                // When hovering over a hyperlink, show an appropriate
+                // mouse cursor to give the cue that it is clickable
+                MouseCursor::Hand
+            } else if pane.is_mouse_grabbed() || outside_window {
+                MouseCursor::Arrow
+            } else {
+                MouseCursor::Text
+            },
+        ));
 
         let event_trigger_type = match &event.kind {
             WMEK::Press(press) => {
@@ -1390,8 +1499,8 @@ impl super::TermWindow {
             let pane_width = pos.width as f32 * cell_width;
             let pane_height = pos.height as f32 * cell_height;
 
-            let btn_size = 44.0f32;
-            let gap = 6.0f32;
+            let btn_size = 60.0f32;
+            let gap = 8.0f32;
             let cols = 3usize;
             let rows = 3usize;
             let grid_w = cols as f32 * btn_size + (cols - 1) as f32 * gap;

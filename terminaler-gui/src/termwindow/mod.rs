@@ -76,6 +76,7 @@ pub mod keyevent;
 pub mod modal;
 mod mouseevent;
 pub mod palette;
+pub mod profile_dropdown;
 pub mod paneselect;
 mod prevcursor;
 pub mod render;
@@ -184,6 +185,7 @@ pub enum UIItemType {
     ScrollThumb,
     BelowScrollThumb,
     Split(PositionedSplit),
+    ProfileDropdownItem(usize),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -388,6 +390,10 @@ pub struct TermWindow {
     pub pane_long_press: Option<PaneLongPress>,
 
     modal: RefCell<Option<Rc<dyn Modal>>>,
+
+    /// Custom default profile action for the "+" button (set via dropdown).
+    /// If None, falls back to SpawnTab(CurrentPaneDomain).
+    pub default_profile_action: Option<KeyAssignment>,
 
     event_states: HashMap<String, EventState>,
     pub current_event: Option<Value>,
@@ -766,6 +772,7 @@ impl TermWindow {
             is_click_to_focus_window: false,
             key_table_state: KeyTableState::default(),
             modal: RefCell::new(None),
+            default_profile_action: None,
             opengl_info: None,
         };
 

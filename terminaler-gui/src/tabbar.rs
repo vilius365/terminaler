@@ -53,6 +53,7 @@ pub enum TabBarItem {
     RightStatus,
     Tab { tab_idx: usize, active: bool },
     NewTabButton,
+    NewTabDropdown,
     RemoteAccess { active: bool },
     WindowButton(IntegratedTitleButton),
 }
@@ -363,8 +364,9 @@ impl TabBarState {
         let titles_len: usize = tab_titles.iter().map(|s| s.len).sum();
         let number_of_tabs = tab_titles.len();
 
+        let dropdown_width = if config.show_new_tab_button_in_tab_bar { 3 } else { 0 };
         let available_cells =
-            title_width.saturating_sub(number_of_tabs.saturating_sub(1) + new_tab.len());
+            title_width.saturating_sub(number_of_tabs.saturating_sub(1) + new_tab.len() + dropdown_width);
         let tab_width_max = if config.use_fancy_tab_bar || available_cells >= titles_len {
             // We can render each title with its full width
             usize::max_value()
@@ -488,6 +490,30 @@ impl TabBarState {
             });
 
             x += width;
+
+            // Dropdown chevron next to "+"
+            let dropdown_label = " \u{25BE} ";
+            let hover = is_tab_hover(mouse_x, x, unicode_column_width(dropdown_label, None));
+            let dropdown_line = parse_status_text(
+                dropdown_label,
+                if config.use_fancy_tab_bar {
+                    CellAttributes::default()
+                } else if hover {
+                    new_tab_hover_attrs.clone()
+                } else {
+                    new_tab_attrs.clone()
+                },
+            );
+            let dropdown_start = x;
+            let dropdown_w = dropdown_line.len();
+            line.append_line(dropdown_line.clone(), SEQ_ZERO);
+            items.push(TabEntry {
+                item: TabBarItem::NewTabDropdown,
+                title: dropdown_line,
+                x: dropdown_start,
+                width: dropdown_w,
+            });
+            x += dropdown_w;
         }
 
         // Compute remote button dimensions for right-aligned placement

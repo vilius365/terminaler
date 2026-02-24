@@ -51,6 +51,17 @@ const PLUS_BUTTON: &[Poly] = &[
     },
 ];
 
+const CHEVRON_DOWN: &[Poly] = &[Poly {
+    path: &[
+        PolyCommand::MoveTo(BlockCoord::Zero, BlockCoord::Frac(1, 4)),
+        PolyCommand::LineTo(BlockCoord::Frac(1, 2), BlockCoord::Frac(3, 4)),
+        PolyCommand::LineTo(BlockCoord::One, BlockCoord::Frac(1, 4)),
+        PolyCommand::Close,
+    ],
+    intensity: BlockAlpha::Full,
+    style: PolyStyle::Fill,
+}];
+
 impl crate::TermWindow {
     pub fn invalidate_fancy_tab_bar(&mut self) {
         self.fancy_tab_bar.take();
@@ -152,6 +163,42 @@ impl crate::TermWindow {
                 .padding(BoxDimension {
                     left: Dimension::Cells(0.5),
                     right: Dimension::Cells(0.5),
+                    top: Dimension::Cells(0.2),
+                    bottom: Dimension::Cells(0.25),
+                })
+                .border(BoxDimension::new(Dimension::Pixels(1.)))
+                .colors(ElementColors {
+                    border: BorderColor::default(),
+                    bg: new_tab.bg_color.to_linear().into(),
+                    text: new_tab.fg_color.to_linear().into(),
+                })
+                .hover_colors(Some(ElementColors {
+                    border: BorderColor::default(),
+                    bg: new_tab_hover.bg_color.to_linear().into(),
+                    text: new_tab_hover.fg_color.to_linear().into(),
+                })),
+                TabBarItem::NewTabDropdown => Element::new(
+                    &font,
+                    ElementContent::Poly {
+                        line_width: metrics.underline_height.max(2),
+                        poly: SizedPoly {
+                            poly: CHEVRON_DOWN,
+                            width: Dimension::Pixels(metrics.cell_size.height as f32 / 3.),
+                            height: Dimension::Pixels(metrics.cell_size.height as f32 / 3.),
+                        },
+                    },
+                )
+                .vertical_align(VerticalAlign::Middle)
+                .item_type(UIItemType::TabBar(item.item.clone()))
+                .margin(BoxDimension {
+                    left: Dimension::Cells(0.),
+                    right: Dimension::Cells(0.),
+                    top: Dimension::Cells(0.2),
+                    bottom: Dimension::Cells(0.),
+                })
+                .padding(BoxDimension {
+                    left: Dimension::Cells(0.25),
+                    right: Dimension::Cells(0.25),
                     top: Dimension::Cells(0.2),
                     bottom: Dimension::Cells(0.25),
                 })
@@ -368,7 +415,7 @@ impl crate::TermWindow {
         let num_tabs: f32 = items
             .iter()
             .map(|item| match item.item {
-                TabBarItem::NewTabButton | TabBarItem::Tab { .. } => 1.,
+                TabBarItem::NewTabButton | TabBarItem::NewTabDropdown | TabBarItem::Tab { .. } => 1.,
                 _ => 0.,
             })
             .sum();
