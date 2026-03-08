@@ -78,20 +78,34 @@ impl super::TermWindow {
 
         let (padding_left, padding_top) = self.padding_left_top();
 
+        // Use pane-specific scaled cell size when the pane has a custom font
+        // scale (e.g. from Ctrl+scroll zoom). The renderer uses scaled metrics,
+        // so mouse→cell conversion must match.
+        let pane_scale = self.pane_font_scale(pane.pane_id());
+        let cell_size = if (pane_scale - 1.0).abs() > 0.001 {
+            let key = Self::font_scale_key(pane_scale);
+            self.scaled_font_configs
+                .get(&key)
+                .map(|(_, metrics)| metrics.cell_size)
+                .unwrap_or(self.render_metrics.cell_size)
+        } else {
+            self.render_metrics.cell_size
+        };
+
         let y = (event
             .coords
             .y
             .sub(padding_top as isize)
             .sub(first_line_offset)
             .max(0)
-            / self.render_metrics.cell_size.height) as i64;
+            / cell_size.height) as i64;
 
         let x = (event
             .coords
             .x
             .sub((padding_left + border.left.get() as f32) as isize)
             .max(0) as f32)
-            / self.render_metrics.cell_size.width as f32;
+            / cell_size.width as f32;
         let x = if !pane.is_mouse_grabbed() {
             // Round the x coordinate so that we're a bit more forgiving of
             // the horizontal position when selecting cells
@@ -107,7 +121,7 @@ impl super::TermWindow {
             .sub(padding_top as isize)
             .sub(first_line_offset);
         if y > 0 {
-            y_pixel_offset = y_pixel_offset.max(0) % self.render_metrics.cell_size.height;
+            y_pixel_offset = y_pixel_offset.max(0) % cell_size.height;
         }
 
         let mut x_pixel_offset = event
@@ -115,7 +129,7 @@ impl super::TermWindow {
             .x
             .sub((padding_left + border.left.get() as f32) as isize);
         if x > 0 {
-            x_pixel_offset = x_pixel_offset.max(0) % self.render_metrics.cell_size.width;
+            x_pixel_offset = x_pixel_offset.max(0) % cell_size.width;
         }
 
         self.last_mouse_coords = (x, y);
