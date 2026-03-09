@@ -16,6 +16,8 @@ pub async fn handle_ws(socket: WebSocket, bridge: Arc<MuxBridge>) {
     // Current attached pane state
     let mut attached_pane_id: Option<PaneId> = None;
     let mut last_seqno: SequenceNo = 0;
+    let mut last_cols: usize = 0;
+    let mut last_rows: usize = 0;
 
     loop {
         tokio::select! {
@@ -48,6 +50,18 @@ pub async fn handle_ws(socket: WebSocket, bridge: Arc<MuxBridge>) {
                                 &mut ws_tx, pane_id, &mut last_seqno
                             ).await {
                                 log::debug!("Failed to send delta output: {:#}", e);
+                                break;
+                            }
+                        }
+                    }
+                    Ok(MuxNotification::TabResized(_tab_id)) => {
+                        // When the native app resizes, pane dimensions change.
+                        // Send a full refresh so the web client repaints cleanly.
+                        if let Some(pane_id) = attached_pane_id {
+                            if let Err(e) = send_full_refresh(
+                                &mut ws_tx, pane_id, &mut last_seqno
+                            ).await {
+                                log::debug!("Failed to send refresh on resize: {:#}", e);
                                 break;
                             }
                         }
@@ -185,7 +199,7 @@ async fn build_pane_list() -> anyhow::Result<Vec<serde_json::Value>> {
     Ok(result)
 }
 
-/// Send a full screen refresh for the given pane.
+/// Send a full screen refresh for the given pane, including scrollback history.
 async fn send_full_refresh(
     ws_tx: &mut WsSink,
     pane_id: PaneId,
@@ -196,16 +210,42 @@ async fn send_full_refresh(
             let mux = Mux::get();
             if let Some(pane) = mux.get_pane(pane_id) {
                 let dims = pane.get_dimensions();
-                let viewport_range = dims.physical_top
-                    ..dims.physical_top + dims.viewport_rows as isize;
-                let (_, lines) = pane.get_lines(viewport_range);
 
-                let seqno = lines
-                    .last()
+                // Include up to 1000 scrollback lines above the viewport
+                let scrollback_limit: isize = 1000;
+                let scrollback_start =
+                    (dims.physical_top - scrollback_limit).max(dims.scrollback_top);
+                let full_range =
+                    scrollback_start..dims.physical_top + dims.viewport_rows as isize;
+                let (first_row, all_lines) = pane.get_lines(full_range);
+
+                let seqno = all_lines
+                    .iter()
                     .map(|l| l.current_seqno())
+                    .max()
                     .unwrap_or(0);
 
-                let ansi = ansi_render::full_screen_ansi(&lines, dims.cols, dims.viewport_rows);
+                // Split into scrollback and viewport portions
+                let viewport_start_idx =
+                    (dims.physical_top - first_row) as usize;
+                let viewport_start_idx = viewport_start_idx.min(all_lines.len());
+                let scrollback_lines = &all_lines[..viewport_start_idx];
+                let viewport_lines = &all_lines[viewport_start_idx..];
+
+                // Get cursor position (1-based, viewport-relative)
+                let cursor = pane.get_cursor_position();
+                let cursor_row =
+                    ((cursor.y - dims.physical_top) as usize + 1).clamp(1, dims.viewport_rows);
+                let cursor_col = cursor.x.max(1);
+
+                let ansi = ansi_render::full_refresh_with_scrollback(
+                    scrollback_lines,
+                    viewport_lines,
+                    dims.cols,
+                    dims.viewport_rows,
+                    cursor_row,
+                    cursor_col,
+                );
                 (ansi, seqno, dims.cols, dims.viewport_rows)
             } else {
                 (String::new(), 0, 80, 24)
@@ -255,6 +295,14 @@ async fn send_delta_output(
                     let row_offset = (first_row - dims.physical_top) as usize + 1;
                     ansi.push_str(&ansi_render::lines_to_ansi(&lines, row_offset));
                 }
+
+                // Position cursor at its actual location so it blinks in the right place
+                let cursor = pane.get_cursor_position();
+                let cursor_row =
+                    ((cursor.y - dims.physical_top) as usize + 1).clamp(1, dims.viewport_rows);
+                let cursor_col = cursor.x.max(1);
+                use std::fmt::Write;
+                write!(ansi, "\x1b[{};{}H", cursor_row, cursor_col).unwrap();
 
                 let new_seqno = get_max_seqno(&pane, &dims);
                 (ansi, new_seqno)

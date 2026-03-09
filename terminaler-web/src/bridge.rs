@@ -38,7 +38,8 @@ impl MuxBridge {
             match &notification {
                 MuxNotification::PaneOutput(_)
                 | MuxNotification::PaneAdded(_)
-                | MuxNotification::PaneRemoved(_) => {
+                | MuxNotification::PaneRemoved(_)
+                | MuxNotification::TabResized(_) => {
                     // Ignore send errors (receiver dropped = web server stopped)
                     let _ = tx.send(notification);
                 }

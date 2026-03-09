@@ -126,7 +126,7 @@ impl crate::TermWindow {
             match item.item {
                 TabBarItem::RightStatus | TabBarItem::LeftStatus | TabBarItem::None => element
                     .item_type(UIItemType::TabBar(TabBarItem::None))
-                    .line_height(Some(1.75))
+                    .line_height(Some(1.9))
                     .margin(BoxDimension {
                         left: Dimension::Cells(0.),
                         right: Dimension::Cells(0.),
@@ -157,14 +157,14 @@ impl crate::TermWindow {
                 .margin(BoxDimension {
                     left: Dimension::Cells(0.5),
                     right: Dimension::Cells(0.),
-                    top: Dimension::Cells(0.2),
+                    top: Dimension::Pixels(2.),
                     bottom: Dimension::Cells(0.),
                 })
                 .padding(BoxDimension {
                     left: Dimension::Cells(0.5),
                     right: Dimension::Cells(0.5),
-                    top: Dimension::Cells(0.2),
-                    bottom: Dimension::Cells(0.25),
+                    top: Dimension::Cells(0.5),
+                    bottom: Dimension::Cells(0.5),
                 })
                 .border(BoxDimension::new(Dimension::Pixels(1.)))
                 .colors(ElementColors {
@@ -193,14 +193,14 @@ impl crate::TermWindow {
                 .margin(BoxDimension {
                     left: Dimension::Cells(0.),
                     right: Dimension::Cells(0.),
-                    top: Dimension::Cells(0.2),
+                    top: Dimension::Pixels(2.),
                     bottom: Dimension::Cells(0.),
                 })
                 .padding(BoxDimension {
                     left: Dimension::Cells(0.5),
                     right: Dimension::Cells(0.5),
-                    top: Dimension::Cells(0.2),
-                    bottom: Dimension::Cells(0.25),
+                    top: Dimension::Cells(0.5),
+                    bottom: Dimension::Cells(0.5),
                 })
                 .border(BoxDimension::new(Dimension::Pixels(1.)))
                 .colors(ElementColors {
@@ -219,14 +219,14 @@ impl crate::TermWindow {
                     .margin(BoxDimension {
                         left: Dimension::Cells(0.),
                         right: Dimension::Cells(0.),
-                        top: Dimension::Cells(0.2),
+                        top: Dimension::Pixels(2.),
                         bottom: Dimension::Cells(0.),
                     })
                     .padding(BoxDimension {
                         left: Dimension::Cells(0.5),
                         right: Dimension::Cells(0.5),
-                        top: Dimension::Cells(0.2),
-                        bottom: Dimension::Cells(0.25),
+                        top: Dimension::Cells(0.4),
+                        bottom: Dimension::Cells(0.4),
                     })
                     .border(BoxDimension::new(Dimension::Pixels(1.)))
                     .border_corners(Some(Corners {
@@ -264,14 +264,14 @@ impl crate::TermWindow {
                     .margin(BoxDimension {
                         left: Dimension::Cells(0.),
                         right: Dimension::Cells(0.),
-                        top: Dimension::Cells(0.2),
+                        top: Dimension::Pixels(2.),
                         bottom: Dimension::Cells(0.),
                     })
                     .padding(BoxDimension {
                         left: Dimension::Cells(0.5),
                         right: Dimension::Cells(0.5),
-                        top: Dimension::Cells(0.2),
-                        bottom: Dimension::Cells(0.25),
+                        top: Dimension::Cells(0.4),
+                        bottom: Dimension::Cells(0.4),
                     })
                     .border(BoxDimension::new(Dimension::Pixels(1.)))
                     .border_corners(Some(Corners {
@@ -349,14 +349,14 @@ impl crate::TermWindow {
                         .margin(BoxDimension {
                             left: Dimension::Cells(0.5),
                             right: Dimension::Cells(0.),
-                            top: Dimension::Cells(0.2),
+                            top: Dimension::Pixels(2.),
                             bottom: Dimension::Cells(0.),
                         })
                         .padding(BoxDimension {
                             left: Dimension::Cells(0.5),
                             right: Dimension::Cells(0.5),
-                            top: Dimension::Cells(0.2),
-                            bottom: Dimension::Cells(0.25),
+                            top: Dimension::Cells(0.5),
+                            bottom: Dimension::Cells(0.5),
                         })
                         .border(BoxDimension::new(Dimension::Pixels(1.)))
                         .colors(if active {
