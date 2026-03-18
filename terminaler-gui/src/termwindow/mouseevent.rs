@@ -1,7 +1,7 @@
 use crate::tabbar::TabBarItem;
 use crate::termwindow::{
-    DropZone, GuiWin, MouseCapture, PositionedSplit, ScrollHit, TabDragState, TermWindowNotif,
-    UIItem, UIItemType, TMB,
+    DropZone, GuiWin, MouseCapture, PositionedSplit, ScrollHit, TabDragState, TabSidebarItem,
+    TermWindowNotif, UIItem, UIItemType, TMB,
 };
 use ::window::{
     Modifiers, MouseButtons as WMB, MouseCursor, MouseEvent, MouseEventKind as WMEK, MousePress,
@@ -43,7 +43,8 @@ impl super::TermWindow {
             | UIItemType::BelowScrollThumb
             | UIItemType::ScrollThumb
             | UIItemType::Split(_)
-            | UIItemType::ProfileDropdownItem(_) => {}
+            | UIItemType::ProfileDropdownItem(_)
+            | UIItemType::TabSidebar(_) => {}
         }
     }
 
@@ -55,7 +56,8 @@ impl super::TermWindow {
             | UIItemType::BelowScrollThumb
             | UIItemType::ScrollThumb
             | UIItemType::Split(_)
-            | UIItemType::ProfileDropdownItem(_) => {}
+            | UIItemType::ProfileDropdownItem(_)
+            | UIItemType::TabSidebar(_) => {}
         }
     }
 
@@ -100,10 +102,11 @@ impl super::TermWindow {
             .max(0)
             / cell_size.height) as i64;
 
+        let sidebar_offset = self.sidebar_x_offset();
         let x = (event
             .coords
             .x
-            .sub((padding_left + border.left.get() as f32) as isize)
+            .sub((padding_left + border.left.get() as f32 + sidebar_offset) as isize)
             .max(0) as f32)
             / cell_size.width as f32;
         let x = if !pane.is_mouse_grabbed() {
@@ -127,7 +130,7 @@ impl super::TermWindow {
         let mut x_pixel_offset = event
             .coords
             .x
-            .sub((padding_left + border.left.get() as f32) as isize);
+            .sub((padding_left + border.left.get() as f32 + sidebar_offset) as isize);
         if x > 0 {
             x_pixel_offset = x_pixel_offset.max(0) % cell_size.width;
         }
@@ -282,7 +285,7 @@ impl super::TermWindow {
                             top_py + (pos.top as f32 * cell_h) - (cell_h / 2.0)
                         };
                         let t_bg_right = if pos.left + pos.width >= self.terminal_size.cols as usize {
-                            self.dimensions.pixel_width as f32
+                            self.effective_right_edge()
                         } else {
                             let (bx, wd) = if pos.left == 0 {
                                 (0.0f32, pad_l + bdr.left.get() as f32 + (cell_w / 2.0))
@@ -562,6 +565,9 @@ impl super::TermWindow {
             UIItemType::ScrollThumb => {
                 self.drag_scroll_thumb(item, start_event, event, context);
             }
+            UIItemType::TabSidebar(TabSidebarItem::ResizeHandle) => {
+                self.drag_sidebar_resize(event, context);
+            }
             _ => {
                 log::error!("drag not implemented for {:?}", item);
             }
@@ -599,6 +605,9 @@ impl super::TermWindow {
             UIItemType::ProfileDropdownItem(idx) => {
                 self.mouse_event_profile_dropdown_item(idx, event, context);
             }
+            UIItemType::TabSidebar(ref sidebar_item) => {
+                self.mouse_event_tab_sidebar(sidebar_item.clone(), event, context);
+            }
         }
     }
 
@@ -612,10 +621,15 @@ impl super::TermWindow {
             WMEK::Press(MousePress::Left) => {
                 log::debug!("Should close tab {}", idx);
                 self.close_specific_tab(idx, true);
+                context.set_cursor(Some(MouseCursor::Arrow));
             }
-            _ => {}
+            WMEK::Move => {
+                context.set_cursor(Some(MouseCursor::Hand));
+            }
+            _ => {
+                context.set_cursor(Some(MouseCursor::Arrow));
+            }
         }
-        context.set_cursor(Some(MouseCursor::Arrow));
     }
 
     fn do_new_tab_button_click(&mut self, button: MousePress) {
@@ -1361,9 +1375,10 @@ impl super::TermWindow {
 
         let mut found_pane = None;
         let mut found_zone = None;
+        let sidebar_off = self.sidebar_x_offset();
 
         for pos in &panes {
-            let pane_left = padding_left + border.left.get() as f32
+            let pane_left = padding_left + border.left.get() as f32 + sidebar_off
                 + (pos.left as f32 * cell_width);
             let pane_top = top_pixel_y + (pos.top as f32 * cell_height);
             let pane_width = pos.width as f32 * cell_width;
@@ -1523,9 +1538,10 @@ impl super::TermWindow {
         let mx = px as f32;
         let my = py as f32;
 
+        let sidebar_off = self.sidebar_x_offset();
         for pos in &panes {
             let pane_left =
-                padding_left + border.left.get() as f32 + (pos.left as f32 * cell_width);
+                padding_left + border.left.get() as f32 + sidebar_off + (pos.left as f32 * cell_width);
             let pane_top = top_pixel_y + (pos.top as f32 * cell_height);
             let pane_width = pos.width as f32 * cell_width;
             let pane_height = pos.height as f32 * cell_height;
@@ -1594,12 +1610,13 @@ impl super::TermWindow {
         let mx = event.coords.x as f32;
         let my = event.coords.y as f32;
 
+        let sidebar_off = self.sidebar_x_offset();
         for pos in &panes {
             if pos.pane.pane_id() != pane_id {
                 continue;
             }
             let pane_left =
-                padding_left + border.left.get() as f32 + (pos.left as f32 * cell_width);
+                padding_left + border.left.get() as f32 + sidebar_off + (pos.left as f32 * cell_width);
             let pane_top = top_pixel_y + (pos.top as f32 * cell_height);
             let pane_width = pos.width as f32 * cell_width;
             let pane_height = pos.height as f32 * cell_height;
@@ -1682,11 +1699,12 @@ impl super::TermWindow {
         let top_pixel_y = top_bar_height + padding_top + border.top.get() as f32;
 
         // Visual bounds matching paint_toast_toolbar (same as build_pane background_rect)
+        let sidebar_off = self.sidebar_x_offset();
         let (bg_x, width_delta) = if pos.left == 0 {
-            (0.0f32, padding_left + border.left.get() as f32 + (cell_width / 2.0))
+            (sidebar_off, padding_left + border.left.get() as f32 + (cell_width / 2.0))
         } else {
             (
-                padding_left + border.left.get() as f32 - (cell_width / 2.0)
+                padding_left + border.left.get() as f32 + sidebar_off - (cell_width / 2.0)
                     + (pos.left as f32 * cell_width),
                 cell_width,
             )
@@ -1697,7 +1715,7 @@ impl super::TermWindow {
             top_pixel_y + (pos.top as f32 * cell_height) - (cell_height / 2.0)
         };
         let bg_right = if pos.left + pos.width >= self.terminal_size.cols as usize {
-            self.dimensions.pixel_width as f32
+            self.effective_right_edge()
         } else {
             bg_x + (pos.width as f32 * cell_width) + width_delta
         };
@@ -1726,10 +1744,13 @@ impl super::TermWindow {
         let is_expanded = self.toast_expanded_for == Some(hovered_id)
             && pane_visual_width >= TOAST_WIDTH + 10.0;
 
+        // Must match the offset used in paint_toast_toolbar
+        let toast_top_offset = 10.0f32;
+
         if is_expanded {
             // --- Expanded: full 9-button hit-test ---
             let toast_left = bg_right - TOAST_WIDTH;
-            let toast_top = bg_y;
+            let toast_top = bg_y + toast_top_offset;
 
             if mx < toast_left
                 || mx >= toast_left + TOAST_WIDTH
@@ -1760,7 +1781,7 @@ impl super::TermWindow {
         } else {
             // --- Collapsed: single trigger pill ---
             let pill_left = bg_right - TOAST_COLLAPSED_WIDTH;
-            let pill_top = bg_y;
+            let pill_top = bg_y + toast_top_offset;
 
             if mx >= pill_left
                 && mx < pill_left + TOAST_COLLAPSED_WIDTH
@@ -1771,6 +1792,120 @@ impl super::TermWindow {
             } else {
                 None
             }
+        }
+    }
+
+    pub fn mouse_event_tab_sidebar(
+        &mut self,
+        sidebar_item: TabSidebarItem,
+        event: MouseEvent,
+        context: &dyn WindowOps,
+    ) {
+        match event.kind {
+            WMEK::Press(MousePress::Left) => match sidebar_item {
+                TabSidebarItem::Tab { tab_idx, .. } => {
+                    self.activate_tab(tab_idx as isize).ok();
+                }
+                TabSidebarItem::Pane { tab_idx, pane_idx } => {
+                    self.activate_tab(tab_idx as isize).ok();
+                    let mux = Mux::get();
+                    if let Some(tab) = mux.get_active_tab_for_window(self.mux_window_id) {
+                        tab.set_active_idx(pane_idx);
+                        // Clear notifications for the activated pane
+                        let panes = tab.iter_panes();
+                        if let Some(pos) = panes.iter().find(|p| p.index == pane_idx) {
+                            let pid = pos.pane.pane_id();
+                            let mut ps = self.pane_state(pid);
+                            ps.notification_start = None;
+                            ps.notification_count = 0;
+                        }
+                    }
+                }
+                TabSidebarItem::ClosePane { pane_id } => {
+                    self.close_pane_by_id(pane_id as mux::pane::PaneId, true);
+                }
+                TabSidebarItem::NewTabButton => {
+                    self.spawn_tab(&SpawnTabDomain::CurrentPaneDomain);
+                }
+                TabSidebarItem::ResizeHandle => {
+                    // Drag start is handled by the dragging system via UIItem
+                    context.set_cursor(Some(MouseCursor::SizeLeftRight));
+                }
+            },
+            WMEK::Press(MousePress::Middle) => match sidebar_item {
+                TabSidebarItem::Tab { tab_idx, .. } => {
+                    self.close_specific_tab(tab_idx, true);
+                }
+                TabSidebarItem::Pane { pane_idx, tab_idx } => {
+                    self.activate_tab(tab_idx as isize).ok();
+                    let mux = Mux::get();
+                    if let Some(tab) = mux.get_active_tab_for_window(self.mux_window_id) {
+                        let panes = tab.iter_panes();
+                        if let Some(pos) = panes.iter().find(|p| p.index == pane_idx) {
+                            self.close_pane_by_id(pos.pane.pane_id(), true);
+                        }
+                    }
+                }
+                _ => {}
+            },
+            WMEK::Move => match sidebar_item {
+                TabSidebarItem::ResizeHandle => {
+                    context.set_cursor(Some(MouseCursor::SizeLeftRight));
+                }
+                TabSidebarItem::NewTabButton
+                | TabSidebarItem::ClosePane { .. }
+                | TabSidebarItem::Tab { .. }
+                | TabSidebarItem::Pane { .. } => {
+                    context.set_cursor(Some(MouseCursor::Hand));
+                }
+            },
+            _ => {}
+        }
+    }
+
+    fn drag_sidebar_resize(&mut self, event: MouseEvent, context: &dyn WindowOps) {
+        let mx = event.coords.x as f32;
+        let new_width = match self.config.tab_sidebar_position {
+            config::TabSidebarPosition::Left => mx as u16,
+            config::TabSidebarPosition::Right => {
+                (self.dimensions.pixel_width as f32 - mx) as u16
+            }
+        };
+        // Clamp between 120 and 500 pixels
+        let new_width = new_width.max(120).min(500);
+        if new_width != self.tab_sidebar_width {
+            self.tab_sidebar_width = new_width;
+            self.invalidate_tab_sidebar();
+            self.invalidate_fancy_tab_bar();
+            if let Some(window) = self.window.as_ref().map(|w| w.clone()) {
+                self.apply_dimensions(&self.dimensions.clone(), None, &window);
+                window.invalidate();
+            }
+        }
+        context.set_cursor(Some(MouseCursor::SizeLeftRight));
+    }
+
+    /// Returns the sidebar pixel width to subtract from mouse X coordinates
+    /// when the sidebar is on the left side.
+    pub fn sidebar_x_offset(&self) -> f32 {
+        if self.show_tab_sidebar
+            && self.config.tab_sidebar_position == config::TabSidebarPosition::Left
+        {
+            self.tab_sidebar_width as f32
+        } else {
+            0.
+        }
+    }
+
+    /// Returns the effective right edge of the terminal area,
+    /// accounting for a right-side sidebar.
+    pub fn effective_right_edge(&self) -> f32 {
+        if self.show_tab_sidebar
+            && self.config.tab_sidebar_position == config::TabSidebarPosition::Right
+        {
+            self.dimensions.pixel_width as f32 - self.tab_sidebar_width as f32
+        } else {
+            self.dimensions.pixel_width as f32
         }
     }
 }

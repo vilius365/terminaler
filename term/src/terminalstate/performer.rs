@@ -912,6 +912,17 @@ impl<'a> Performer<'a> {
                     log::info!("Application sends SystemNotification: {}", message);
                 }
             }
+            OperatingSystemCommand::DesktopNotification(body) => {
+                if let Some(handler) = self.alert_handler.as_mut() {
+                    handler.alert(Alert::ToastNotification {
+                        title: None,
+                        body,
+                        focus: true,
+                    });
+                } else {
+                    log::info!("Application sends DesktopNotification (OSC 99)");
+                }
+            }
             OperatingSystemCommand::RxvtExtension(params) => {
                 if let Some("notify") = params.get(0).map(String::as_str) {
                     let title = params.get(1);

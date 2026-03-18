@@ -43,6 +43,7 @@ pub mod pane;
 pub mod screen_line;
 pub mod split;
 pub mod tab_bar;
+pub mod tab_sidebar;
 pub mod window_buttons;
 
 /// The data that we associate with a line; we use this to cache it shape hash
@@ -363,9 +364,11 @@ impl crate::TermWindow {
             .bottom
             .evaluate_as_pixels(v_context);
 
+        let sidebar_width = self.sidebar_x_offset();
         let horizontal_gap = self.dimensions.pixel_width as f32
             - self.terminal_size.pixel_width as f32
             - padding_left
+            - sidebar_width
             - if self.show_scroll_bar && padding_right.is_zero() {
                 h_context.pixel_cell
             } else {

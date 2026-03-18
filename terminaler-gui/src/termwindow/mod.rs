@@ -177,6 +177,41 @@ pub struct PaneLongPress {
     pub revealed: bool,
 }
 
+#[derive(Clone, Debug, Copy, PartialEq, Eq)]
+pub enum ClaudeStatus {
+    Working,
+    WaitingInput,
+    Idle,
+    Error,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ClaudeSessionInfo {
+    pub model: Option<String>,
+    pub context_pct: Option<u8>,
+    pub cost_usd: Option<f32>,
+    pub duration_ms: Option<u64>,
+    pub lines_added: Option<u32>,
+    pub lines_removed: Option<u32>,
+    pub worktree: Option<String>,
+    pub status: Option<ClaudeStatus>,
+}
+
+pub struct SidebarTabInfo {
+    pub cwd_short: String,
+    pub git_branch: Option<String>,
+    pub claude_info: Option<ClaudeSessionInfo>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TabSidebarItem {
+    Tab { tab_idx: usize, active: bool },
+    Pane { tab_idx: usize, pane_idx: usize },
+    ClosePane { pane_id: usize },
+    NewTabButton,
+    ResizeHandle,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum UIItemType {
     TabBar(TabBarItem),
@@ -186,6 +221,7 @@ pub enum UIItemType {
     BelowScrollThumb,
     Split(PositionedSplit),
     ProfileDropdownItem(usize),
+    TabSidebar(TabSidebarItem),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -229,6 +265,8 @@ pub struct PaneState {
     pub overlay: Option<OverlayState>,
 
     bell_start: Option<Instant>,
+    notification_start: Option<Instant>,
+    pub notification_count: u32,
     pub mouse_terminal_coords: Option<(ClickPosition, StableRowIndex)>,
     /// Per-pane font scale factor (1.0 = default, >1.0 = larger, <1.0 = smaller)
     pub font_scale: f64,
@@ -241,6 +279,8 @@ impl Default for PaneState {
             selection: Selection::default(),
             overlay: None,
             bell_start: None,
+            notification_start: None,
+            notification_count: 0,
             mouse_terminal_coords: None,
             font_scale: 1.0,
         }
@@ -257,6 +297,7 @@ pub struct TabInformation {
     pub active_pane: Option<PaneInformation>,
     pub window_id: MuxWindowId,
     pub tab_title: String,
+    pub has_notification: bool,
 }
 
 
@@ -332,8 +373,13 @@ pub struct TermWindow {
     key_table_state: KeyTableState,
     show_tab_bar: bool,
     show_scroll_bar: bool,
+    show_tab_sidebar: bool,
+    tab_sidebar_width: u16,
     tab_bar: TabBarState,
     fancy_tab_bar: Option<box_model::ComputedElement>,
+    tab_sidebar: Option<box_model::ComputedElement>,
+    tab_sidebar_info: HashMap<TabId, SidebarTabInfo>,
+    last_sidebar_info_poll: Instant,
     pub right_status: String,
     pub left_status: String,
     last_ui_item: Option<UIItem>,
@@ -694,8 +740,13 @@ impl TermWindow {
             dead_key_status: DeadKeyStatus::None,
             show_tab_bar,
             show_scroll_bar: config.enable_scroll_bar,
+            show_tab_sidebar: config.tab_sidebar_enabled,
+            tab_sidebar_width: config.tab_sidebar_width,
             tab_bar: TabBarState::default(),
             fancy_tab_bar: None,
+            tab_sidebar: None,
+            tab_sidebar_info: HashMap::new(),
+            last_sidebar_info_poll: Instant::now(),
             right_status: String::new(),
             left_status: String::new(),
             last_mouse_coords: (0, -1),
@@ -1238,8 +1289,16 @@ impl TermWindow {
                 }
                 MuxNotification::Alert {
                     alert: Alert::ToastNotification { .. },
-                    ..
-                } => {}
+                    pane_id,
+                } => {
+                    if self.window_contains_pane(pane_id) {
+                        let mut per_pane = self.pane_state(pane_id);
+                        per_pane.notification_start.replace(Instant::now());
+                        per_pane.notification_count += 1;
+                    }
+                    window.invalidate();
+                    self.update_title();
+                }
                 MuxNotification::TabAddedToWindow {
                     window_id: _,
                     tab_id,
@@ -1329,6 +1388,7 @@ impl TermWindow {
                 self.clear_all_overlays();
                 self.current_highlight.take();
                 self.invalidate_fancy_tab_bar();
+                self.invalidate_tab_sidebar();
                 self.invalidate_modal();
 
                 let mux = Mux::get();
@@ -1679,6 +1739,7 @@ impl TermWindow {
             .update_config(&config);
         self.fancy_tab_bar.take();
         self.invalidate_fancy_tab_bar();
+        self.invalidate_tab_sidebar();
         self.invalidate_modal();
         self.input_map = InputMap::new(&config);
         self.leader_is_down = None;
@@ -1801,10 +1862,12 @@ impl TermWindow {
         return window_id == self.mux_window_id;
     }
 
-    fn emit_user_var_event(&mut self, pane_id: PaneId, _name: String, _value: String) {
-        // Lua user-var-changed event removed; just update the title
+    fn emit_user_var_event(&mut self, pane_id: PaneId, name: String, _value: String) {
         if !self.window_contains_pane(pane_id) {
             return;
+        }
+        if name.starts_with("claude_") {
+            self.invalidate_tab_sidebar();
         }
         self.update_title();
     }
@@ -1863,6 +1926,7 @@ impl TermWindow {
         if new_tab_bar != self.tab_bar {
             self.tab_bar = new_tab_bar;
             self.invalidate_fancy_tab_bar();
+            self.invalidate_tab_sidebar();
             self.invalidate_modal();
             if let Some(window) = self.window.as_ref() {
                 window.invalidate();
@@ -2016,7 +2080,24 @@ impl TermWindow {
         if tab_idx < max {
             window.save_and_then_set_active(tab_idx);
 
+            // Collect pane IDs for the newly active tab before dropping the window lock,
+            // so we can clear notification badges for all panes in that tab.
+            let active_pane_ids: Vec<PaneId> = window
+                .get_active()
+                .map(|tab| {
+                    tab.iter_panes_ignoring_zoom()
+                        .into_iter()
+                        .map(|p| p.pane.pane_id())
+                        .collect()
+                })
+                .unwrap_or_default();
+
             drop(window);
+
+            for pane_id in active_pane_ids {
+                self.pane_state(pane_id).notification_start = None;
+                self.pane_state(pane_id).notification_count = 0;
+            }
 
             if let Some(tab) = self.get_active_pane_or_overlay() {
                 tab.focus_changed(true);
@@ -3176,6 +3257,15 @@ impl TermWindow {
             ToggleRemoteAccess => {
                 self.toggle_remote_access();
             }
+            ToggleTabSidebar => {
+                self.show_tab_sidebar = !self.show_tab_sidebar;
+                self.invalidate_tab_sidebar();
+                self.invalidate_fancy_tab_bar();
+                if let Some(window) = self.window.as_ref().map(|w| w.clone()) {
+                    self.apply_dimensions(&self.dimensions.clone(), None, &window);
+                    window.invalidate();
+                }
+            }
         };
         Ok(PerformAssignmentResult::Handled)
     }
@@ -3219,6 +3309,25 @@ impl TermWindow {
 
         let pane_id = pane.pane_id();
         if confirm && !pane.can_close_without_prompting(CloseReason::Pane) {
+            let window = self.window.clone().unwrap();
+            let (overlay, future) = start_overlay_pane(self, &pane, move |pane_id, term| {
+                confirm_close_pane(pane_id, term, mux_window_id, window)
+            });
+            self.assign_overlay_for_pane(pane_id, overlay);
+            promise::spawn::spawn(future).detach();
+        } else {
+            mux.remove_pane(pane_id);
+        }
+    }
+
+    fn close_pane_by_id(&mut self, pane_id: mux::pane::PaneId, confirm: bool) {
+        let mux = Mux::get();
+        let pane = match mux.get_pane(pane_id) {
+            Some(p) => p,
+            None => return,
+        };
+        if confirm && !pane.can_close_without_prompting(CloseReason::Pane) {
+            let mux_window_id = self.mux_window_id;
             let window = self.window.clone().unwrap();
             let (overlay, future) = start_overlay_pane(self, &pane, move |pane_id, term| {
                 confirm_close_pane(pane_id, term, mux_window_id, window)
@@ -3511,6 +3620,15 @@ impl TermWindow {
                         .iter()
                         .find(|p| p.is_active)
                         .map(Self::pos_pane_to_pane_info),
+                    has_notification: {
+                        let is_inactive = tab_index != idx;
+                        is_inactive
+                            && panes.iter().any(|p| {
+                                self.pane_state(p.pane.pane_id())
+                                    .notification_start
+                                    .is_some()
+                            })
+                    },
                 }
             })
             .collect()

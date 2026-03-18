@@ -2035,6 +2035,14 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             menubar: &["View"],
             icon: None,
         },
+        ToggleTabSidebar => CommandDef {
+            brief: "Toggle Tab Sidebar".into(),
+            doc: "Toggle the vertical tab sidebar on/off".into(),
+            keys: vec![(Modifiers::CTRL | Modifiers::SHIFT, "b".into())],
+            args: &[],
+            menubar: &["View"],
+            icon: None,
+        },
         _ => return None,
     })
 }
@@ -2164,6 +2172,7 @@ fn compute_default_actions() -> Vec<KeyAssignment> {
         // ----------------- Terminaler Snap Layouts
         SnapLayoutPicker,
         WorkspacePicker,
+        ToggleTabSidebar,
         // ----------------- Help
         OpenUri("https://wezfurlong.org/wezterm/".to_string()),
         OpenUri("https://github.com/wez/wezterm/discussions/".to_string()),

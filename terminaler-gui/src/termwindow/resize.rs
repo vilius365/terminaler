@@ -125,6 +125,7 @@ impl super::TermWindow {
             log::error!("recreate_texture_atlas: {:#}", err);
         }
         self.invalidate_fancy_tab_bar();
+        self.invalidate_tab_sidebar();
         self.invalidate_modal();
     }
 
@@ -206,9 +207,15 @@ impl super::TermWindow {
                 + (border.top + border.bottom).get() as usize
                 + tab_bar_height as usize;
 
+            let sidebar_width = if self.show_tab_sidebar {
+                self.tab_sidebar_width as usize
+            } else {
+                0
+            };
             let pixel_width = (cols * self.render_metrics.cell_size.width as usize)
                 + (padding_left + padding_right)
-                + (border.left + border.right).get() as usize;
+                + (border.left + border.right).get() as usize
+                + sidebar_width;
 
             let dims = Dimensions {
                 pixel_width: pixel_width as usize,
@@ -247,9 +254,15 @@ impl super::TermWindow {
                 config.window_padding.bottom.evaluate_as_pixels(v_context) as usize;
             let padding_right = effective_right_padding(&config, h_context);
 
+            let sidebar_width = if self.show_tab_sidebar {
+                self.tab_sidebar_width as usize
+            } else {
+                0
+            };
             let avail_width = dimensions.pixel_width.saturating_sub(
                 (padding_left + padding_right) as usize
-                    + (border.left + border.right).get() as usize,
+                    + (border.left + border.right).get() as usize
+                    + sidebar_width,
             );
             let avail_height = dimensions
                 .pixel_height
@@ -260,7 +273,7 @@ impl super::TermWindow {
                 .saturating_sub(tab_bar_height as usize);
 
             let rows = avail_height / self.render_metrics.cell_size.height as usize;
-            let cols = avail_width / self.render_metrics.cell_size.width as usize;
+            let cols = (avail_width / self.render_metrics.cell_size.width as usize).max(10);
 
             let size = TerminalSize {
                 rows,
@@ -313,6 +326,7 @@ impl super::TermWindow {
         }
 
         self.invalidate_fancy_tab_bar();
+        self.invalidate_tab_sidebar();
         self.update_title();
 
         window.set_resize_increments(if self.config.use_resize_increments {

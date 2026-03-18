@@ -50,6 +50,8 @@ pub enum OperatingSystemCommand {
     ResetColors(Vec<u8>),
     RxvtExtension(Vec<String>),
     ConEmuProgress(Progress),
+    /// Kitty desktop notification (OSC 99)
+    DesktopNotification(String),
 
     Unspecified(Vec<Vec<u8>>),
 }
@@ -361,6 +363,16 @@ impl OperatingSystemCommand {
             }
             FinalTermSemanticPrompt => self::FinalTermSemanticPrompt::parse(osc)
                 .map(OperatingSystemCommand::FinalTermSemanticPrompt),
+            DesktopNotification => {
+                // Simple form: OSC 99 ; body ST
+                // Key-value form: OSC 99 ; i=id:d=0;title ST (simplified: just extract body)
+                let body = if osc.len() >= 2 {
+                    String::from_utf8_lossy(osc[1]).to_string()
+                } else {
+                    String::new()
+                };
+                Ok(OperatingSystemCommand::DesktopNotification(body))
+            }
             ChangeColorNumber => Self::parse_change_color_number(osc),
             ResetColors => Self::parse_reset_colors(osc),
 
@@ -482,6 +494,8 @@ osc_entries!(
     SetFont = "50",
     EmacsShell = "51",
     ManipulateSelectionData = "52",
+    /// Kitty desktop notification protocol
+    DesktopNotification = "99",
     ResetColors = "104",
     ResetSpecialColor = "105",
     ResetTextForegroundColor = "110",
@@ -569,6 +583,7 @@ impl Display for OperatingSystemCommand {
             SetHyperlink(Some(link)) => link.fmt(f)?,
             SetHyperlink(None) => write!(f, "8;;")?,
             RxvtExtension(params) => write!(f, "777;{}", params.join(";"))?,
+            DesktopNotification(s) => write!(f, "99;{}", s)?,
             Unspecified(v) => {
                 for (idx, item) in v.iter().enumerate() {
                     if idx > 0 {

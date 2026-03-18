@@ -248,16 +248,17 @@ impl crate::TermWindow {
 
         let cell_width = self.render_metrics.cell_size.width as f32;
         let cell_height = self.render_metrics.cell_size.height as f32;
+        let sidebar_offset = self.sidebar_x_offset();
         let background_rect = {
             // We want to fill out to the edges of the splits
             let (x, width_delta) = if pos.left == 0 {
                 (
-                    0.,
+                    sidebar_offset,
                     padding_left + border.left.get() as f32 + (cell_width / 2.0),
                 )
             } else {
                 (
-                    padding_left + border.left.get() as f32 - (cell_width / 2.0)
+                    padding_left + border.left.get() as f32 + sidebar_offset - (cell_width / 2.0)
                         + (pos.left as f32 * cell_width),
                     cell_width,
                 )
@@ -279,7 +280,7 @@ impl crate::TermWindow {
                 y,
                 // Go all the way to the right edge if we're right-most
                 if pos.left + pos.width >= self.terminal_size.cols as usize {
-                    self.dimensions.pixel_width as f32 - x
+                    self.effective_right_edge() - x
                 } else {
                     (pos.width as f32 * cell_width) + width_delta
                 },
@@ -311,6 +312,51 @@ impl crate::TermWindow {
             } else {
                 Some(config.inactive_pane_hsb)
             });
+        }
+
+        // Notification ring: colored border for panes with unread notifications
+        if !pos.is_active {
+            let has_notif = {
+                let per_pane = self.pane_state(pane_id);
+                per_pane.notification_start.is_some()
+            };
+            if has_notif {
+                let notif_color = LinearRgba::with_components(1.0, 0.4, 0.2, 0.8);
+                let ring_width = 3.0f32;
+                let br = background_rect;
+                // Top edge
+                self.filled_rectangle(
+                    layers,
+                    2,
+                    euclid::rect(br.min_x(), br.min_y(), br.width(), ring_width),
+                    notif_color,
+                )
+                .context("filled_rectangle notification top")?;
+                // Bottom edge
+                self.filled_rectangle(
+                    layers,
+                    2,
+                    euclid::rect(br.min_x(), br.max_y() - ring_width, br.width(), ring_width),
+                    notif_color,
+                )
+                .context("filled_rectangle notification bottom")?;
+                // Left edge
+                self.filled_rectangle(
+                    layers,
+                    2,
+                    euclid::rect(br.min_x(), br.min_y(), ring_width, br.height()),
+                    notif_color,
+                )
+                .context("filled_rectangle notification left")?;
+                // Right edge
+                self.filled_rectangle(
+                    layers,
+                    2,
+                    euclid::rect(br.max_x() - ring_width, br.min_y(), ring_width, br.height()),
+                    notif_color,
+                )
+                .context("filled_rectangle notification right")?;
+            }
         }
 
         {
@@ -499,6 +545,7 @@ impl crate::TermWindow {
         // Pre-compute left_pixel_x with BASE metrics before any font swap
         let left_pixel_x = padding_left
             + border.left.get() as f32
+            + sidebar_offset
             + (pos.left as f32 * self.render_metrics.cell_size.width as f32);
 
         let adjusted_top_pixel_y;
@@ -858,16 +905,17 @@ impl crate::TermWindow {
 
         let border = self.get_os_border();
         let top_pixel_y = top_bar_height + padding_top + border.top.get() as f32;
+        let sidebar_off = self.sidebar_x_offset();
 
         // We want to fill out to the edges of the splits
         let (x, width_delta) = if pos.left == 0 {
             (
-                0.,
+                sidebar_off,
                 padding_left + border.left.get() as f32 + (cell_width / 2.0),
             )
         } else {
             (
-                padding_left + border.left.get() as f32 - (cell_width / 2.0)
+                padding_left + border.left.get() as f32 + sidebar_off - (cell_width / 2.0)
                     + (pos.left as f32 * cell_width),
                 cell_width,
             )
@@ -890,7 +938,7 @@ impl crate::TermWindow {
             y,
             // Go all the way to the right edge if we're right-most
             if pos.left + pos.width >= self.terminal_size.cols as usize {
-                self.dimensions.pixel_width as f32 - x
+                self.effective_right_edge() - x
             } else {
                 (pos.width as f32 * cell_width) + width_delta
             },
@@ -904,7 +952,7 @@ impl crate::TermWindow {
 
         // Bounds for the terminal cells
         let content_rect = euclid::rect(
-            padding_left + border.left.get() as f32 - (cell_width / 2.0)
+            padding_left + border.left.get() as f32 + sidebar_off - (cell_width / 2.0)
                 + (pos.left as f32 * cell_width),
             top_pixel_y + (pos.top as f32 * cell_height) - (cell_height / 2.0),
             pos.width as f32 * cell_width,
@@ -988,7 +1036,8 @@ impl crate::TermWindow {
         let cell_width = self.render_metrics.cell_size.width as f32;
         let cell_height = self.render_metrics.cell_size.height as f32;
 
-        let pane_left = padding_left + border.left.get() as f32
+        let sidebar_off = self.sidebar_x_offset();
+        let pane_left = padding_left + border.left.get() as f32 + sidebar_off
             + (target_pos.left as f32 * cell_width);
         let pane_top = top_pixel_y + (target_pos.top as f32 * cell_height);
         let pane_width = target_pos.width as f32 * cell_width;
@@ -1061,7 +1110,8 @@ impl crate::TermWindow {
         let cell_width = self.render_metrics.cell_size.width as f32;
         let cell_height = self.render_metrics.cell_size.height as f32;
 
-        let pane_left = padding_left + border.left.get() as f32
+        let sidebar_off = self.sidebar_x_offset();
+        let pane_left = padding_left + border.left.get() as f32 + sidebar_off
             + (target_pos.left as f32 * cell_width);
         let pane_top = top_pixel_y + (target_pos.top as f32 * cell_height);
         let pane_width = target_pos.width as f32 * cell_width;
@@ -1206,12 +1256,13 @@ impl crate::TermWindow {
 
         // Compute true visual pane bounds (same logic as build_pane background_rect)
         let pos = target_pos;
+        let sidebar_off = self.sidebar_x_offset();
 
         let (bg_x, _width_delta) = if pos.left == 0 {
-            (0.0f32, padding_left + border.left.get() as f32 + (cell_width / 2.0))
+            (sidebar_off, padding_left + border.left.get() as f32 + (cell_width / 2.0))
         } else {
             (
-                padding_left + border.left.get() as f32 - (cell_width / 2.0)
+                padding_left + border.left.get() as f32 + sidebar_off - (cell_width / 2.0)
                     + (pos.left as f32 * cell_width),
                 cell_width,
             )
@@ -1222,7 +1273,7 @@ impl crate::TermWindow {
             top_pixel_y + (pos.top as f32 * cell_height) - (cell_height / 2.0)
         };
         let bg_right = if pos.left + pos.width >= self.terminal_size.cols as usize {
-            self.dimensions.pixel_width as f32
+            self.effective_right_edge()
         } else {
             bg_x + (pos.width as f32 * cell_width) + _width_delta
         };
@@ -1254,10 +1305,13 @@ impl crate::TermWindow {
         let icon_sz: euclid::Size2D<f32, window::PixelUnit> =
             euclid::size2(TOAST_ICON_SIZE, TOAST_ICON_SIZE);
 
+        // Offset toast from the top edge of the pane
+        let toast_top_offset = 10.0f32;
+
         if is_expanded {
             // --- Expanded: full 9-button toolbar ---
             let toast_left = bg_right - TOAST_WIDTH;
-            let toast_top = bg_y;
+            let toast_top = bg_y + toast_top_offset;
 
             self.filled_rectangle(
                 layers, 2,
@@ -1309,7 +1363,7 @@ impl crate::TermWindow {
         } else {
             // --- Collapsed: single trigger pill (quad layout icon) ---
             let pill_left = bg_right - TOAST_COLLAPSED_WIDTH;
-            let pill_top = bg_y;
+            let pill_top = bg_y + toast_top_offset;
 
             self.filled_rectangle(
                 layers, 2,

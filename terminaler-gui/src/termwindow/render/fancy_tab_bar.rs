@@ -455,6 +455,10 @@ impl crate::TermWindow {
                     }
                 }
                 TabBarItem::Tab { tab_idx, active } => {
+                    // When sidebar is showing tabs, skip tab items in the title bar
+                    if self.show_tab_sidebar {
+                        continue;
+                    }
                     let mut elem = item_to_elem(item);
                     elem.max_width = Some(Dimension::Pixels(max_tab_width));
                     elem.content = match elem.content {
@@ -470,6 +474,12 @@ impl crate::TermWindow {
                     left_eles.push(elem);
                 }
                 TabBarItem::RemoteAccess { .. } => right_eles.push(item_to_elem(item)),
+                TabBarItem::NewTabButton { .. } | TabBarItem::NewTabDropdown
+                    if self.show_tab_sidebar =>
+                {
+                    // Skip new tab button in title bar when sidebar handles it
+                    continue;
+                }
                 _ => left_eles.push(item_to_elem(item)),
             }
         }
@@ -527,10 +537,20 @@ impl crate::TermWindow {
 
         let content = ElementContent::Children(children);
 
+        // When sidebar is on the right, narrow the title bar to avoid overlap
+        let sidebar_right_width = if self.show_tab_sidebar
+            && self.config.tab_sidebar_position == config::TabSidebarPosition::Right
+        {
+            self.tab_sidebar_width as f32
+        } else {
+            0.
+        };
         let tabs = Element::new(&font, content)
             .display(DisplayType::Block)
             .item_type(UIItemType::TabBar(TabBarItem::None))
-            .min_width(Some(Dimension::Pixels(self.dimensions.pixel_width as f32)))
+            .min_width(Some(Dimension::Pixels(
+                self.dimensions.pixel_width as f32 - sidebar_right_width,
+            )))
             .min_height(Some(Dimension::Pixels(tab_bar_height)))
             .vertical_align(VerticalAlign::Bottom)
             .colors(bar_colors);
@@ -552,7 +572,9 @@ impl crate::TermWindow {
                 bounds: euclid::rect(
                     border.left.get() as f32,
                     0.,
-                    self.dimensions.pixel_width as f32 - (border.left + border.right).get() as f32,
+                    self.dimensions.pixel_width as f32
+                        - (border.left + border.right).get() as f32
+                        - sidebar_right_width,
                     tab_bar_height,
                 ),
                 metrics: &metrics,

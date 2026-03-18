@@ -9,6 +9,10 @@ pub fn default_config_content() -> String {
     // This file uses JSONC format (JSON with comments).
     // Lines starting with // are comments and will be ignored.
 
+    // Default domain (shell). WSL is used automatically if available.
+    // Set to "local" for PowerShell/CMD, or "WSL:<distro>" for a specific WSL distro.
+    // "default_domain": "local",
+
     // Font settings
     // "font_size": 12.0,
 

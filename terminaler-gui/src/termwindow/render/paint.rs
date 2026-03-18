@@ -42,6 +42,7 @@ impl crate::TermWindow {
                             break 'pass;
                         }
                         self.invalidate_fancy_tab_bar();
+                        self.invalidate_tab_sidebar();
                         self.invalidate_modal();
                     }
                     Err(err) => {
@@ -65,6 +66,7 @@ impl crate::TermWindow {
                             self.recreate_texture_atlas(Some(size))
                         };
                         self.invalidate_fancy_tab_bar();
+                        self.invalidate_tab_sidebar();
                         self.invalidate_modal();
 
                         if let Err(err) = result {
@@ -92,6 +94,7 @@ impl crate::TermWindow {
                         }
                     } else if err.root_cause().downcast_ref::<ClearShapeCache>().is_some() {
                         self.invalidate_fancy_tab_bar();
+                        self.invalidate_tab_sidebar();
                         self.invalidate_modal();
                         self.shape_generation += 1;
                         self.shape_cache.borrow_mut().clear();
@@ -275,8 +278,18 @@ impl crate::TermWindow {
                 .context("paint_pane_remove_overlay")?;
         }
 
+        if self.hovered_pane_id.is_some() {
+            self.paint_toast_toolbar(&mut layers)
+                .context("paint_toast_toolbar")?;
+        }
+
         if self.show_tab_bar {
             self.paint_tab_bar(&mut layers).context("paint_tab_bar")?;
+        }
+
+        if self.show_tab_sidebar {
+            self.paint_tab_sidebar(&mut layers)
+                .context("paint_tab_sidebar")?;
         }
 
         self.paint_window_borders(&mut layers)

@@ -464,6 +464,18 @@ pub struct Config {
     #[dynamic(default)]
     pub tab_bar_at_bottom: bool,
 
+    /// If true, show a vertical sidebar for tabs instead of the horizontal tab bar.
+    #[dynamic(default = "default_true")]
+    pub tab_sidebar_enabled: bool,
+
+    /// Position of the tab sidebar: Left or Right.
+    #[dynamic(default)]
+    pub tab_sidebar_position: TabSidebarPosition,
+
+    /// Width of the tab sidebar in pixels.
+    #[dynamic(default = "default_tab_sidebar_width")]
+    pub tab_sidebar_width: u16,
+
     #[dynamic(default = "default_true")]
     pub mouse_wheel_scrolls_tabs: bool,
 
@@ -1827,6 +1839,51 @@ fn default_enq_answerback() -> String {
 
 fn default_tab_max_width() -> usize {
     16
+}
+
+fn default_tab_sidebar_width() -> u16 {
+    240
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TabSidebarPosition {
+    Left,
+    Right,
+}
+
+impl Default for TabSidebarPosition {
+    fn default() -> Self {
+        Self::Right
+    }
+}
+
+impl terminaler_dynamic::FromDynamic for TabSidebarPosition {
+    fn from_dynamic(
+        value: &terminaler_dynamic::Value,
+        _options: terminaler_dynamic::FromDynamicOptions,
+    ) -> Result<Self, terminaler_dynamic::Error> {
+        match value {
+            terminaler_dynamic::Value::String(s) => match s.as_str() {
+                "Left" | "left" => Ok(Self::Left),
+                "Right" | "right" => Ok(Self::Right),
+                _ => Err(terminaler_dynamic::Error::Message(format!(
+                    "invalid TabSidebarPosition: {s}"
+                ))),
+            },
+            _ => Err(terminaler_dynamic::Error::Message(
+                "expected string for TabSidebarPosition".to_string(),
+            )),
+        }
+    }
+}
+
+impl terminaler_dynamic::ToDynamic for TabSidebarPosition {
+    fn to_dynamic(&self) -> terminaler_dynamic::Value {
+        match self {
+            Self::Left => terminaler_dynamic::Value::String("Left".to_string()),
+            Self::Right => terminaler_dynamic::Value::String("Right".to_string()),
+        }
+    }
 }
 
 fn default_update_interval() -> u64 {

@@ -658,6 +658,10 @@ pub enum KeyAssignment {
     SwitchWorkspace(String),
     /// Open the workspace picker overlay.
     WorkspacePicker,
+    /// Toggle the remote web access server on/off.
+    ToggleRemoteAccess,
+    /// Toggle the vertical tab sidebar on/off.
+    ToggleTabSidebar,
 }
 
 #[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
