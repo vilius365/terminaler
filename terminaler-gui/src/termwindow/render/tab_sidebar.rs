@@ -94,43 +94,48 @@ impl crate::TermWindow {
 
             let git_branch = cwd_path.as_deref().and_then(find_git_branch);
 
-            // Detect Claude Code sessions via multiple signals
-            let process_name = active_pane.get_foreground_process_name(CachePolicy::AllowStale);
-            let pane_title = active_pane.get_title();
-            let user_vars = active_pane.copy_user_vars();
-            let is_claude = process_name.as_deref().map_or(false, is_claude_process)
-                || is_claude_title(&pane_title)
-                || user_vars.keys().any(|k| k.starts_with("claude_"));
+            // Detect Claude Code sessions on ALL panes in the tab
+            use crate::termwindow::{ClaudeSessionInfo, ClaudeStatus};
+            let mut pane_claude_info = std::collections::HashMap::new();
+            for pane_pos in tab.iter_panes_ignoring_zoom() {
+                let pane = &pane_pos.pane;
+                let process_name = pane.get_foreground_process_name(CachePolicy::AllowStale);
+                let pane_title = pane.get_title();
+                let user_vars = pane.copy_user_vars();
+                let is_claude = process_name.as_deref().map_or(false, is_claude_process)
+                    || is_claude_title(&pane_title)
+                    || user_vars.keys().any(|k| k.starts_with("claude_"));
 
-            let claude_info = if is_claude {
-                use crate::termwindow::{ClaudeSessionInfo, ClaudeStatus};
-                let status = user_vars.get("claude_status").map(|s| match s.as_str() {
-                    "working" => ClaudeStatus::Working,
-                    "waiting_input" => ClaudeStatus::WaitingInput,
-                    "idle" => ClaudeStatus::Idle,
-                    "error" => ClaudeStatus::Error,
-                    _ => ClaudeStatus::Working,
-                });
-                Some(ClaudeSessionInfo {
-                    model: user_vars.get("claude_model").cloned(),
-                    context_pct: user_vars.get("claude_context_pct").and_then(|v| v.parse().ok()),
-                    cost_usd: user_vars.get("claude_cost").and_then(|v| v.parse().ok()),
-                    duration_ms: user_vars.get("claude_duration_ms").and_then(|v| v.parse().ok()),
-                    lines_added: user_vars.get("claude_lines_added").and_then(|v| v.parse().ok()),
-                    lines_removed: user_vars.get("claude_lines_removed").and_then(|v| v.parse().ok()),
-                    worktree: user_vars.get("claude_worktree").cloned(),
-                    status,
-                })
-            } else {
-                None
-            };
+                if is_claude {
+                    let status = user_vars.get("claude_status").map(|s| match s.as_str() {
+                        "working" => ClaudeStatus::Working,
+                        "waiting_input" => ClaudeStatus::WaitingInput,
+                        "idle" => ClaudeStatus::Idle,
+                        "error" => ClaudeStatus::Error,
+                        _ => ClaudeStatus::Working,
+                    });
+                    pane_claude_info.insert(
+                        pane.pane_id(),
+                        ClaudeSessionInfo {
+                            model: user_vars.get("claude_model").cloned(),
+                            context_pct: user_vars.get("claude_context_pct").and_then(|v| v.parse().ok()),
+                            cost_usd: user_vars.get("claude_cost").and_then(|v| v.parse().ok()),
+                            duration_ms: user_vars.get("claude_duration_ms").and_then(|v| v.parse().ok()),
+                            lines_added: user_vars.get("claude_lines_added").and_then(|v| v.parse().ok()),
+                            lines_removed: user_vars.get("claude_lines_removed").and_then(|v| v.parse().ok()),
+                            worktree: user_vars.get("claude_worktree").cloned(),
+                            status,
+                        },
+                    );
+                }
+            }
 
             new_info.insert(
                 tab_id,
                 SidebarTabInfo {
                     cwd_short,
                     git_branch,
-                    claude_info,
+                    pane_claude_info,
                 },
             );
         }
@@ -142,7 +147,8 @@ impl crate::TermWindow {
         &self,
         palette: &ColorPalette,
     ) -> anyhow::Result<ComputedElement> {
-        let font = self.fonts.title_font()?;
+        let font = self.fonts.default_font()?;
+        let title_font = self.fonts.title_font()?;
         let metrics = RenderMetrics::with_font_metrics(&font.metrics());
         let sidebar_width = self.tab_sidebar_width as f32;
         let border = self.get_os_border();
@@ -264,21 +270,37 @@ impl crate::TermWindow {
             }));
             children.push(close_button);
 
-            let is_claude_tab = info.map_or(false, |i| i.claude_info.is_some());
+            // Check if any pane in this tab runs Claude
+            let has_any_claude = info.map_or(false, |i| !i.pane_claude_info.is_empty());
 
-            // Title line
+            // For single-pane Claude tabs, get the Claude info to render at tab level
+            let single_pane_claude = if !has_multiple_panes && has_any_claude {
+                info.and_then(|i| i.pane_claude_info.values().next())
+            } else {
+                None
+            };
+            let is_claude_tab = single_pane_claude.is_some();
+
+            // Title line — prefer CWD for non-Claude tabs
             let tab_label = if is_claude_tab {
-                let model_short = info
-                    .and_then(|i| i.claude_info.as_ref())
+                let model_short = single_pane_claude
                     .and_then(|c| c.model.as_deref())
                     .unwrap_or("claude");
-                format!("\u{2728} {}", truncate_str(model_short, 24))
+                truncate_str(model_short, 36)
             } else if has_multiple_panes {
-                format!("\u{25bc} {}", truncate_str(&title, 24))
+                let label = info
+                    .map(|i| i.cwd_short.as_str())
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or(&title);
+                format!("\u{25bc} {}", truncate_str(label, 34))
             } else {
-                truncate_str(&title, 26)
+                let label = info
+                    .map(|i| i.cwd_short.as_str())
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or(&title);
+                truncate_str(label, 38)
             };
-            let title_color = if is_claude_tab {
+            let title_color = if is_claude_tab || has_any_claude {
                 // Orange/amber for Claude tabs
                 LinearRgba::with_components(1.0, 0.7, 0.2, 1.0)
             } else if is_active {
@@ -295,180 +317,34 @@ impl crate::TermWindow {
                 });
             children.push(title_element);
 
-            if is_claude_tab {
-                // === Claude Card rendering ===
-                use crate::termwindow::ClaudeStatus;
-                let claude = info
-                    .and_then(|i| i.claude_info.as_ref())
-                    .cloned()
-                    .unwrap_or_default();
-
-                // Status indicator
-                let (status_icon, status_text, status_color) = match claude.status {
-                    Some(ClaudeStatus::Working) => (
-                        "\u{25b6}",  // ▶
-                        "working",
-                        LinearRgba::with_components(0.3, 0.8, 0.4, 1.0),
-                    ),
-                    Some(ClaudeStatus::WaitingInput) => (
-                        "\u{25cf}",  // ●
-                        "needs input",
-                        LinearRgba::with_components(1.0, 0.8, 0.2, 1.0),
-                    ),
-                    Some(ClaudeStatus::Idle) => (
-                        "\u{2713}",  // ✓
-                        "done",
-                        LinearRgba::with_components(0.5, 0.5, 0.5, 1.0),
-                    ),
-                    Some(ClaudeStatus::Error) => (
-                        "\u{2717}",  // ✗
-                        "error",
-                        notif_color,
-                    ),
-                    None => (
-                        "\u{25b6}",  // ▶
-                        "active",
-                        LinearRgba::with_components(0.3, 0.8, 0.4, 1.0),
-                    ),
-                };
-                children.push(
-                    Element::new(
-                        &font,
-                        ElementContent::Text(format!("{} {}", status_icon, status_text)),
-                    )
-                    .display(DisplayType::Block)
-                    .line_height(Some(1.1))
-                    .colors(ElementColors {
-                        border: BorderColor::default(),
-                        bg: InheritableColor::Inherited,
-                        text: status_color.into(),
-                    }),
+            if let Some(claude) = single_pane_claude {
+                // === Single-pane Claude Card at tab level ===
+                build_claude_card_children(
+                    &mut children,
+                    claude,
+                    info,
+                    &font,
+                    &title_font,
+                    dimmed_color,
+                    notif_color,
                 );
-
-                // Worktree/project + branch
-                let project = claude
-                    .worktree
-                    .as_deref()
-                    .or(info.map(|i| i.cwd_short.as_str()))
-                    .unwrap_or("");
-                if !project.is_empty() {
-                    let project_line = if let Some(ref branch) =
-                        info.and_then(|i| i.git_branch.as_ref())
-                    {
-                        format!(
-                            "{} \u{e0a0} {}",
-                            truncate_str(project, 16),
-                            truncate_str(branch, 10)
-                        )
-                    } else {
-                        truncate_str(project, 26)
-                    };
-                    children.push(
-                        Element::new(&font, ElementContent::Text(project_line))
-                            .display(DisplayType::Block)
-                            .line_height(Some(1.1))
-                            .colors(ElementColors {
-                                border: BorderColor::default(),
-                                bg: InheritableColor::Inherited,
-                                text: dimmed_color.into(),
-                            }),
-                    );
-                }
-
-                // Context window bar
-                if let Some(pct) = claude.context_pct {
-                    let filled = (pct as usize) / 10;
-                    let empty = 10usize.saturating_sub(filled);
-                    let bar: String =
-                        "\u{25B0}".repeat(filled) + &"\u{25B1}".repeat(empty);
-                    let bar_text = format!("{} {}%", bar, pct);
-                    let bar_color = if pct >= 90 {
-                        notif_color
-                    } else if pct >= 70 {
-                        LinearRgba::with_components(1.0, 0.8, 0.2, 1.0)
-                    } else {
-                        dimmed_color
-                    };
-                    children.push(
-                        Element::new(&font, ElementContent::Text(bar_text))
-                            .display(DisplayType::Block)
-                            .line_height(Some(1.1))
-                            .colors(ElementColors {
-                                border: BorderColor::default(),
-                                bg: InheritableColor::Inherited,
-                                text: bar_color.into(),
-                            }),
-                    );
-                }
-
-                // Cost + duration + lines
-                let mut stats = vec![];
-                if let Some(cost) = claude.cost_usd {
-                    stats.push(format!("${:.2}", cost));
-                }
-                if let Some(ms) = claude.duration_ms {
-                    let mins = ms / 60_000;
-                    if mins > 0 {
-                        stats.push(format!("{}m", mins));
-                    }
-                }
-                if claude.lines_added.is_some() || claude.lines_removed.is_some() {
-                    let added = claude.lines_added.unwrap_or(0);
-                    let removed = claude.lines_removed.unwrap_or(0);
-                    if added > 0 || removed > 0 {
-                        stats.push(format!("+{} -{}", added, removed));
-                    }
-                }
-                if !stats.is_empty() {
-                    children.push(
-                        Element::new(
-                            &font,
-                            ElementContent::Text(truncate_str(
-                                &stats.join(" \u{00b7} "),
-                                28,
-                            )),
-                        )
-                        .display(DisplayType::Block)
-                        .colors(ElementColors {
-                            border: BorderColor::default(),
-                            bg: InheritableColor::Inherited,
-                            text: dimmed_color.into(),
-                        }),
-                    );
-                }
-            } else {
-                // === Normal tab rendering ===
-                // CWD + git branch for single-pane tabs (shown on tab level)
-                if !has_multiple_panes {
-                    if let Some(info) = info {
-                        if !info.cwd_short.is_empty() {
-                            let cwd_text = truncate_str(&info.cwd_short, 28);
-                            let cwd_element =
-                                Element::new(&font, ElementContent::Text(cwd_text))
-                                    .display(DisplayType::Block)
-                                    .line_height(Some(1.1))
-                                    .colors(ElementColors {
-                                        border: BorderColor::default(),
-                                        bg: InheritableColor::Inherited,
-                                        text: dimmed_color.into(),
-                                    });
-                            children.push(cwd_element);
-                        }
-
-                        if let Some(ref branch) = info.git_branch {
-                            let branch_text =
-                                format!("\u{e0a0} {}", truncate_str(branch, 24));
-                            let branch_element =
-                                Element::new(&font, ElementContent::Text(branch_text))
-                                    .display(DisplayType::Block)
-                                    .line_height(Some(1.1))
-                                    .colors(ElementColors {
-                                        border: BorderColor::default(),
-                                        bg: InheritableColor::Inherited,
-                                        text: dimmed_color.into(),
-                                    });
-                            children.push(branch_element);
-                        }
+            } else if !has_multiple_panes {
+                // === Normal single-pane tab rendering ===
+                // CWD is already shown as tab title, only add git branch
+                if let Some(info) = info {
+                    if let Some(ref branch) = info.git_branch {
+                        let branch_text =
+                            format!("\u{e0a0} {}", truncate_str(branch, 34));
+                        let branch_element =
+                            Element::new(&title_font, ElementContent::Text(branch_text))
+                                .display(DisplayType::Block)
+                                .line_height(Some(0.9))
+                                .colors(ElementColors {
+                                    border: BorderColor::default(),
+                                    bg: InheritableColor::Inherited,
+                                    text: dimmed_color.into(),
+                                });
+                        children.push(branch_element);
                     }
                 }
             }
@@ -501,10 +377,14 @@ impl crate::TermWindow {
             };
 
             let hover_bg = inactive_tab_hover_colors.bg_color.to_linear();
-            let claude_accent = LinearRgba::with_components(1.0, 0.6, 0.1, 1.0);
             let border_left_color = if is_claude_tab {
-                if is_active { claude_accent } else {
-                    LinearRgba::with_components(0.8, 0.5, 0.1, 0.6)
+                claude_status_accent(single_pane_claude.unwrap(), is_active)
+            } else if has_any_claude {
+                // Multi-pane tab with Claude — use first Claude pane's status
+                let first_claude = info.and_then(|i| i.pane_claude_info.values().next());
+                match first_claude {
+                    Some(c) => claude_status_accent(c, is_active),
+                    None => accent_color,
                 }
             } else if is_active {
                 accent_color
@@ -567,6 +447,7 @@ impl crate::TermWindow {
             if has_multiple_panes {
                 for pane_pos in &panes {
                     let pane = &pane_pos.pane;
+                    let pane_id = pane.pane_id();
                     let pane_title = pane.get_title();
                     let pane_cwd = pane
                         .get_current_working_dir(CachePolicy::AllowStale)
@@ -579,10 +460,15 @@ impl crate::TermWindow {
                         });
 
                     let is_active_pane = pane_pos.is_active && is_active;
-                    let pane_accent = if is_active_pane {
+                    let pane_claude = info.and_then(|i| i.pane_claude_info.get(&pane_id));
+                    let is_claude_pane = pane_claude.is_some();
+
+                    let pane_accent_color = if let Some(claude) = pane_claude {
+                        claude_status_accent(claude, is_active_pane)
+                    } else if is_active_pane {
                         accent_color
                     } else {
-                        LinearRgba::with_components(0.0, 0.0, 0.0, 0.0) // transparent
+                        LinearRgba::with_components(0.0, 0.0, 0.0, 0.0)
                     };
 
                     let mut pane_children = vec![];
@@ -603,12 +489,12 @@ impl crate::TermWindow {
                     .vertical_align(VerticalAlign::Middle)
                     .float(Float::Right)
                     .item_type(UIItemType::TabSidebar(TabSidebarItem::ClosePane {
-                        pane_id: pane.pane_id() as usize,
+                        pane_id: pane_id as usize,
                     }))
                     .padding(BoxDimension {
                         left: Dimension::Pixels(3.),
                         right: Dimension::Pixels(2.),
-                        top: Dimension::Pixels(3.),
+                        top: Dimension::Pixels(8.),
                         bottom: Dimension::Pixels(3.),
                     })
                     .border(BoxDimension {
@@ -634,39 +520,67 @@ impl crate::TermWindow {
                     }));
                     pane_children.push(pane_close);
 
-                    // Tree connector + pane title
-                    let pane_label = format!("\u{2514} {}", truncate_str(&pane_title, 20));
-                    pane_children.push(
-                        Element::new(&font, ElementContent::Text(pane_label)).colors(
-                            ElementColors {
-                                border: BorderColor::default(),
-                                bg: InheritableColor::Inherited,
-                                text: if is_active_pane {
-                                    text_color.into()
-                                } else {
-                                    dimmed_color.into()
-                                },
-                            },
-                        ),
-                    );
+                    if let Some(claude) = pane_claude {
+                        // === Claude Card at pane level ===
+                        let model_short = claude
+                            .model
+                            .as_deref()
+                            .unwrap_or("claude");
+                        let title_element = Element::new(
+                            &font,
+                            ElementContent::Text(truncate_str(model_short, 32)),
+                        )
+                        .line_height(Some(1.0))
+                        .colors(ElementColors {
+                            border: BorderColor::default(),
+                            bg: InheritableColor::Inherited,
+                            text: LinearRgba::with_components(1.0, 0.7, 0.2, 1.0).into(),
+                        });
+                        pane_children.push(title_element);
 
-                    // Pane CWD
-                    if let Some(ref cwd) = pane_cwd {
-                        pane_children.push(
-                            Element::new(
-                                &font,
-                                ElementContent::Text(truncate_str(cwd, 24)),
-                            )
-                            .colors(ElementColors {
-                                border: BorderColor::default(),
-                                bg: InheritableColor::Inherited,
-                                text: dimmed_color.into(),
-                            }),
+                        build_claude_card_children(
+                            &mut pane_children,
+                            claude,
+                            info,
+                            &font,
+                            &title_font,
+                            dimmed_color,
+                            notif_color,
                         );
+                    } else {
+                        // Normal pane: tree connector + title
+                        let pane_label = format!("\u{2514} {}", truncate_str(&pane_title, 30));
+                        pane_children.push(
+                            Element::new(&font, ElementContent::Text(pane_label)).colors(
+                                ElementColors {
+                                    border: BorderColor::default(),
+                                    bg: InheritableColor::Inherited,
+                                    text: if is_active_pane {
+                                        text_color.into()
+                                    } else {
+                                        dimmed_color.into()
+                                    },
+                                },
+                            ),
+                        );
+
+                        // Pane CWD
+                        if let Some(ref cwd) = pane_cwd {
+                            pane_children.push(
+                                Element::new(
+                                    &title_font,
+                                    ElementContent::Text(truncate_str(cwd, 34)),
+                                )
+                                .colors(ElementColors {
+                                    border: BorderColor::default(),
+                                    bg: InheritableColor::Inherited,
+                                    text: dimmed_color.into(),
+                                }),
+                            );
+                        }
                     }
 
                     let pane_bg = if is_active_pane {
-                        // Slightly lighter than tab bg
                         LinearRgba::with_components(
                             tab_bg.0 + 0.05,
                             tab_bg.1 + 0.05,
@@ -685,20 +599,20 @@ impl crate::TermWindow {
                                 pane_idx: pane_pos.index,
                             }))
                             .padding(BoxDimension {
-                                left: Dimension::Pixels(20.), // indented
+                                left: Dimension::Pixels(if is_claude_pane { 12. } else { 20. }),
                                 right: Dimension::Pixels(4.),
-                                top: Dimension::Pixels(3.),
-                                bottom: Dimension::Pixels(3.),
+                                top: Dimension::Pixels(if is_claude_pane { 4. } else { 3. }),
+                                bottom: Dimension::Pixels(if is_claude_pane { 4. } else { 3. }),
                             })
                             .border(BoxDimension {
-                                left: Dimension::Pixels(2.),
+                                left: Dimension::Pixels(if is_claude_pane { 4. } else { 2. }),
                                 right: Dimension::Pixels(0.),
                                 top: Dimension::Pixels(0.),
                                 bottom: Dimension::Pixels(0.),
                             })
                             .colors(ElementColors {
                                 border: BorderColor {
-                                    left: pane_accent,
+                                    left: pane_accent_color,
                                     right: pane_bg,
                                     top: pane_bg,
                                     bottom: pane_bg,
@@ -708,7 +622,7 @@ impl crate::TermWindow {
                             })
                             .hover_colors(Some(ElementColors {
                                 border: BorderColor {
-                                    left: pane_accent,
+                                    left: pane_accent_color,
                                     right: hover_bg,
                                     top: hover_bg,
                                     bottom: hover_bg,
@@ -723,17 +637,31 @@ impl crate::TermWindow {
             }
         }
 
-        // New tab button at the bottom
+        // Wrap tab entries in a container with min_height to push + button to bottom
+        let button_height = metrics.cell_size.height as f32 + 16.; // button + padding
+        let tabs_min_height = window_height - button_height - 3.; // 3px top padding
+        let tabs_container = Element::new(&font, ElementContent::Children(tab_elements))
+            .display(DisplayType::Block)
+            .min_height(Some(Dimension::Pixels(tabs_min_height.max(0.))))
+            .colors(ElementColors {
+                border: BorderColor::default(),
+                bg: InheritableColor::Inherited,
+                text: InheritableColor::Inherited,
+            });
+
+        // New tab button — centered, stuck to bottom
         let new_tab_colors = colors.new_tab();
         let new_tab_hover = colors.new_tab_hover();
+        let plus_size = metrics.cell_size.height as f32 * 0.4;
+        let h_padding = (sidebar_width - plus_size - 2.) / 2.; // center horizontally
         let new_tab_button = Element::new(
             &font,
             ElementContent::Poly {
                 line_width: metrics.underline_height.max(2),
                 poly: SizedPoly {
                     poly: PLUS_BUTTON,
-                    width: Dimension::Pixels(metrics.cell_size.height as f32 / 2.),
-                    height: Dimension::Pixels(metrics.cell_size.height as f32 / 2.),
+                    width: Dimension::Pixels(plus_size),
+                    height: Dimension::Pixels(plus_size),
                 },
             },
         )
@@ -741,10 +669,10 @@ impl crate::TermWindow {
         .vertical_align(VerticalAlign::Middle)
         .item_type(UIItemType::TabSidebar(TabSidebarItem::NewTabButton))
         .padding(BoxDimension {
-            left: Dimension::Pixels(8.),
-            right: Dimension::Pixels(8.),
-            top: Dimension::Pixels(8.),
-            bottom: Dimension::Pixels(8.),
+            left: Dimension::Pixels(h_padding),
+            right: Dimension::Pixels(h_padding),
+            top: Dimension::Pixels(6.),
+            bottom: Dimension::Pixels(6.),
         })
         .border(BoxDimension {
             left: Dimension::Pixels(1.),
@@ -768,17 +696,25 @@ impl crate::TermWindow {
             text: new_tab_hover.fg_color.to_linear().into(),
         }))
         .min_width(Some(Dimension::Pixels(sidebar_width)));
-        tab_elements.push(new_tab_button);
 
-        // Root container — no min_height so + button sits just below tabs
-        let root = Element::new(&font, ElementContent::Children(tab_elements))
-            .display(DisplayType::Block)
-            .colors(ElementColors {
-                border: BorderColor::default(),
-                bg: bg_color.into(),
-                text: text_color.into(),
-            })
-            .min_width(Some(Dimension::Pixels(sidebar_width)));
+        // Root container
+        let root = Element::new(
+            &font,
+            ElementContent::Children(vec![tabs_container, new_tab_button]),
+        )
+        .display(DisplayType::Block)
+        .padding(BoxDimension {
+            left: Dimension::Pixels(0.),
+            right: Dimension::Pixels(0.),
+            top: Dimension::Pixels(3.),
+            bottom: Dimension::Pixels(0.),
+        })
+        .colors(ElementColors {
+            border: BorderColor::default(),
+            bg: bg_color.into(),
+            text: text_color.into(),
+        })
+        .min_width(Some(Dimension::Pixels(sidebar_width)));
 
         let dpi = self.dimensions.dpi as f32;
         let context = LayoutContext {
@@ -845,10 +781,10 @@ impl crate::TermWindow {
                     - border.right.get() as f32
             }
         };
-        let bg_y = border.top.get() as f32 + tab_bar_height;
+        let bg_y = border.top.get() as f32;
         self.filled_rectangle(
             layers,
-            0,
+            1,
             euclid::rect(bg_x, bg_y, sidebar_width, window_height - bg_y),
             bg_color,
         )
@@ -901,6 +837,172 @@ impl crate::TermWindow {
         } else {
             None
         }
+    }
+}
+
+/// Build the Claude Card body elements (status, project+branch, context bar, stats).
+/// Appended to an existing `children` vec — the caller is responsible for the title line.
+fn build_claude_card_children(
+    children: &mut Vec<Element>,
+    claude: &crate::termwindow::ClaudeSessionInfo,
+    info: Option<&SidebarTabInfo>,
+    font: &Rc<LoadedFont>,
+    detail_font: &Rc<LoadedFont>,
+    dimmed_color: LinearRgba,
+    notif_color: LinearRgba,
+) {
+    use crate::termwindow::ClaudeStatus;
+
+    // Status indicator
+    let (status_icon, status_text, status_color) = match claude.status {
+        Some(ClaudeStatus::Working) => (
+            "\u{25b6}",  // ▶
+            "working",
+            LinearRgba::with_components(0.3, 0.8, 0.4, 1.0),
+        ),
+        Some(ClaudeStatus::WaitingInput) => (
+            "\u{25cf}",  // ●
+            "awaiting input",
+            LinearRgba::with_components(1.0, 0.8, 0.2, 1.0),
+        ),
+        Some(ClaudeStatus::Idle) => (
+            "\u{2714}",  // ✔
+            "idle",
+            LinearRgba::with_components(0.5, 0.5, 0.5, 1.0),
+        ),
+        Some(ClaudeStatus::Error) => (
+            "\u{2717}",  // ✗
+            "error",
+            notif_color,
+        ),
+        None => (
+            "\u{25b6}",  // ▶
+            "active",
+            LinearRgba::with_components(0.3, 0.8, 0.4, 1.0),
+        ),
+    };
+    children.push(
+        Element::new(
+            font,
+            ElementContent::Text(format!("{} {}", status_icon, status_text)),
+        )
+        .display(DisplayType::Block)
+        .line_height(Some(0.9))
+        .colors(ElementColors {
+            border: BorderColor::default(),
+            bg: InheritableColor::Inherited,
+            text: status_color.into(),
+        }),
+    );
+
+    // Worktree/project + branch
+    let project = claude
+        .worktree
+        .as_deref()
+        .or(info.map(|i| i.cwd_short.as_str()))
+        .unwrap_or("");
+    if !project.is_empty() {
+        let project_line = if let Some(ref branch) =
+            info.and_then(|i| i.git_branch.as_ref())
+        {
+            format!(
+                "{} \u{e0a0} {}",
+                truncate_str(project, 24),
+                truncate_str(branch, 14)
+            )
+        } else {
+            truncate_str(project, 38)
+        };
+        children.push(
+            Element::new(detail_font, ElementContent::Text(project_line))
+                .display(DisplayType::Block)
+                .line_height(Some(0.9))
+                .colors(ElementColors {
+                    border: BorderColor::default(),
+                    bg: InheritableColor::Inherited,
+                    text: dimmed_color.into(),
+                }),
+        );
+    }
+
+    // Context window bar — use ASCII block chars that render reliably
+    if let Some(pct) = claude.context_pct {
+        let bar_width = 15;
+        let filled = (pct as usize * bar_width) / 100;
+        let empty = bar_width.saturating_sub(filled);
+        let bar: String = "\u{2588}".repeat(filled) + &"\u{2591}".repeat(empty);
+        let bar_text = format!("{} {}%", bar, pct);
+        let bar_color = if pct >= 90 {
+            notif_color
+        } else if pct >= 70 {
+            LinearRgba::with_components(1.0, 0.8, 0.2, 1.0)
+        } else {
+            dimmed_color
+        };
+        children.push(
+            Element::new(detail_font, ElementContent::Text(bar_text))
+                .display(DisplayType::Block)
+                .line_height(Some(0.9))
+                .colors(ElementColors {
+                    border: BorderColor::default(),
+                    bg: InheritableColor::Inherited,
+                    text: bar_color.into(),
+                }),
+        );
+    }
+
+    // Cost + duration + lines
+    let mut stats = vec![];
+    if let Some(cost) = claude.cost_usd {
+        stats.push(format!("${:.2}", cost));
+    }
+    if let Some(ms) = claude.duration_ms {
+        let mins = ms / 60_000;
+        if mins > 0 {
+            stats.push(format!("{}m", mins));
+        }
+    }
+    if claude.lines_added.is_some() || claude.lines_removed.is_some() {
+        let added = claude.lines_added.unwrap_or(0);
+        let removed = claude.lines_removed.unwrap_or(0);
+        if added > 0 || removed > 0 {
+            stats.push(format!("+{} -{}", added, removed));
+        }
+    }
+    if !stats.is_empty() {
+        children.push(
+            Element::new(
+                detail_font,
+                ElementContent::Text(truncate_str(
+                    &stats.join(" \u{00b7} "),
+                    38,
+                )),
+            )
+            .display(DisplayType::Block)
+            .line_height(Some(0.9))
+            .colors(ElementColors {
+                border: BorderColor::default(),
+                bg: InheritableColor::Inherited,
+                text: dimmed_color.into(),
+            }),
+        );
+    }
+}
+
+/// Get the accent color for a Claude session based on its status.
+fn claude_status_accent(claude: &crate::termwindow::ClaudeSessionInfo, active: bool) -> LinearRgba {
+    use crate::termwindow::ClaudeStatus;
+    let base = match claude.status {
+        Some(ClaudeStatus::Working) => LinearRgba::with_components(0.3, 0.8, 0.4, 1.0),      // green
+        Some(ClaudeStatus::WaitingInput) => LinearRgba::with_components(1.0, 0.8, 0.2, 1.0),  // yellow
+        Some(ClaudeStatus::Idle) => LinearRgba::with_components(0.5, 0.5, 0.5, 1.0),          // gray
+        Some(ClaudeStatus::Error) => LinearRgba::with_components(1.0, 0.3, 0.3, 1.0),         // red
+        None => LinearRgba::with_components(0.3, 0.8, 0.4, 1.0),                              // green (default)
+    };
+    if active {
+        base
+    } else {
+        LinearRgba::with_components(base.0 * 0.7, base.1 * 0.7, base.2 * 0.7, 0.6)
     }
 }
 

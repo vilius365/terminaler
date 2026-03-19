@@ -159,9 +159,18 @@ impl super::TermWindow {
                     // Completed a window drag
                     return;
                 }
-                if press == &MousePress::Left && self.dragging.take().is_some() {
-                    // Completed a drag
-                    return;
+                if press == &MousePress::Left {
+                    if let Some((ref item, _)) = self.dragging {
+                        if matches!(item.item_type, UIItemType::TabSidebar(TabSidebarItem::ResizeHandle)) {
+                            self.dragging.take();
+                            self.finish_sidebar_resize();
+                            return;
+                        }
+                    }
+                    if self.dragging.take().is_some() {
+                        // Completed a drag
+                        return;
+                    }
                 }
             }
 
@@ -566,7 +575,7 @@ impl super::TermWindow {
                 self.drag_scroll_thumb(item, start_event, event, context);
             }
             UIItemType::TabSidebar(TabSidebarItem::ResizeHandle) => {
-                self.drag_sidebar_resize(event, context);
+                self.drag_sidebar_resize(item, start_event, event, context);
             }
             _ => {
                 log::error!("drag not implemented for {:?}", item);
@@ -606,7 +615,7 @@ impl super::TermWindow {
                 self.mouse_event_profile_dropdown_item(idx, event, context);
             }
             UIItemType::TabSidebar(ref sidebar_item) => {
-                self.mouse_event_tab_sidebar(sidebar_item.clone(), event, context);
+                self.mouse_event_tab_sidebar(item.clone(), sidebar_item.clone(), event, context);
             }
         }
     }
@@ -1797,6 +1806,7 @@ impl super::TermWindow {
 
     pub fn mouse_event_tab_sidebar(
         &mut self,
+        item: UIItem,
         sidebar_item: TabSidebarItem,
         event: MouseEvent,
         context: &dyn WindowOps,
@@ -1828,8 +1838,8 @@ impl super::TermWindow {
                     self.spawn_tab(&SpawnTabDomain::CurrentPaneDomain);
                 }
                 TabSidebarItem::ResizeHandle => {
-                    // Drag start is handled by the dragging system via UIItem
                     context.set_cursor(Some(MouseCursor::SizeLeftRight));
+                    self.dragging.replace((item.clone(), event));
                 }
             },
             WMEK::Press(MousePress::Middle) => match sidebar_item {
@@ -1863,7 +1873,13 @@ impl super::TermWindow {
         }
     }
 
-    fn drag_sidebar_resize(&mut self, event: MouseEvent, context: &dyn WindowOps) {
+    fn drag_sidebar_resize(
+        &mut self,
+        item: UIItem,
+        start_event: MouseEvent,
+        event: MouseEvent,
+        context: &dyn WindowOps,
+    ) {
         let mx = event.coords.x as f32;
         let new_width = match self.config.tab_sidebar_position {
             config::TabSidebarPosition::Left => mx as u16,
@@ -1871,18 +1887,25 @@ impl super::TermWindow {
                 (self.dimensions.pixel_width as f32 - mx) as u16
             }
         };
-        // Clamp between 120 and 500 pixels
-        let new_width = new_width.max(120).min(500);
+        // Clamp between 120 and 600 pixels
+        let new_width = new_width.max(120).min(600);
         if new_width != self.tab_sidebar_width {
             self.tab_sidebar_width = new_width;
             self.invalidate_tab_sidebar();
             self.invalidate_fancy_tab_bar();
             if let Some(window) = self.window.as_ref().map(|w| w.clone()) {
-                self.apply_dimensions(&self.dimensions.clone(), None, &window);
                 window.invalidate();
             }
         }
         context.set_cursor(Some(MouseCursor::SizeLeftRight));
+        self.dragging.replace((item, start_event));
+    }
+
+    fn finish_sidebar_resize(&mut self) {
+        if let Some(window) = self.window.as_ref().map(|w| w.clone()) {
+            self.apply_dimensions(&self.dimensions.clone(), None, &window);
+            window.invalidate();
+        }
     }
 
     /// Returns the sidebar pixel width to subtract from mouse X coordinates
