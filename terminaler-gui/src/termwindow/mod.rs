@@ -185,7 +185,7 @@ pub enum ClaudeStatus {
     Error,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct ClaudeSessionInfo {
     pub model: Option<String>,
     pub context_pct: Option<u8>,
@@ -200,7 +200,27 @@ pub struct ClaudeSessionInfo {
 pub struct SidebarTabInfo {
     pub cwd_short: String,
     pub git_branch: Option<String>,
-    pub claude_info: Option<ClaudeSessionInfo>,
+    pub pane_claude_info: HashMap<mux::pane::PaneId, ClaudeSessionInfo>,
+}
+
+/// Convert a ClaudeSessionInfo to a serde_json::Value for the WebView sidebar.
+#[cfg(windows)]
+fn claude_to_json(c: &ClaudeSessionInfo) -> serde_json::Value {
+    serde_json::json!({
+        "model": c.model,
+        "contextPct": c.context_pct,
+        "costUsd": c.cost_usd,
+        "durationMs": c.duration_ms,
+        "linesAdded": c.lines_added,
+        "linesRemoved": c.lines_removed,
+        "worktree": c.worktree,
+        "status": c.status.map(|s| match s {
+            ClaudeStatus::Working => "working",
+            ClaudeStatus::WaitingInput => "waiting_input",
+            ClaudeStatus::Idle => "idle",
+            ClaudeStatus::Error => "error",
+        }),
+    })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -380,6 +400,16 @@ pub struct TermWindow {
     tab_sidebar: Option<box_model::ComputedElement>,
     tab_sidebar_info: HashMap<TabId, SidebarTabInfo>,
     last_sidebar_info_poll: Instant,
+    /// WebView2-based sidebar (Windows only). None = use GPU fallback.
+    #[cfg(windows)]
+    webview_sidebar: Option<crate::webview_sidebar::WebViewSidebar>,
+    /// Tracks the last time each pane produced output (for idle detection).
+    pane_last_output: HashMap<PaneId, Instant>,
+    /// Panes for which we already fired a "Claude idle" notification.
+    /// Cleared when the pane produces new output.
+    claude_idle_notified: std::collections::HashSet<PaneId>,
+    /// Previous claude_status per pane, for detecting transitions to WaitingInput.
+    claude_prev_status: HashMap<PaneId, Option<ClaudeStatus>>,
     pub right_status: String,
     pub left_status: String,
     last_ui_item: Option<UIItem>,
@@ -747,6 +777,11 @@ impl TermWindow {
             tab_sidebar: None,
             tab_sidebar_info: HashMap::new(),
             last_sidebar_info_poll: Instant::now(),
+            #[cfg(windows)]
+            webview_sidebar: None,
+            pane_last_output: HashMap::new(),
+            claude_idle_notified: std::collections::HashSet::new(),
+            claude_prev_status: HashMap::new(),
             right_status: String::new(),
             left_status: String::new(),
             last_mouse_coords: (0, -1),
@@ -925,6 +960,8 @@ impl TermWindow {
             }
             myself.load_os_parameters();
             window.show();
+            #[cfg(windows)]
+            myself.try_init_webview_sidebar(&window);
             myself.subscribe_to_pane_updates();
             myself.emit_window_event("window-config-reloaded", None);
             myself.emit_status_event();
@@ -1331,6 +1368,8 @@ impl TermWindow {
                     }
                 }
                 MuxNotification::PaneOutput(pane_id) => {
+                    self.pane_last_output.insert(pane_id, Instant::now());
+                    self.claude_idle_notified.remove(&pane_id);
                     self.mux_pane_output_event(pane_id);
                 }
                 MuxNotification::WindowInvalidated(_) => {
@@ -2251,8 +2290,261 @@ impl TermWindow {
     }
 
     fn show_debug_overlay(&mut self) {
-        // Debug overlay (Lua REPL) removed in Phase 1
-        log::info!("ShowDebugOverlay: Lua REPL overlay has been removed");
+        let mux = Mux::get();
+        let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
+            Some(tab) => tab,
+            None => return,
+        };
+
+        let gpu_info = if self.webgpu.is_some() {
+            "WebGPU".to_string()
+        } else if self.gl.is_some() {
+            "OpenGL".to_string()
+        } else {
+            "Software".to_string()
+        };
+
+        let config = &self.config;
+        let snapshot = crate::overlay::debug::DebugSnapshot {
+            fps: self.fps,
+            last_frame_ms: self.last_frame_duration.as_secs_f64() * 1000.0,
+            window_id: self.mux_window_id,
+            terminal_size: (self.terminal_size.cols, self.terminal_size.rows),
+            pixel_size: (self.terminal_size.pixel_width, self.terminal_size.pixel_height),
+            dpi: self.terminal_size.dpi,
+            font_name: format!("{:?}", config.font),
+            font_size: config.font_size,
+            gpu_info,
+            config_file: config::CONFIG_DIRS
+                .first()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "<unknown>".into()),
+        };
+
+        let (overlay, future) = start_overlay(self, &tab, move |_tab_id, term| {
+            crate::overlay::debug::debug_overlay(term, snapshot)
+        });
+        self.assign_overlay(tab.tab_id(), overlay);
+        promise::spawn::spawn(future).detach();
+    }
+
+    /// Build a notification message with context from ClaudeSessionInfo.
+    fn claude_notification_message(info: Option<&ClaudeSessionInfo>, cwd: &str) -> String {
+        let mut parts = vec!["Awaiting your input".to_string()];
+        if let Some(info) = info {
+            if let Some(model) = &info.model {
+                parts.push(format!("Model: {}", model));
+            }
+            if let Some(cost) = info.cost_usd {
+                parts.push(format!("Cost: ${:.2}", cost));
+            }
+        }
+        if !cwd.is_empty() {
+            parts.push(format!("Project: {}", cwd));
+        }
+        parts.join("\n")
+    }
+
+    /// Build a Slack mrkdwn notification message with context.
+    fn claude_slack_message(info: Option<&ClaudeSessionInfo>, cwd: &str) -> String {
+        let mut lines = vec!["Awaiting your input".to_string()];
+        if let Some(info) = info {
+            if let Some(model) = &info.model {
+                lines.push(format!("• Model: {}", model));
+            }
+            if let Some(cost) = info.cost_usd {
+                lines.push(format!("• Cost: ${:.2}", cost));
+            }
+        }
+        if !cwd.is_empty() {
+            lines.push(format!("• Project: {}", cwd));
+        }
+        lines.join("\n")
+    }
+
+    /// Fire notification via toast + Slack.
+    fn fire_claude_notification(&self, info: Option<&ClaudeSessionInfo>, cwd: &str) {
+        let title = match info.and_then(|i| i.model.as_deref()) {
+            Some(model) => format!("Claude ({})", model),
+            None => "Claude Code".to_string(),
+        };
+        let message = Self::claude_notification_message(info, cwd);
+        let slack_url = self.config.slack_notification_webhook.clone();
+        let slack_message = Self::claude_slack_message(info, cwd);
+        let title_clone = title.clone();
+
+        terminaler_toast_notification::persistent_toast_notification(&title, &message);
+
+        if let Some(url) = slack_url {
+            std::thread::spawn(move || {
+                terminaler_toast_notification::slack::send_notification_sync(
+                    &url,
+                    &title_clone,
+                    &slack_message,
+                );
+            });
+        }
+    }
+
+    /// Check if any Claude pane has gone idle and fire a Windows + Slack notification.
+    /// Called every paint frame; internally throttled to check every 2 seconds.
+    ///
+    /// Two detection modes:
+    /// 1. User-var based (precise): fires on `claude_status` transition to `WaitingInput`
+    /// 2. Idle timeout fallback: fires after 3s idle for Claude panes without user vars
+    pub fn check_claude_idle_notifications(&mut self) {
+        use mux::pane::CachePolicy;
+
+        // Throttle: only check every 2 seconds
+        static LAST_CHECK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let last = LAST_CHECK.load(std::sync::atomic::Ordering::Relaxed);
+        if now_ms.saturating_sub(last) < 2000 {
+            return;
+        }
+        LAST_CHECK.store(now_ms, std::sync::atomic::Ordering::Relaxed);
+
+        let idle_threshold = Duration::from_secs(3);
+        let now = Instant::now();
+
+        let mux = Mux::get();
+        let window = match mux.get_window(self.mux_window_id) {
+            Some(w) => w,
+            None => return,
+        };
+
+        // Collect Claude pane info from all tabs
+        struct ClaudePaneInfo {
+            pane_id: PaneId,
+            has_user_vars: bool,
+            status: Option<ClaudeStatus>,
+            session_info: Option<ClaudeSessionInfo>,
+            cwd: String,
+        }
+        let mut claude_panes = vec![];
+
+        for tab in window.iter() {
+            let tab_id = tab.tab_id();
+            for pos in tab.iter_panes_ignoring_zoom() {
+                let pane = &pos.pane;
+                let process_name = pane.get_foreground_process_name(CachePolicy::AllowStale);
+                let user_vars = pane.copy_user_vars();
+                let has_claude_vars = user_vars.keys().any(|k| k.starts_with("claude_"));
+
+                let is_claude = process_name.as_deref().map_or(false, |name| {
+                    let basename = std::path::Path::new(name)
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or(name)
+                        .to_lowercase();
+                    let basename = basename.strip_suffix(".exe").unwrap_or(&basename);
+                    matches!(basename, "claude" | "claude-code")
+                }) || has_claude_vars;
+
+                if !is_claude {
+                    continue;
+                }
+
+                let status = user_vars.get("claude_status").map(|s| match s.as_str() {
+                    "working" => ClaudeStatus::Working,
+                    "waiting_input" => ClaudeStatus::WaitingInput,
+                    "idle" => ClaudeStatus::Idle,
+                    "error" => ClaudeStatus::Error,
+                    _ => ClaudeStatus::Working,
+                });
+
+                // Get CWD from sidebar info if available
+                let cwd = self
+                    .tab_sidebar_info
+                    .get(&tab_id)
+                    .map(|info| info.cwd_short.clone())
+                    .unwrap_or_default();
+
+                let session_info = if has_claude_vars {
+                    Some(ClaudeSessionInfo {
+                        model: user_vars.get("claude_model").cloned(),
+                        context_pct: user_vars
+                            .get("claude_context_pct")
+                            .and_then(|v| v.parse().ok()),
+                        cost_usd: user_vars.get("claude_cost").and_then(|v| v.parse().ok()),
+                        duration_ms: user_vars
+                            .get("claude_duration_ms")
+                            .and_then(|v| v.parse().ok()),
+                        lines_added: user_vars
+                            .get("claude_lines_added")
+                            .and_then(|v| v.parse().ok()),
+                        lines_removed: user_vars
+                            .get("claude_lines_removed")
+                            .and_then(|v| v.parse().ok()),
+                        worktree: user_vars.get("claude_worktree").cloned(),
+                        status,
+                    })
+                } else {
+                    None
+                };
+
+                claude_panes.push(ClaudePaneInfo {
+                    pane_id: pane.pane_id(),
+                    has_user_vars: has_claude_vars,
+                    status,
+                    session_info,
+                    cwd,
+                });
+            }
+        }
+        drop(window);
+
+        for pane_info in &claude_panes {
+            let pane_id = pane_info.pane_id;
+
+            if pane_info.has_user_vars {
+                // Phase 1: User-var based detection (precise)
+                // Fire notification on transition TO WaitingInput
+                let prev = self.claude_prev_status.get(&pane_id).copied().flatten();
+                let curr = pane_info.status;
+
+                if curr == Some(ClaudeStatus::WaitingInput) && prev != Some(ClaudeStatus::WaitingInput) {
+                    if !self.claude_idle_notified.contains(&pane_id) {
+                        self.claude_idle_notified.insert(pane_id);
+                        log::info!(
+                            "Claude pane {} status → WaitingInput — firing notification",
+                            pane_id,
+                        );
+                        self.fire_claude_notification(
+                            pane_info.session_info.as_ref(),
+                            &pane_info.cwd,
+                        );
+                    }
+                }
+
+                // Clear notified flag when status moves away from WaitingInput
+                if curr != Some(ClaudeStatus::WaitingInput) {
+                    self.claude_idle_notified.remove(&pane_id);
+                }
+
+                self.claude_prev_status.insert(pane_id, curr);
+            } else {
+                // Phase 2: Idle timeout fallback (for Claude without user vars)
+                if self.claude_idle_notified.contains(&pane_id) {
+                    continue;
+                }
+                if let Some(last_output) = self.pane_last_output.get(&pane_id) {
+                    let idle_duration = now.duration_since(*last_output);
+                    if idle_duration >= idle_threshold {
+                        self.claude_idle_notified.insert(pane_id);
+                        log::info!(
+                            "Claude pane {} idle for {:.1}s — firing notification",
+                            pane_id,
+                            idle_duration.as_secs_f64()
+                        );
+                        self.fire_claude_notification(None, &pane_info.cwd);
+                    }
+                }
+            }
+        }
     }
 
     fn show_tab_navigator(&mut self) {
@@ -3259,6 +3551,10 @@ impl TermWindow {
             }
             ToggleTabSidebar => {
                 self.show_tab_sidebar = !self.show_tab_sidebar;
+                #[cfg(windows)]
+                if let Some(ref wv) = self.webview_sidebar {
+                    wv.set_visible(self.show_tab_sidebar);
+                }
                 self.invalidate_tab_sidebar();
                 self.invalidate_fancy_tab_bar();
                 if let Some(window) = self.window.as_ref().map(|w| w.clone()) {
@@ -3268,6 +3564,242 @@ impl TermWindow {
             }
         };
         Ok(PerformAssignmentResult::Handled)
+    }
+
+    // ── WebView sidebar helpers ──────────────────────────────────────
+
+    /// Initialize the WebView2 sidebar child window.
+    #[cfg(windows)]
+    fn try_init_webview_sidebar(&mut self, window: &Window) {
+        if !self.show_tab_sidebar {
+            return;
+        }
+
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+        let hwnd = match window.window_handle() {
+            Ok(handle) => match handle.as_raw() {
+                RawWindowHandle::Win32(h) => h.hwnd.get() as isize,
+                _ => return,
+            },
+            Err(_) => return,
+        };
+
+        let (x, y, w, h) = self.compute_sidebar_geometry();
+
+        match crate::webview_sidebar::WebViewSidebar::new(
+            hwnd,
+            x,
+            y,
+            w,
+            h,
+        ) {
+            Ok(wv) => {
+                log::info!("WebView sidebar initialized");
+                self.webview_sidebar = Some(wv);
+            }
+            Err(e) => {
+                log::warn!("WebView2 unavailable, using GPU sidebar: {:#}", e);
+            }
+        }
+    }
+
+    /// Compute sidebar pixel geometry: (x, y, width, height).
+    /// Leaves a 6px strip on the inner edge for the resize handle.
+    #[cfg(windows)]
+    fn compute_sidebar_geometry(&self) -> (i32, i32, u32, u32) {
+        let border = self.get_os_border();
+        let tab_bar_height = if self.show_tab_bar {
+            self.tab_bar_pixel_height().unwrap_or(0.) as i32
+        } else {
+            0
+        };
+        let handle_width = 6u32; // resize handle strip exposed to parent
+        let sidebar_width = (self.tab_sidebar_width as u32).saturating_sub(handle_width);
+        let y = border.top.get() as i32 + tab_bar_height + 7;
+        let height = (self.dimensions.pixel_height as i32 - y).max(0) as u32;
+
+        let x = match self.config.tab_sidebar_position {
+            config::TabSidebarPosition::Left => border.left.get() as i32,
+            config::TabSidebarPosition::Right => {
+                // Push WebView inward, leaving handle_width on the left edge
+                self.dimensions.pixel_width as i32
+                    - self.tab_sidebar_width as i32
+                    - border.right.get() as i32
+                    + handle_width as i32
+            }
+        };
+
+        (x, y, sidebar_width, height)
+    }
+
+    /// Handle an IPC action message from the WebView sidebar JS.
+    #[cfg(windows)]
+    fn handle_sidebar_ipc(&mut self, msg: &str) {
+        let action: serde_json::Value = match serde_json::from_str(msg) {
+            Ok(v) => v,
+            Err(e) => {
+                log::warn!("Invalid sidebar IPC: {}: {}", msg, e);
+                return;
+            }
+        };
+
+        let action_type = action["type"].as_str().unwrap_or("");
+        match action_type {
+            "activate_tab" => {
+                if let Some(idx) = action["tabIdx"].as_u64() {
+                    self.activate_tab(idx as isize).ok();
+                }
+            }
+            "close_tab" => {
+                if let Some(idx) = action["tabIdx"].as_u64() {
+                    // Activate the tab first, then close it
+                    self.activate_tab(idx as isize).ok();
+                    self.close_current_tab(true);
+                }
+            }
+            "close_pane" => {
+                if let Some(pane_id) = action["paneId"].as_u64() {
+                    let mux = mux::Mux::get();
+                    mux.remove_pane(pane_id as PaneId);
+                }
+            }
+            "activate_pane" => {
+                if let Some(tab_idx) = action["tabIdx"].as_u64() {
+                    self.activate_tab(tab_idx as isize).ok();
+                    // Activate the specific pane within the tab
+                    if let Some(pane_idx) = action["paneIdx"].as_u64() {
+                        let mux = mux::Mux::get();
+                        if let Some(tab) = mux.get_active_tab_for_window(self.mux_window_id)
+                        {
+                            let panes = tab.iter_panes_ignoring_zoom();
+                            if let Some(pp) = panes.get(pane_idx as usize) {
+                                tab.set_active_idx(pp.index);
+                            }
+                        }
+                    }
+                }
+            }
+            "new_tab" => {
+                use config::keyassignment::SpawnTabDomain;
+                self.spawn_tab(&SpawnTabDomain::CurrentPaneDomain);
+            }
+            "refocus" | _ if action_type.is_empty() => {}
+            _ => {
+                log::trace!("Unknown sidebar IPC action: {}", msg);
+            }
+        }
+
+        // Always refocus the parent window after any sidebar interaction
+        // to prevent WebView2 from keeping keyboard focus
+        if let Some(ref wv) = self.webview_sidebar {
+            wv.refocus_parent();
+        }
+    }
+
+    /// Serialize current sidebar state as JSON for the WebView.
+    #[cfg(windows)]
+    pub fn serialize_sidebar_state(&self) -> String {
+        let mux = mux::Mux::get();
+        let mux_window = match mux.get_window(self.mux_window_id) {
+            Some(w) => w,
+            None => return "{}".to_string(),
+        };
+        let active_tab_id = mux
+            .get_active_tab_for_window(self.mux_window_id)
+            .map(|t| t.tab_id());
+
+        let tabs: Vec<serde_json::Value> = mux_window
+            .iter()
+            .enumerate()
+            .map(|(tab_idx, tab)| {
+                let tab_id = tab.tab_id();
+                let is_active = active_tab_id == Some(tab_id);
+                let title = tab.get_title();
+                let info = self.tab_sidebar_info.get(&tab_id);
+                let panes = tab.iter_panes_ignoring_zoom();
+                let has_multiple_panes = panes.len() > 1;
+
+                let has_notification = self
+                    .pane_state_for_tab(tab_id)
+                    .map_or(false, |ps| ps.notification_start.is_some());
+                let notif_count = self
+                    .pane_state_for_tab(tab_id)
+                    .map_or(0u32, |ps| ps.notification_count);
+
+                // Single-pane Claude info at tab level
+                let single_claude = if !has_multiple_panes {
+                    info.and_then(|i| {
+                        if i.pane_claude_info.len() == 1 {
+                            i.pane_claude_info.values().next()
+                        } else {
+                            None
+                        }
+                    })
+                } else {
+                    None
+                };
+
+                let claude_json = single_claude.map(|c| claude_to_json(c));
+
+                let pane_entries: Vec<serde_json::Value> = if has_multiple_panes {
+                    panes
+                        .iter()
+                        .map(|pp| {
+                            let pane = &pp.pane;
+                            let pane_id = pane.pane_id();
+                            let pane_title = pane.get_title();
+                            let pane_cwd = pane
+                                .get_current_working_dir(mux::pane::CachePolicy::AllowStale)
+                                .and_then(|u| {
+                                    if u.scheme() == "file" {
+                                        Some(u.path().to_string())
+                                    } else {
+                                        None
+                                    }
+                                });
+                            let pane_claude =
+                                info.and_then(|i| i.pane_claude_info.get(&pane_id));
+
+                            serde_json::json!({
+                                "paneId": pane_id,
+                                "paneIdx": pp.index,
+                                "title": pane_title,
+                                "cwdShort": pane_cwd,
+                                "isActive": pp.is_active,
+                                "claudeInfo": pane_claude.map(|c| claude_to_json(c)),
+                            })
+                        })
+                        .collect()
+                } else {
+                    vec![]
+                };
+
+                serde_json::json!({
+                    "tabIdx": tab_idx,
+                    "tabId": tab_id,
+                    "title": title,
+                    "cwdShort": info.map(|i| i.cwd_short.as_str()).unwrap_or(""),
+                    "gitBranch": info.and_then(|i| i.git_branch.as_deref()),
+                    "isActive": is_active,
+                    "hasNotification": has_notification,
+                    "notificationCount": notif_count,
+                    "panes": pane_entries,
+                    "claudeInfo": claude_json,
+                })
+            })
+            .collect();
+
+        let position = match self.config.tab_sidebar_position {
+            config::TabSidebarPosition::Left => "left",
+            config::TabSidebarPosition::Right => "right",
+        };
+
+        serde_json::json!({
+            "tabs": tabs,
+            "sidebarPosition": position,
+        })
+        .to_string()
     }
 
     fn do_open_link_at_mouse_cursor(&self, pane: &Arc<dyn Pane>) {

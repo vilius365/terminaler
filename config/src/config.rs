@@ -890,6 +890,10 @@ pub struct Config {
     /// Web access configuration for remote browser-based terminal access
     #[dynamic(default)]
     pub web_access: Option<WebAccessConfig>,
+
+    /// Slack webhook URL for notifications (e.g., Claude Code awaiting input)
+    #[dynamic(default)]
+    pub slack_notification_webhook: Option<String>,
 }
 
 fn default_freetype_load_target() -> FreeTypeLoadTarget {
@@ -1573,7 +1577,7 @@ fn default_check_for_updates() -> bool {
 }
 
 fn default_pane_select_fg_color() -> RgbaColor {
-    SrgbaTuple(0.75, 0.75, 0.75, 1.0).into()
+    SrgbaTuple(0.878, 0.878, 0.878, 1.0).into()
 }
 
 fn default_pane_select_bg_color() -> RgbaColor {
@@ -1594,11 +1598,11 @@ fn default_char_select_font_size() -> f64 {
 }
 
 fn default_char_select_fg_color() -> RgbaColor {
-    SrgbaTuple(0.75, 0.75, 0.75, 1.0).into()
+    SrgbaTuple(0.878, 0.878, 0.878, 1.0).into()
 }
 
 fn default_char_select_bg_color() -> RgbaColor {
-    (0x33, 0x33, 0x33).into()
+    (0x1a, 0x1a, 0x1a).into()
 }
 
 fn default_command_palette_font_size() -> f64 {
@@ -1606,11 +1610,11 @@ fn default_command_palette_font_size() -> f64 {
 }
 
 fn default_command_palette_fg_color() -> RgbaColor {
-    SrgbaTuple(0.75, 0.75, 0.75, 1.0).into()
+    SrgbaTuple(0.878, 0.878, 0.878, 1.0).into()
 }
 
 fn default_command_palette_bg_color() -> RgbaColor {
-    (0x33, 0x33, 0x33).into()
+    (0x1a, 0x1a, 0x1a).into()
 }
 
 fn default_swallow_mouse_click_on_window_focus() -> bool {
@@ -1842,7 +1846,7 @@ fn default_tab_max_width() -> usize {
 }
 
 fn default_tab_sidebar_width() -> u16 {
-    240
+    360
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

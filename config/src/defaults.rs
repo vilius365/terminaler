@@ -52,6 +52,9 @@ pub fn default_config_content() -> String {
     //     "bind_address": "127.0.0.1:9876"
     //     // "token": "your-secret-token"  // auto-generated if omitted
     // }
+
+    // Slack webhook for mobile/remote notifications (e.g., Claude Code)
+    // "slack_notification_webhook": "https://hooks.slack.com/services/T.../B.../..."
 }
 "#
     .to_string()

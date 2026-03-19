@@ -58,6 +58,8 @@ mod stats;
 mod tabbar;
 mod termwindow;
 mod unicode_names;
+#[cfg(windows)]
+mod webview_sidebar;
 mod uniforms;
 mod update;
 mod utilsprites;
@@ -296,25 +298,7 @@ async fn async_run_terminal_gui(
         log::warn!("{:#}", err);
     }
 
-    // Start web access server if enabled.
-    // Leak the handle so the server runs for the process lifetime —
-    // this async fn returns after setup, dropping all locals.
-    {
-        let config = config::configuration();
-        if let Some(ref web_config) = config.web_access {
-            if web_config.enabled {
-                match terminaler_web::start_web_server(web_config.into()) {
-                    Ok(handle) => {
-                        log::info!("Web access server started");
-                        std::mem::forget(handle);
-                    }
-                    Err(e) => {
-                        log::error!("Failed to start web access server: {:#}", e);
-                    }
-                }
-            }
-        }
-    }
+    // Web access server is now started/managed by TermWindow (tab bar toggle).
 
     if !opts.no_auto_connect {
         connect_to_auto_connect_domains().await?;
@@ -397,7 +381,13 @@ enum Publish {
 
 impl Publish {
     pub fn resolve(mux: &Arc<Mux>, config: &ConfigHandle, always_new_process: bool) -> Self {
-        if mux.default_domain().domain_name() != config.default_domain.as_deref().unwrap_or("local")
+        let wsl_default = config.wsl_domains().first().map(|d| d.name.clone());
+        let expected_default = config
+            .default_domain
+            .clone()
+            .or(wsl_default)
+            .unwrap_or_else(|| "local".to_string());
+        if mux.default_domain().domain_name() != expected_default
         {
             return Self::NoConnectNoPublish;
         }
@@ -590,10 +580,19 @@ fn setup_mux(
     crate::update::load_last_release_info_and_set_banner();
     update_mux_domains(config)?;
 
-    let default_name =
-        default_domain_name.unwrap_or(config.default_domain.as_deref().unwrap_or("local"));
+    // Prefer the first WSL domain as default (Windows-native terminal targeting WSL),
+    // fall back to "local" (PowerShell/CMD) if no WSL distros are available.
+    let first_wsl_domain_name = config
+        .wsl_domains()
+        .first()
+        .map(|d| d.name.clone());
+    let default_name = default_domain_name
+        .map(|s| s.to_string())
+        .or_else(|| config.default_domain.clone())
+        .or(first_wsl_domain_name)
+        .unwrap_or_else(|| "local".to_string());
 
-    let domain = mux.get_domain_by_name(default_name).ok_or_else(|| {
+    let domain = mux.get_domain_by_name(&default_name).ok_or_else(|| {
         anyhow::anyhow!(
             "desired default domain '{}' was not found in mux!?",
             default_name
@@ -1059,17 +1058,50 @@ pub fn run_ls_fonts(config: config::ConfigHandle, cmd: &LsFontsCommand) -> anyho
     Ok(())
 }
 
+/// Register an AppUserModelID in the Windows registry so toast notifications work.
+/// Creates HKCU\SOFTWARE\Classes\AppUserModelId\{aumid} with DisplayName and IconUri.
+#[cfg(windows)]
+fn register_aumid_in_registry(aumid: &str, display_name: &str) -> anyhow::Result<()> {
+    use winreg::enums::*;
+    use winreg::RegKey;
+
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let path = format!("SOFTWARE\\Classes\\AppUserModelId\\{}", aumid);
+    let (key, _disposition) = hkcu
+        .create_subkey(&path)
+        .with_context(|| format!("create registry key {}", path))?;
+    key.set_value("DisplayName", &display_name)
+        .with_context(|| "set DisplayName")?;
+
+    // Set IconUri to the exe path so Windows shows our icon in notifications
+    if let Ok(exe) = std::env::current_exe() {
+        let _ = key.set_value("IconUri", &exe.to_string_lossy().as_ref());
+    }
+
+    Ok(())
+}
+
 fn run() -> anyhow::Result<()> {
     // Inform the system of our AppUserModelID.
     // Without this, our toast notifications won't be correctly
     // attributed to our application.
     #[cfg(windows)]
     {
+        const AUMID: &str = "org.wezfurlong.terminaler";
+
         unsafe {
             ::windows::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID(
-                ::windows::core::PCWSTR(wide_string("org.wezfurlong.terminaler").as_ptr()),
+                ::windows::core::PCWSTR(wide_string(AUMID).as_ptr()),
             )
             .unwrap();
+        }
+
+        // Register the AUMID in the Windows registry so that toast notifications
+        // are properly attributed. Without this registry key, Windows 11
+        // CreateToastNotifierWithId() fails because the AUMID is unknown to
+        // the notification platform.
+        if let Err(err) = register_aumid_in_registry(AUMID, "Terminaler") {
+            log::warn!("Failed to register AUMID in registry: {:#}", err);
         }
     }
 

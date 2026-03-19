@@ -146,6 +146,7 @@ impl crate::TermWindow {
         if self.sidebar_info_changed(&new_info) {
             self.tab_sidebar.take();
         }
+
         self.tab_sidebar_info = new_info;
     }
 
@@ -156,7 +157,10 @@ impl crate::TermWindow {
         for (tab_id, new) in new_info {
             match self.tab_sidebar_info.get(tab_id) {
                 Some(old) => {
-                    if old.cwd_short != new.cwd_short || old.git_branch != new.git_branch {
+                    if old.cwd_short != new.cwd_short
+                        || old.git_branch != new.git_branch
+                        || old.pane_claude_info != new.pane_claude_info
+                    {
                         return true;
                     }
                 }
@@ -225,10 +229,10 @@ impl crate::TermWindow {
             text_color.3,
         );
 
-        // Accent color for active tab left border
-        let accent_color = LinearRgba::with_components(0.2, 0.5, 1.0, 1.0);
-        // Notification color
-        let notif_color = LinearRgba::with_components(1.0, 0.3, 0.3, 1.0);
+        // Accent color for active tab left border (accent-blue)
+        let accent_color = LinearRgba::with_components(0.302, 0.620, 1.0, 1.0);
+        // Notification color (accent-red)
+        let notif_color = LinearRgba::with_components(0.973, 0.318, 0.286, 1.0);
 
         let mut tab_elements = vec![];
 
@@ -325,7 +329,7 @@ impl crate::TermWindow {
             };
             let title_color = if is_claude_tab || has_any_claude {
                 // Orange/amber for Claude tabs
-                LinearRgba::with_components(1.0, 0.7, 0.2, 1.0)
+                LinearRgba::with_components(0.859, 0.545, 0.043, 1.0)
             } else if is_active {
                 active_tab_colors.fg_color.to_linear()
             } else {
@@ -497,15 +501,16 @@ impl crate::TermWindow {
 
                     let mut pane_children = vec![];
 
-                    // Close button for pane (float right)
+                    // Close button for pane (float right) — full size for Claude panes
+                    let close_size = if is_claude_pane { 0.35 } else { 0.3 };
                     let pane_close = Element::new(
                         &font,
                         ElementContent::Poly {
                             line_width: metrics.underline_height.max(2),
                             poly: SizedPoly {
                                 poly: X_BUTTON,
-                                width: Dimension::Pixels(metrics.cell_size.height as f32 * 0.3),
-                                height: Dimension::Pixels(metrics.cell_size.height as f32 * 0.3),
+                                width: Dimension::Pixels(metrics.cell_size.height as f32 * close_size),
+                                height: Dimension::Pixels(metrics.cell_size.height as f32 * close_size),
                             },
                         },
                     )
@@ -516,10 +521,10 @@ impl crate::TermWindow {
                         pane_id: pane_id as usize,
                     }))
                     .padding(BoxDimension {
-                        left: Dimension::Pixels(3.),
+                        left: Dimension::Pixels(4.),
                         right: Dimension::Pixels(2.),
-                        top: Dimension::Pixels(8.),
-                        bottom: Dimension::Pixels(3.),
+                        top: Dimension::Pixels(if is_claude_pane { 4. } else { 8. }),
+                        bottom: Dimension::Pixels(if is_claude_pane { 4. } else { 3. }),
                     })
                     .border(BoxDimension {
                         left: Dimension::Pixels(1.),
@@ -545,20 +550,20 @@ impl crate::TermWindow {
                     pane_children.push(pane_close);
 
                     if let Some(claude) = pane_claude {
-                        // === Claude Card at pane level ===
+                        // === Claude Card at pane level — full card, same as tab-level ===
                         let model_short = claude
                             .model
                             .as_deref()
                             .unwrap_or("claude");
                         let title_element = Element::new(
                             &font,
-                            ElementContent::Text(truncate_str(model_short, 32)),
+                            ElementContent::Text(truncate_str(model_short, 36)),
                         )
-                        .line_height(Some(1.0))
+                        .line_height(Some(1.1))
                         .colors(ElementColors {
                             border: BorderColor::default(),
                             bg: InheritableColor::Inherited,
-                            text: LinearRgba::with_components(1.0, 0.7, 0.2, 1.0).into(),
+                            text: LinearRgba::with_components(0.859, 0.545, 0.043, 1.0).into(),
                         });
                         pane_children.push(title_element);
 
@@ -616,6 +621,8 @@ impl crate::TermWindow {
                         bg_color
                     };
 
+                    // Claude panes get full-card styling (same as tab-level),
+                    // normal panes stay compact/indented as tree children.
                     let pane_element =
                         Element::new(&font, ElementContent::Children(pane_children))
                             .display(DisplayType::Block)
@@ -623,14 +630,23 @@ impl crate::TermWindow {
                                 tab_idx,
                                 pane_idx: pane_pos.index,
                             }))
-                            .padding(BoxDimension {
-                                left: Dimension::Pixels(if is_claude_pane { 12. } else { 20. }),
-                                right: Dimension::Pixels(4.),
-                                top: Dimension::Pixels(if is_claude_pane { 4. } else { 3. }),
-                                bottom: Dimension::Pixels(if is_claude_pane { 4. } else { 3. }),
+                            .padding(if is_claude_pane {
+                                BoxDimension {
+                                    left: Dimension::Pixels(8.),
+                                    right: Dimension::Pixels(4.),
+                                    top: Dimension::Pixels(4.),
+                                    bottom: Dimension::Pixels(4.),
+                                }
+                            } else {
+                                BoxDimension {
+                                    left: Dimension::Pixels(20.),
+                                    right: Dimension::Pixels(4.),
+                                    top: Dimension::Pixels(3.),
+                                    bottom: Dimension::Pixels(3.),
+                                }
                             })
                             .border(BoxDimension {
-                                left: Dimension::Pixels(if is_claude_pane { 4. } else { 2. }),
+                                left: Dimension::Pixels(4.),
                                 right: Dimension::Pixels(0.),
                                 top: Dimension::Pixels(0.),
                                 bottom: Dimension::Pixels(0.),
@@ -847,7 +863,7 @@ impl crate::TermWindow {
     }
 
     /// Check if a tab has notification state set on any of its panes.
-    fn pane_state_for_tab(&self, tab_id: TabId) -> Option<std::cell::Ref<'_, crate::termwindow::PaneState>> {
+    pub(crate) fn pane_state_for_tab(&self, tab_id: TabId) -> Option<std::cell::Ref<'_, crate::termwindow::PaneState>> {
         let mux = Mux::get();
         let tab = mux.get_tab(tab_id)?;
         let active_pane = tab.get_active_pane()?;
@@ -884,17 +900,17 @@ fn build_claude_card_children(
         Some(ClaudeStatus::Working) => (
             "\u{25b6}",  // ▶
             "working",
-            LinearRgba::with_components(0.3, 0.8, 0.4, 1.0),
+            LinearRgba::with_components(0.247, 0.725, 0.314, 1.0),
         ),
         Some(ClaudeStatus::WaitingInput) => (
             "\u{25cf}",  // ●
             "awaiting input",
-            LinearRgba::with_components(1.0, 0.8, 0.2, 1.0),
+            LinearRgba::with_components(0.824, 0.600, 0.133, 1.0),
         ),
         Some(ClaudeStatus::Idle) => (
             "\u{2714}",  // ✔
             "idle",
-            LinearRgba::with_components(0.5, 0.5, 0.5, 1.0),
+            LinearRgba::with_components(0.4, 0.4, 0.4, 1.0),
         ),
         Some(ClaudeStatus::Error) => (
             "\u{2717}",  // ✗
@@ -902,9 +918,9 @@ fn build_claude_card_children(
             notif_color,
         ),
         None => (
-            "\u{25b6}",  // ▶
-            "active",
-            LinearRgba::with_components(0.3, 0.8, 0.4, 1.0),
+            "\u{2714}",  // ✔
+            "idle",
+            LinearRgba::with_components(0.4, 0.4, 0.4, 1.0),
         ),
     };
     children.push(
@@ -962,7 +978,7 @@ fn build_claude_card_children(
         let bar_color = if pct >= 90 {
             notif_color
         } else if pct >= 70 {
-            LinearRgba::with_components(1.0, 0.8, 0.2, 1.0)
+            LinearRgba::with_components(0.824, 0.600, 0.133, 1.0)
         } else {
             dimmed_color
         };
@@ -978,7 +994,7 @@ fn build_claude_card_children(
         );
     }
 
-    // Cost + duration + lines
+    // Cost + duration (dimmed), then lines added/removed (colored)
     let mut stats = vec![];
     if let Some(cost) = claude.cost_usd {
         stats.push(format!("${:.2}", cost));
@@ -989,29 +1005,81 @@ fn build_claude_card_children(
             stats.push(format!("{}m", mins));
         }
     }
-    if claude.lines_added.is_some() || claude.lines_removed.is_some() {
+    let has_line_stats = {
         let added = claude.lines_added.unwrap_or(0);
         let removed = claude.lines_removed.unwrap_or(0);
-        if added > 0 || removed > 0 {
-            stats.push(format!("+{} -{}", added, removed));
+        added > 0 || removed > 0
+    };
+    if !stats.is_empty() || has_line_stats {
+        // Build an inline container so cost/duration and colored +/- sit on one line
+        let mut stat_children = vec![];
+        if !stats.is_empty() {
+            let separator = if has_line_stats { " \u{00b7} " } else { "" };
+            stat_children.push(
+                Element::new(
+                    detail_font,
+                    ElementContent::Text(format!("{}{}", stats.join(" \u{00b7} "), separator)),
+                )
+                .display(DisplayType::Inline)
+                .colors(ElementColors {
+                    border: BorderColor::default(),
+                    bg: InheritableColor::Inherited,
+                    text: dimmed_color.into(),
+                }),
+            );
         }
-    }
-    if !stats.is_empty() {
+        if has_line_stats {
+            let added = claude.lines_added.unwrap_or(0);
+            let removed = claude.lines_removed.unwrap_or(0);
+            let green = LinearRgba::with_components(0.247, 0.725, 0.314, 1.0);
+            let red = LinearRgba::with_components(0.973, 0.318, 0.286, 1.0);
+            if added > 0 {
+                stat_children.push(
+                    Element::new(
+                        detail_font,
+                        ElementContent::Text(format!("+{}", added)),
+                    )
+                    .display(DisplayType::Inline)
+                    .colors(ElementColors {
+                        border: BorderColor::default(),
+                        bg: InheritableColor::Inherited,
+                        text: green.into(),
+                    }),
+                );
+            }
+            if added > 0 && removed > 0 {
+                stat_children.push(
+                    Element::new(
+                        detail_font,
+                        ElementContent::Text(" ".to_string()),
+                    )
+                    .display(DisplayType::Inline)
+                    .colors(ElementColors {
+                        border: BorderColor::default(),
+                        bg: InheritableColor::Inherited,
+                        text: dimmed_color.into(),
+                    }),
+                );
+            }
+            if removed > 0 {
+                stat_children.push(
+                    Element::new(
+                        detail_font,
+                        ElementContent::Text(format!("-{}", removed)),
+                    )
+                    .display(DisplayType::Inline)
+                    .colors(ElementColors {
+                        border: BorderColor::default(),
+                        bg: InheritableColor::Inherited,
+                        text: red.into(),
+                    }),
+                );
+            }
+        }
         children.push(
-            Element::new(
-                detail_font,
-                ElementContent::Text(truncate_str(
-                    &stats.join(" \u{00b7} "),
-                    38,
-                )),
-            )
-            .display(DisplayType::Block)
-            .line_height(Some(0.9))
-            .colors(ElementColors {
-                border: BorderColor::default(),
-                bg: InheritableColor::Inherited,
-                text: dimmed_color.into(),
-            }),
+            Element::new(detail_font, ElementContent::Children(stat_children))
+                .display(DisplayType::Block)
+                .line_height(Some(0.9)),
         );
     }
 }
@@ -1020,16 +1088,110 @@ fn build_claude_card_children(
 fn claude_status_accent(claude: &crate::termwindow::ClaudeSessionInfo, active: bool) -> LinearRgba {
     use crate::termwindow::ClaudeStatus;
     let base = match claude.status {
-        Some(ClaudeStatus::Working) => LinearRgba::with_components(0.3, 0.8, 0.4, 1.0),      // green
-        Some(ClaudeStatus::WaitingInput) => LinearRgba::with_components(1.0, 0.8, 0.2, 1.0),  // yellow
-        Some(ClaudeStatus::Idle) => LinearRgba::with_components(0.5, 0.5, 0.5, 1.0),          // gray
-        Some(ClaudeStatus::Error) => LinearRgba::with_components(1.0, 0.3, 0.3, 1.0),         // red
-        None => LinearRgba::with_components(0.3, 0.8, 0.4, 1.0),                              // green (default)
+        Some(ClaudeStatus::Working) => LinearRgba::with_components(0.247, 0.725, 0.314, 1.0),      // green
+        Some(ClaudeStatus::WaitingInput) => LinearRgba::with_components(0.824, 0.600, 0.133, 1.0),  // yellow
+        Some(ClaudeStatus::Idle) => LinearRgba::with_components(0.4, 0.4, 0.4, 1.0),          // gray
+        Some(ClaudeStatus::Error) => LinearRgba::with_components(0.973, 0.318, 0.286, 1.0),         // red
+        None => LinearRgba::with_components(0.4, 0.4, 0.4, 1.0),                                     // gray (idle default)
     };
     if active {
         base
     } else {
         LinearRgba::with_components(base.0 * 0.7, base.1 * 0.7, base.2 * 0.7, 0.6)
+    }
+}
+
+impl crate::TermWindow {
+    /// Push sidebar state to the WebView if data has changed,
+    /// reposition the WebView if geometry changed, and drain IPC queue.
+    #[cfg(windows)]
+    pub fn push_webview_sidebar_state(&mut self) {
+        if self.webview_sidebar.is_none() {
+            return;
+        }
+
+        // 1. Drain queued IPC messages (safe here — outside Win32 message handlers)
+        let messages: Vec<String> = if let Some(ref wv) = self.webview_sidebar {
+            let mut q = wv.ipc_queue.lock().unwrap();
+            q.drain(..).collect()
+        } else {
+            vec![]
+        };
+        for msg in messages {
+            self.handle_sidebar_ipc(&msg);
+        }
+
+        // 2. Reposition on every paint if geometry changed
+        let (x, y, w, h) = self.compute_sidebar_geometry();
+        if let Some(ref mut wv) = self.webview_sidebar {
+            wv.reposition(x, y, w as u16, h as u16);
+        }
+
+        // 3. Push state if data changed
+        let json = self.serialize_sidebar_state();
+        if let Some(ref mut wv) = self.webview_sidebar {
+            wv.push_state(&json);
+        }
+    }
+
+    /// Paint the solid background behind the WebView sidebar area.
+    #[cfg(windows)]
+    pub fn paint_sidebar_background(
+        &mut self,
+        layers: &mut crate::quad::TripleLayerQuadAllocator,
+    ) -> anyhow::Result<()> {
+        use anyhow::Context;
+        let sidebar_width = self.tab_sidebar_width as f32;
+        let border = self.get_os_border();
+        let bg_y = border.top.get() as f32;
+        let window_height = self.dimensions.pixel_height as f32;
+        let bg_color = self.config.window_frame.inactive_titlebar_bg.to_linear();
+        let bg_x = match self.config.tab_sidebar_position {
+            config::TabSidebarPosition::Left => border.left.get() as f32,
+            config::TabSidebarPosition::Right => {
+                self.dimensions.pixel_width as f32
+                    - sidebar_width
+                    - border.right.get() as f32
+            }
+        };
+        self.filled_rectangle(
+            layers,
+            0,
+            euclid::rect(bg_x, bg_y, sidebar_width, window_height - bg_y),
+            bg_color,
+        )
+        .context("webview sidebar background")?;
+        Ok(())
+    }
+
+    /// Register the resize handle UI item for mouse hit-testing (WebView path).
+    #[cfg(windows)]
+    pub fn register_sidebar_resize_handle(&mut self) {
+        use crate::termwindow::{UIItem, UIItemType, TabSidebarItem};
+        let sidebar_width = self.tab_sidebar_width as f32;
+        let border = self.get_os_border();
+        let bg_y = border.top.get() as f32;
+        let window_height = self.dimensions.pixel_height as f32;
+        let handle_width = 4.0f32;
+        let bg_x = match self.config.tab_sidebar_position {
+            config::TabSidebarPosition::Left => border.left.get() as f32,
+            config::TabSidebarPosition::Right => {
+                self.dimensions.pixel_width as f32
+                    - sidebar_width
+                    - border.right.get() as f32
+            }
+        };
+        let handle_x = match self.config.tab_sidebar_position {
+            config::TabSidebarPosition::Left => bg_x + sidebar_width - handle_width,
+            config::TabSidebarPosition::Right => bg_x,
+        };
+        self.ui_items.push(UIItem {
+            x: handle_x as usize,
+            y: bg_y as usize,
+            width: (handle_width * 2.0) as usize,
+            height: (window_height - bg_y) as usize,
+            item_type: UIItemType::TabSidebar(TabSidebarItem::ResizeHandle),
+        });
     }
 }
 

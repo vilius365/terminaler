@@ -1,5 +1,6 @@
 // STRIPPED: mod dbus;   -- Linux D-Bus notifications removed (Windows-only)
 // STRIPPED: mod macos;  -- macOS notifications removed (Windows-only)
+pub mod slack;
 mod windows;
 
 #[derive(Debug, Clone)]
@@ -51,4 +52,15 @@ pub fn persistent_toast_notification(title: &str, message: &str) {
         url: None,
         timeout: None,
     });
+}
+
+/// Show a toast notification and, if a Slack webhook URL is provided, send a Slack message.
+/// The Slack POST is fire-and-forget on a background thread.
+pub fn notify_all(title: &str, message: &str, slack_webhook: Option<&str>) {
+    persistent_toast_notification(title, message);
+    if let Some(webhook_url) = slack_webhook {
+        if !webhook_url.is_empty() {
+            slack::send_notification(webhook_url, title, message);
+        }
+    }
 }

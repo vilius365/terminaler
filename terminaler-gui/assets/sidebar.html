@@ -1,0 +1,591 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Terminaler Sidebar</title>
+<style>
+  :root {
+    --bg-base: #121212;
+    --bg-surface: #1a1a1a;
+    --bg-elevated: #222222;
+    --border-subtle: #2e2e2e;
+    --border-default: #3a3a3a;
+    --text-primary: #e0e0e0;
+    --text-secondary: #999999;
+    --text-tertiary: #666666;
+    --accent-blue: #4d9eff;
+    --accent-green: #3fb950;
+    --accent-yellow: #d29922;
+    --accent-red: #f85149;
+    --accent-orange: #db8b0b;
+
+    --font-ui: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    --font-mono: 'Cascadia Code', 'JetBrains Mono', Consolas, monospace;
+
+    --radius-sm: 4px;
+    --radius-md: 6px;
+    --transition: 150ms ease;
+  }
+
+  *, *::before, *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+
+  html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: var(--bg-surface);
+    font-family: var(--font-ui);
+    color: var(--text-primary);
+    -webkit-font-smoothing: antialiased;
+    user-select: none;
+    cursor: default;
+  }
+
+  .sidebar {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    overflow: hidden;
+  }
+
+  .sidebar-scroll {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .sidebar-scroll::-webkit-scrollbar { width: 4px; }
+  .sidebar-scroll::-webkit-scrollbar-track { background: transparent; }
+  .sidebar-scroll::-webkit-scrollbar-thumb {
+    background: var(--border-default);
+    border-radius: 2px;
+  }
+
+  .sidebar-bottom {
+    padding: 8px;
+    border-top: 1px solid var(--border-subtle);
+  }
+
+  .btn-new-tab {
+    width: 100%;
+    height: 32px;
+    border: 1px dashed var(--border-default);
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--text-secondary);
+    font-family: var(--font-ui);
+    font-size: 12px;
+    cursor: pointer;
+    transition: border-color var(--transition), color var(--transition), background var(--transition);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+  }
+
+  .btn-new-tab:hover {
+    border-color: var(--text-secondary);
+    color: var(--text-primary);
+    background: rgba(255,255,255,0.02);
+  }
+
+  /* ── Cards ── */
+  .card {
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    padding: 10px 12px;
+    cursor: pointer;
+    transition: background var(--transition), border-color var(--transition);
+    position: relative;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+  }
+
+  .card:hover {
+    background: var(--bg-elevated);
+  }
+
+  .card:hover .card-close { opacity: 1; }
+
+  .card.active {
+    background: var(--bg-elevated);
+  }
+
+  /* Left accent stripe */
+  .card-accent {
+    position: absolute;
+    left: 0;
+    top: 6px;
+    bottom: 6px;
+    width: 3px;
+    border-radius: 0 2px 2px 0;
+  }
+
+  .card-accent-blue   { background: var(--accent-blue); }
+  .card-accent-orange  { background: var(--accent-orange); }
+  .card-accent-green   { background: var(--accent-green); }
+  .card-accent-yellow  { background: var(--accent-yellow); }
+  .card-accent-red     { background: var(--accent-red); }
+  .card-accent-gray    { background: var(--text-tertiary); }
+
+  .card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 2px;
+  }
+
+  .card-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .card-title-inactive { color: var(--text-secondary); font-weight: 500; }
+  .card-title-claude   { color: var(--accent-orange); }
+
+  .card-close {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    color: var(--text-tertiary);
+    opacity: 0;
+    transition: opacity var(--transition), background var(--transition), color var(--transition);
+    flex-shrink: 0;
+    line-height: 1;
+    border: none;
+    background: none;
+    cursor: pointer;
+    font-family: var(--font-ui);
+    margin-left: 6px;
+  }
+
+  .card-close:hover {
+    background: var(--accent-red);
+    color: #fff;
+    opacity: 1;
+  }
+
+  .card-meta {
+    font-size: 11px;
+    color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .card-meta-dim { color: var(--text-tertiary); }
+
+  .card-git {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    color: var(--text-secondary);
+    flex-shrink: 0;
+  }
+
+  .card-git svg {
+    width: 11px;
+    height: 11px;
+    fill: currentColor;
+    opacity: 0.7;
+  }
+
+  /* Status */
+  .status-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    margin-top: 4px;
+  }
+
+  .status-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .status-dot-green  { background: var(--accent-green); animation: pulse-green 2s ease-in-out infinite; }
+  .status-dot-yellow { background: var(--accent-yellow); animation: pulse-yellow 2s ease-in-out infinite; }
+  .status-dot-red    { background: var(--accent-red); }
+  .status-dot-gray   { background: var(--text-tertiary); }
+
+  @keyframes pulse-green {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(63,185,80,0.4); }
+    50%      { box-shadow: 0 0 0 4px rgba(63,185,80,0); }
+  }
+
+  @keyframes pulse-yellow {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(210,153,34,0.4); }
+    50%      { box-shadow: 0 0 0 4px rgba(210,153,34,0); }
+  }
+
+  /* Context bar */
+  .context-bar {
+    height: 3px;
+    border-radius: 2px;
+    background: var(--border-subtle);
+    margin-top: 6px;
+    overflow: hidden;
+  }
+
+  .context-bar-fill {
+    height: 100%;
+    border-radius: 2px;
+    background: linear-gradient(90deg, var(--accent-orange), rgba(219,139,11,0.3));
+  }
+
+  .card-stats {
+    font-size: 10px;
+    color: var(--text-tertiary);
+    margin-top: 4px;
+    font-family: var(--font-mono);
+    letter-spacing: -0.02em;
+  }
+
+  .stat-add { color: var(--accent-green); }
+  .stat-remove { color: var(--accent-red); }
+
+  /* Notification badge */
+  .notif-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    color: var(--accent-red);
+    font-size: 11px;
+    margin-left: 6px;
+    flex-shrink: 0;
+  }
+
+  /* Pane tree */
+  .pane-tree {
+    margin-top: 6px;
+    font-size: 10px;
+    font-family: var(--font-mono);
+    color: var(--text-tertiary);
+    line-height: 1.6;
+  }
+
+  .pane-tree-line {
+    padding-left: 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: pointer;
+    border-radius: 3px;
+    padding: 1px 4px;
+    transition: background var(--transition);
+  }
+
+  .pane-tree-line:hover { background: rgba(255,255,255,0.04); }
+  .pane-tree-line.active { color: var(--text-secondary); }
+  .pane-tree-line .process { color: var(--text-secondary); }
+
+  .pane-tree-line .pane-close {
+    float: right;
+    opacity: 0;
+    cursor: pointer;
+    color: var(--text-tertiary);
+    font-size: 9px;
+    transition: opacity var(--transition), color var(--transition);
+  }
+
+  .pane-tree-line:hover .pane-close { opacity: 1; }
+  .pane-tree-line .pane-close:hover { color: var(--accent-red); }
+
+  /* Resize handle */
+  .resize-handle {
+    position: fixed;
+    top: 0;
+    width: 4px;
+    height: 100%;
+    cursor: col-resize;
+    z-index: 100;
+  }
+
+  .resize-handle.left  { right: 0; }
+  .resize-handle.right { left: 0; }
+
+  /* Git branch SVG path (reused) */
+  .git-icon { width: 11px; height: 11px; fill: currentColor; opacity: 0.7; }
+</style>
+</head>
+<body>
+
+<div class="sidebar" id="sidebar">
+  <div class="sidebar-scroll" id="tab-list"></div>
+  <div class="sidebar-bottom">
+    <button class="btn-new-tab" onclick="sendAction({type:'new_tab'})">+ New Tab</button>
+  </div>
+</div>
+
+<div class="resize-handle right" id="resize-handle"></div>
+
+<script>
+const GIT_ICON_SVG = '<svg class="git-icon" viewBox="0 0 16 16"><path d="M11.75 2.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5zm-2.25.75a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.5 2.5 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25zM4.25 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5zM3.5 3.25a.75.75 0 1 1 1.5 0 .75.75 0 0 1-1.5 0z"/></svg>';
+
+function sendAction(action) {
+    window.ipc.postMessage(JSON.stringify(action));
+}
+
+function escHtml(s) {
+    const div = document.createElement('div');
+    div.textContent = s;
+    return div.innerHTML;
+}
+
+function claudeAccentClass(claude) {
+    if (!claude || !claude.status) return 'card-accent-gray';
+    switch (claude.status) {
+        case 'working':       return 'card-accent-green';
+        case 'waiting_input': return 'card-accent-yellow';
+        case 'idle':          return 'card-accent-gray';
+        case 'error':         return 'card-accent-red';
+        default:              return 'card-accent-green';
+    }
+}
+
+function statusDotClass(status) {
+    switch (status) {
+        case 'working':       return 'status-dot-green';
+        case 'waiting_input': return 'status-dot-yellow';
+        case 'error':         return 'status-dot-red';
+        case 'idle':          return 'status-dot-gray';
+        default:              return 'status-dot-gray';
+    }
+}
+
+function statusLabel(status) {
+    switch (status) {
+        case 'working':       return 'working';
+        case 'waiting_input': return 'awaiting input';
+        case 'error':         return 'error';
+        case 'idle':          return 'idle';
+        default:              return 'idle';
+    }
+}
+
+function statusColor(status) {
+    switch (status) {
+        case 'working':       return 'var(--accent-green)';
+        case 'waiting_input': return 'var(--accent-yellow)';
+        case 'error':         return 'var(--accent-red)';
+        case 'idle':          return 'var(--text-tertiary)';
+        default:              return 'var(--text-tertiary)';
+    }
+}
+
+function renderClaudeCard(claude, cwdShort, gitBranch) {
+    let html = '';
+
+    // Status row
+    const st = claude.status || 'idle';
+    html += '<div class="status-row">';
+    html += '<span class="status-dot ' + statusDotClass(st) + '"></span>';
+    html += '<span style="color:' + statusColor(st) + '">' + statusLabel(st) + '</span>';
+    html += '</div>';
+
+    // CWD + git branch
+    if (cwdShort) {
+        let meta = escHtml(cwdShort);
+        if (gitBranch) {
+            meta += ' <span class="card-git">' + GIT_ICON_SVG + ' ' + escHtml(gitBranch) + '</span>';
+        }
+        html += '<div class="card-meta">' + meta + '</div>';
+    }
+
+    // Context bar
+    if (claude.contextPct != null) {
+        html += '<div class="context-bar"><div class="context-bar-fill" style="width:' + claude.contextPct + '%"></div></div>';
+    }
+
+    // Stats line
+    const parts = [];
+    if (claude.costUsd != null) parts.push('$' + claude.costUsd.toFixed(2));
+    if (claude.durationMs != null) {
+        const mins = Math.floor(claude.durationMs / 60000);
+        if (mins > 0) parts.push(mins + 'm');
+    }
+
+    const added = claude.linesAdded || 0;
+    const removed = claude.linesRemoved || 0;
+    let lineStats = '';
+    if (added > 0) lineStats += '<span class="stat-add">+' + added + '</span>';
+    if (added > 0 && removed > 0) lineStats += ' ';
+    if (removed > 0) lineStats += '<span class="stat-remove">-' + removed + '</span>';
+
+    if (parts.length > 0 || lineStats) {
+        let statsHtml = parts.join(' \u00b7 ');
+        if (statsHtml && lineStats) statsHtml += ' \u00b7 ';
+        statsHtml += lineStats;
+        html += '<div class="card-stats">' + statsHtml + '</div>';
+    }
+
+    return html;
+}
+
+function renderTab(tab) {
+    const isActive = tab.isActive;
+    const hasClaude = tab.claudeInfo != null;
+    const hasMultiplePanes = tab.panes && tab.panes.length > 1;
+
+    // Determine accent stripe
+    let accentClass = '';
+    if (hasClaude) {
+        accentClass = claudeAccentClass(tab.claudeInfo);
+    } else if (isActive) {
+        accentClass = 'card-accent-blue';
+    }
+
+    let html = '<div class="card' + (isActive ? ' active' : '') + '" data-tab="' + tab.tabIdx + '">';
+
+    if (accentClass) {
+        html += '<div class="card-accent ' + accentClass + '"></div>';
+    }
+
+    // Header
+    html += '<div class="card-header">';
+    let titleClass = 'card-title';
+    if (hasClaude) titleClass += ' card-title-claude';
+    else if (!isActive) titleClass += ' card-title-inactive';
+
+    let titleText = hasClaude
+        ? escHtml(tab.claudeInfo.model || 'claude')
+        : escHtml(tab.cwdShort || tab.title || 'Terminal');
+
+    if (hasMultiplePanes && !hasClaude) {
+        titleText = '\u25bc ' + titleText;
+    }
+
+    html += '<span class="' + titleClass + '">' + titleText;
+    if (tab.hasNotification) {
+        const cnt = tab.notificationCount || 1;
+        html += '<span class="notif-badge">\u25cf' + (cnt > 1 ? ' ' + cnt : '') + '</span>';
+    }
+    html += '</span>';
+    html += '<button class="card-close" onclick="event.stopPropagation();sendAction({type:\'close_tab\',tabIdx:' + tab.tabIdx + '})">&times;</button>';
+    html += '</div>';
+
+    // Body
+    if (hasClaude) {
+        html += renderClaudeCard(tab.claudeInfo, tab.cwdShort, tab.gitBranch);
+    } else {
+        // CWD + git for non-Claude tabs (CWD is already the title, just show git)
+        if (tab.gitBranch) {
+            html += '<div class="card-meta"><span class="card-git">' + GIT_ICON_SVG + ' ' + escHtml(tab.gitBranch) + '</span></div>';
+        }
+    }
+
+    // Multi-pane: each pane rendered as its own card
+    if (hasMultiplePanes) {
+        html += '<div style="display:flex;flex-direction:column;gap:4px;margin-top:6px">';
+        tab.panes.forEach(function(pane, idx) {
+            const paneLabel = pane.title || pane.cwdShort || 'pane';
+            const paneActive = pane.isActive && isActive;
+
+            if (pane.claudeInfo) {
+                // Full Claude card for this pane
+                const paneAccent = claudeAccentClass(pane.claudeInfo);
+                html += '<div class="card' + (paneActive ? ' active' : '') + '" style="padding:8px 10px;margin:0" onclick="event.stopPropagation();sendAction({type:\'activate_pane\',tabIdx:' + tab.tabIdx + ',paneIdx:' + pane.paneIdx + '})">';
+                html += '<div class="card-accent ' + paneAccent + '"></div>';
+                html += '<div class="card-header">';
+                html += '<span class="card-title card-title-claude">' + escHtml(pane.claudeInfo.model || 'claude') + '</span>';
+                html += '<button class="card-close" onclick="event.stopPropagation();sendAction({type:\'close_pane\',paneId:' + pane.paneId + '})">&times;</button>';
+                html += '</div>';
+                html += renderClaudeCard(pane.claudeInfo, pane.cwdShort, null);
+                html += '</div>';
+            } else {
+                // Normal pane as compact card
+                const paneAccentNorm = paneActive ? 'card-accent-blue' : '';
+                html += '<div class="card' + (paneActive ? ' active' : '') + '" style="padding:6px 10px;margin:0" onclick="event.stopPropagation();sendAction({type:\'activate_pane\',tabIdx:' + tab.tabIdx + ',paneIdx:' + pane.paneIdx + '})">';
+                if (paneAccentNorm) html += '<div class="card-accent ' + paneAccentNorm + '"></div>';
+                html += '<div class="card-header">';
+                html += '<span class="card-title' + (paneActive ? '' : ' card-title-inactive') + '">' + escHtml(paneLabel) + '</span>';
+                html += '<button class="card-close" onclick="event.stopPropagation();sendAction({type:\'close_pane\',paneId:' + pane.paneId + '})">&times;</button>';
+                html += '</div>';
+                if (pane.cwdShort) {
+                    html += '<div class="card-meta card-meta-dim">' + escHtml(pane.cwdShort) + '</div>';
+                }
+                html += '</div>';
+            }
+        });
+        html += '</div>';
+    }
+
+    html += '</div>';
+    return html;
+}
+
+function renderSidebar(state) {
+    const container = document.getElementById('tab-list');
+    if (!container) return;
+
+    let html = '';
+    if (state.tabs) {
+        state.tabs.forEach(function(tab) {
+            html += renderTab(tab);
+        });
+    }
+    container.innerHTML = html;
+
+    // Attach click handlers for tab activation
+    container.querySelectorAll('.card[data-tab]').forEach(function(card) {
+        card.addEventListener('click', function(e) {
+            if (e.target.closest('.card-close') || e.target.closest('.pane-tree-line')) return;
+            const idx = parseInt(card.getAttribute('data-tab'));
+            sendAction({ type: 'activate_tab', tabIdx: idx });
+        });
+    });
+
+    // Update resize handle position
+    const handle = document.getElementById('resize-handle');
+    if (handle && state.sidebarPosition) {
+        handle.className = 'resize-handle ' + state.sidebarPosition;
+    }
+}
+
+// Called from Rust via evaluate_script
+window.__updateState = renderSidebar;
+
+// Aggressively prevent WebView from keeping keyboard focus.
+// Every mouse interaction sends refocus to Rust which calls SetFocus on parent HWND.
+document.addEventListener('mousedown', function() {
+    sendAction({ type: 'refocus' });
+});
+document.addEventListener('mouseup', function() {
+    sendAction({ type: 'refocus' });
+});
+// Also intercept any focus event on the document/window
+window.addEventListener('focus', function() {
+    sendAction({ type: 'refocus' });
+});
+document.addEventListener('focusin', function(e) {
+    if (e.target && e.target.blur) e.target.blur();
+    sendAction({ type: 'refocus' });
+});
+</script>
+
+</body>
+</html>
