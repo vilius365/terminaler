@@ -73,6 +73,7 @@ impl crate::TermWindow {
 
         for tab in mux_window.iter() {
             let tab_id = tab.tab_id();
+
             let active_pane = match tab.get_active_pane() {
                 Some(p) => p,
                 None => continue,
@@ -140,7 +141,29 @@ impl crate::TermWindow {
             );
         }
 
+        // If the info changed, invalidate the cached sidebar element so it
+        // gets rebuilt on the next paint with the fresh data.
+        if self.sidebar_info_changed(&new_info) {
+            self.tab_sidebar.take();
+        }
         self.tab_sidebar_info = new_info;
+    }
+
+    fn sidebar_info_changed(&self, new_info: &HashMap<TabId, SidebarTabInfo>) -> bool {
+        if self.tab_sidebar_info.len() != new_info.len() {
+            return true;
+        }
+        for (tab_id, new) in new_info {
+            match self.tab_sidebar_info.get(tab_id) {
+                Some(old) => {
+                    if old.cwd_short != new.cwd_short || old.git_branch != new.git_branch {
+                        return true;
+                    }
+                }
+                None => return true,
+            }
+        }
+        false
     }
 
     pub fn build_tab_sidebar(
@@ -323,6 +346,7 @@ impl crate::TermWindow {
                     &mut children,
                     claude,
                     info,
+                    info.map(|i| i.cwd_short.as_str()),
                     &font,
                     &title_font,
                     dimmed_color,
@@ -542,6 +566,7 @@ impl crate::TermWindow {
                             &mut pane_children,
                             claude,
                             info,
+                            pane_cwd.as_deref(),
                             &font,
                             &title_font,
                             dimmed_color,
@@ -846,6 +871,7 @@ fn build_claude_card_children(
     children: &mut Vec<Element>,
     claude: &crate::termwindow::ClaudeSessionInfo,
     info: Option<&SidebarTabInfo>,
+    pane_cwd: Option<&str>,
     font: &Rc<LoadedFont>,
     detail_font: &Rc<LoadedFont>,
     dimmed_color: LinearRgba,
@@ -895,10 +921,11 @@ fn build_claude_card_children(
         }),
     );
 
-    // Worktree/project + branch
+    // Worktree/project + branch — prefer per-pane CWD over tab-level
     let project = claude
         .worktree
         .as_deref()
+        .or(pane_cwd)
         .or(info.map(|i| i.cwd_short.as_str()))
         .unwrap_or("");
     if !project.is_empty() {

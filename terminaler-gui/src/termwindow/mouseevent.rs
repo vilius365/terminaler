@@ -72,13 +72,17 @@ impl super::TermWindow {
 
         let border = self.get_os_border();
 
-        let first_line_offset = if self.show_tab_bar && !self.config.tab_bar_at_bottom {
-            self.tab_bar_pixel_height().unwrap_or(0.) as isize
+        // Compute top_pixel_y as f32, exactly matching the rendering path
+        // (render/pane.rs). Previously each component was truncated to isize
+        // separately, which could shift the cell grid by ~1px when padding_top
+        // had a fractional part (e.g. Cells(0.5) with odd cell height).
+        let tab_bar_height_f32 = if self.show_tab_bar && !self.config.tab_bar_at_bottom {
+            self.tab_bar_pixel_height().unwrap_or(0.)
         } else {
-            0
-        } + border.top.get() as isize;
-
+            0.
+        };
         let (padding_left, padding_top) = self.padding_left_top();
+        let top_pixel_y = tab_bar_height_f32 + padding_top + border.top.get() as f32;
 
         // Use pane-specific scaled cell size when the pane has a custom font
         // scale (e.g. from Ctrl+scroll zoom). The renderer uses scaled metrics,
@@ -94,21 +98,16 @@ impl super::TermWindow {
             self.render_metrics.cell_size
         };
 
-        let y = (event
-            .coords
-            .y
-            .sub(padding_top as isize)
-            .sub(first_line_offset)
-            .max(0)
-            / cell_size.height) as i64;
-
         let sidebar_offset = self.sidebar_x_offset();
-        let x = (event
-            .coords
-            .x
-            .sub((padding_left + border.left.get() as f32 + sidebar_offset) as isize)
-            .max(0) as f32)
-            / cell_size.width as f32;
+        let left_pixel_x = padding_left + border.left.get() as f32 + sidebar_offset;
+
+        // Convert pixel coords to cell coords using the same top_pixel_y and
+        // left_pixel_x that the renderer uses, ensuring exact alignment.
+        let y_pixel_in_content = (event.coords.y as f32 - top_pixel_y).max(0.);
+        let y = (y_pixel_in_content as isize / cell_size.height) as i64;
+
+        let x_pixel_in_content = (event.coords.x as f32 - left_pixel_x).max(0.);
+        let x = x_pixel_in_content / cell_size.width as f32;
         let x = if !pane.is_mouse_grabbed() {
             // Round the x coordinate so that we're a bit more forgiving of
             // the horizontal position when selecting cells
@@ -118,19 +117,12 @@ impl super::TermWindow {
         }
         .trunc() as usize;
 
-        let mut y_pixel_offset = event
-            .coords
-            .y
-            .sub(padding_top as isize)
-            .sub(first_line_offset);
+        let mut y_pixel_offset = (event.coords.y as f32 - top_pixel_y) as isize;
         if y > 0 {
             y_pixel_offset = y_pixel_offset.max(0) % cell_size.height;
         }
 
-        let mut x_pixel_offset = event
-            .coords
-            .x
-            .sub((padding_left + border.left.get() as f32 + sidebar_offset) as isize);
+        let mut x_pixel_offset = (event.coords.x as f32 - left_pixel_x) as isize;
         if x > 0 {
             x_pixel_offset = x_pixel_offset.max(0) % cell_size.width;
         }
@@ -970,12 +962,36 @@ impl super::TermWindow {
             Some(MouseCapture::TerminalPane(_))
         );
 
+        // Hit-test using base metrics since pos.top/pos.left are in base cell
+        // units. Compute base-metric row/column for pane hit-testing.
+        let base_cell_w = self.render_metrics.cell_size.width;
+        let base_cell_h = self.render_metrics.cell_size.height;
+
+        // Compute top_pixel_y and left_pixel_x matching the rendering path,
+        // for pixel-based pane-local coordinate recomputation below.
+        let tab_bar_h = if self.show_tab_bar && !self.config.tab_bar_at_bottom {
+            self.tab_bar_pixel_height().unwrap_or(0.)
+        } else {
+            0.
+        };
+        let (pad_l, pad_t) = self.padding_left_top();
+        let border_for_pane = self.get_os_border();
+        let render_top_pixel_y = tab_bar_h + pad_t + border_for_pane.top.get() as f32;
+        let sidebar_off = self.sidebar_x_offset();
+        let render_left_pixel_x = pad_l + border_for_pane.left.get() as f32 + sidebar_off;
+
+        // Base-metric cell coordinates for hit-testing against pos.top/pos.left
+        let base_row = ((event.coords.y as f32 - render_top_pixel_y).max(0.)
+            as isize / base_cell_h) as i64;
+        let base_col = ((event.coords.x as f32 - render_left_pixel_x).max(0.)
+            as isize / base_cell_w) as usize;
+
         for pos in self.get_panes_to_render() {
             if !is_already_captured
-                && row >= pos.top as i64
-                && row <= (pos.top + pos.height) as i64
-                && column >= pos.left
-                && column <= pos.left + pos.width
+                && base_row >= pos.top as i64
+                && base_row <= (pos.top + pos.height) as i64
+                && base_col >= pos.left
+                && base_col <= pos.left + pos.width
             {
                 if pane.pane_id() != pos.pane.pane_id() {
                     // We're over a pane that isn't active
@@ -1007,20 +1023,75 @@ impl super::TermWindow {
                         }
                     }
                 }
-                column = column.saturating_sub(pos.left);
-                row = row.saturating_sub(pos.top as i64);
+
+                // Recompute pane-local cell coordinates using the TARGET pane's
+                // scaled cell size, starting from the pane's pixel position.
+                // This correctly handles the case where pos.top/pos.left are in
+                // base cell units but the pane has a different font scale.
+                let target_scale = self.pane_font_scale(pos.pane.pane_id());
+                let target_cell = if (target_scale - 1.0).abs() > 0.001 {
+                    let key = Self::font_scale_key(target_scale);
+                    self.scaled_font_configs
+                        .get(&key)
+                        .map(|(_, m)| m.cell_size)
+                        .unwrap_or(self.render_metrics.cell_size)
+                } else {
+                    self.render_metrics.cell_size
+                };
+                let pane_pixel_y = event.coords.y as f32
+                    - render_top_pixel_y
+                    - pos.top as f32 * base_cell_h as f32;
+                let pane_pixel_x = event.coords.x as f32
+                    - render_left_pixel_x
+                    - pos.left as f32 * base_cell_w as f32;
+                row = (pane_pixel_y.max(0.) as isize / target_cell.height) as i64;
+                column = {
+                    let fx = pane_pixel_x.max(0.) / target_cell.width as f32;
+                    if !pane.is_mouse_grabbed() { fx.round() } else { fx }
+                        .trunc() as usize
+                };
+                y_pixel_offset = if row > 0 {
+                    (pane_pixel_y.max(0.) as isize) % target_cell.height
+                } else {
+                    pane_pixel_y as isize
+                };
+                x_pixel_offset = if column > 0 {
+                    (pane_pixel_x.max(0.) as isize) % target_cell.width
+                } else {
+                    pane_pixel_x as isize
+                };
                 break;
             } else if is_already_captured && pane.pane_id() == pos.pane.pane_id() {
-                column = column.saturating_sub(pos.left);
-                row = row.saturating_sub(pos.top as i64).max(0);
+                // Recompute pane-local coordinates for the captured pane too
+                let target_scale = self.pane_font_scale(pos.pane.pane_id());
+                let target_cell = if (target_scale - 1.0).abs() > 0.001 {
+                    let key = Self::font_scale_key(target_scale);
+                    self.scaled_font_configs
+                        .get(&key)
+                        .map(|(_, m)| m.cell_size)
+                        .unwrap_or(self.render_metrics.cell_size)
+                } else {
+                    self.render_metrics.cell_size
+                };
+                let pane_pixel_y = event.coords.y as f32
+                    - render_top_pixel_y
+                    - pos.top as f32 * base_cell_h as f32;
+                let pane_pixel_x = event.coords.x as f32
+                    - render_left_pixel_x
+                    - pos.left as f32 * base_cell_w as f32;
+                row = (pane_pixel_y as isize / target_cell.height).max(0) as i64;
+                column = (pane_pixel_x.max(0.) / target_cell.width as f32)
+                    .trunc() as usize;
 
-                if position.column < pos.left {
-                    x_pixel_offset -= self.render_metrics.cell_size.width
-                        * (pos.left as isize - position.column as isize);
+                if pane_pixel_x < 0. {
+                    x_pixel_offset = pane_pixel_x as isize;
+                } else {
+                    x_pixel_offset = (pane_pixel_x as isize) % target_cell.width;
                 }
-                if position.row < pos.top as i64 {
-                    y_pixel_offset -= self.render_metrics.cell_size.height
-                        * (pos.top as isize - position.row as isize);
+                if pane_pixel_y < 0. {
+                    y_pixel_offset = pane_pixel_y as isize;
+                } else {
+                    y_pixel_offset = (pane_pixel_y as isize) % target_cell.height;
                 }
 
                 break;
