@@ -103,9 +103,10 @@ impl crate::TermWindow {
                 let process_name = pane.get_foreground_process_name(CachePolicy::AllowStale);
                 let pane_title = pane.get_title();
                 let user_vars = pane.copy_user_vars();
+                // Only detect Claude if the foreground process or title matches.
+                // User vars alone are not sufficient — they persist after Claude exits.
                 let is_claude = process_name.as_deref().map_or(false, is_claude_process)
-                    || is_claude_title(&pane_title)
-                    || user_vars.keys().any(|k| k.starts_with("claude_"));
+                    || is_claude_title(&pane_title);
 
                 if is_claude {
                     let status = user_vars.get("claude_status").map(|s| match s.as_str() {

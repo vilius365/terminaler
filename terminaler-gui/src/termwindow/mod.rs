@@ -2328,13 +2328,82 @@ impl TermWindow {
         promise::spawn::spawn(future).detach();
     }
 
-    /// Build a notification message with context from ClaudeSessionInfo.
-    fn claude_notification_message(info: Option<&ClaudeSessionInfo>, cwd: &str) -> String {
-        let mut parts = vec!["Awaiting your input".to_string()];
-        if let Some(info) = info {
-            if let Some(model) = &info.model {
-                parts.push(format!("Model: {}", model));
+    /// Extract the last meaningful text from a pane (for notification context).
+    /// Reads the last N lines from the terminal, strips empty lines, and returns
+    /// a trimmed excerpt suitable for a notification body.
+    fn extract_pane_last_text(pane_id: PaneId, max_lines: usize) -> Option<String> {
+        let mux = Mux::get();
+        let pane = mux.get_pane(pane_id)?;
+        let dims = pane.get_dimensions();
+
+        // Read the last `max_lines * 2` rows to have enough material after filtering
+        let fetch_rows = (max_lines * 2).min(dims.scrollback_rows);
+        let end = dims.scrollback_rows as StableRowIndex;
+        let start = end.saturating_sub(fetch_rows as StableRowIndex);
+
+        let (_first, lines) = pane.get_lines(start..end);
+
+        // Collect non-empty lines as plain text (reverse to get most recent first)
+        let mut text_lines: Vec<String> = Vec::new();
+        for line in lines.iter().rev() {
+            let text = line.as_str().trim().to_string();
+            if !text.is_empty() {
+                text_lines.push(text);
+                if text_lines.len() >= max_lines {
+                    break;
+                }
             }
+        }
+
+        if text_lines.is_empty() {
+            return None;
+        }
+
+        // Reverse back to chronological order
+        text_lines.reverse();
+
+        // Strip common Claude UI chrome (prompt markers, spinners, etc.)
+        let cleaned: Vec<&str> = text_lines
+            .iter()
+            .map(|l| l.as_str())
+            // Skip lines that are just prompt characters or spinners
+            .filter(|l| {
+                !l.chars().all(|c| "❯›>$#%⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏─│╭╮╰╯ ".contains(c))
+            })
+            .collect();
+
+        if cleaned.is_empty() {
+            return None;
+        }
+
+        // Truncate each line for notification display
+        let result: Vec<String> = cleaned
+            .iter()
+            .map(|l| {
+                if l.len() > 120 {
+                    format!("{}…", &l[..119])
+                } else {
+                    l.to_string()
+                }
+            })
+            .collect();
+
+        Some(result.join("\n"))
+    }
+
+    /// Build a notification message with context from ClaudeSessionInfo.
+    fn claude_notification_message(
+        info: Option<&ClaudeSessionInfo>,
+        cwd: &str,
+        question: Option<&str>,
+    ) -> String {
+        let mut parts = Vec::new();
+        if let Some(q) = question {
+            parts.push(q.to_string());
+        } else {
+            parts.push("Awaiting your input".to_string());
+        }
+        if let Some(info) = info {
             if let Some(cost) = info.cost_usd {
                 parts.push(format!("Cost: ${:.2}", cost));
             }
@@ -2346,12 +2415,18 @@ impl TermWindow {
     }
 
     /// Build a Slack mrkdwn notification message with context.
-    fn claude_slack_message(info: Option<&ClaudeSessionInfo>, cwd: &str) -> String {
-        let mut lines = vec!["Awaiting your input".to_string()];
+    fn claude_slack_message(
+        info: Option<&ClaudeSessionInfo>,
+        cwd: &str,
+        question: Option<&str>,
+    ) -> String {
+        let mut lines = Vec::new();
+        if let Some(q) = question {
+            lines.push(q.to_string());
+        } else {
+            lines.push("Awaiting your input".to_string());
+        }
         if let Some(info) = info {
-            if let Some(model) = &info.model {
-                lines.push(format!("• Model: {}", model));
-            }
             if let Some(cost) = info.cost_usd {
                 lines.push(format!("• Cost: ${:.2}", cost));
             }
@@ -2363,14 +2438,19 @@ impl TermWindow {
     }
 
     /// Fire notification via toast + Slack.
-    fn fire_claude_notification(&self, info: Option<&ClaudeSessionInfo>, cwd: &str) {
+    fn fire_claude_notification(
+        &self,
+        info: Option<&ClaudeSessionInfo>,
+        cwd: &str,
+        question: Option<&str>,
+    ) {
         let title = match info.and_then(|i| i.model.as_deref()) {
             Some(model) => format!("Claude ({})", model),
             None => "Claude Code".to_string(),
         };
-        let message = Self::claude_notification_message(info, cwd);
+        let message = Self::claude_notification_message(info, cwd, question);
         let slack_url = self.config.slack_notification_webhook.clone();
-        let slack_message = Self::claude_slack_message(info, cwd);
+        let slack_message = Self::claude_slack_message(info, cwd, question);
         let title_clone = title.clone();
 
         terminaler_toast_notification::persistent_toast_notification(&title, &message);
@@ -2434,6 +2514,8 @@ impl TermWindow {
                 let user_vars = pane.copy_user_vars();
                 let has_claude_vars = user_vars.keys().any(|k| k.starts_with("claude_"));
 
+                // Only detect Claude if the foreground process name matches.
+                // User vars alone are not sufficient — they persist after Claude exits.
                 let is_claude = process_name.as_deref().map_or(false, |name| {
                     let basename = std::path::Path::new(name)
                         .file_name()
@@ -2442,7 +2524,7 @@ impl TermWindow {
                         .to_lowercase();
                     let basename = basename.strip_suffix(".exe").unwrap_or(&basename);
                     matches!(basename, "claude" | "claude-code")
-                }) || has_claude_vars;
+                });
 
                 if !is_claude {
                     continue;
@@ -2509,13 +2591,16 @@ impl TermWindow {
                 if curr == Some(ClaudeStatus::WaitingInput) && prev != Some(ClaudeStatus::WaitingInput) {
                     if !self.claude_idle_notified.contains(&pane_id) {
                         self.claude_idle_notified.insert(pane_id);
+                        let question = Self::extract_pane_last_text(pane_id, 4);
                         log::info!(
-                            "Claude pane {} status → WaitingInput — firing notification",
+                            "Claude pane {} status → WaitingInput — firing notification (question: {:?})",
                             pane_id,
+                            question,
                         );
                         self.fire_claude_notification(
                             pane_info.session_info.as_ref(),
                             &pane_info.cwd,
+                            question.as_deref(),
                         );
                     }
                 }
@@ -2535,12 +2620,14 @@ impl TermWindow {
                     let idle_duration = now.duration_since(*last_output);
                     if idle_duration >= idle_threshold {
                         self.claude_idle_notified.insert(pane_id);
+                        let question = Self::extract_pane_last_text(pane_id, 4);
                         log::info!(
-                            "Claude pane {} idle for {:.1}s — firing notification",
+                            "Claude pane {} idle for {:.1}s — firing notification (question: {:?})",
                             pane_id,
-                            idle_duration.as_secs_f64()
+                            idle_duration.as_secs_f64(),
+                            question,
                         );
-                        self.fire_claude_notification(None, &pane_info.cwd);
+                        self.fire_claude_notification(None, &pane_info.cwd, question.as_deref());
                     }
                 }
             }
