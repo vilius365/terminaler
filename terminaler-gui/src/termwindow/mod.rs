@@ -1901,12 +1901,21 @@ impl TermWindow {
         return window_id == self.mux_window_id;
     }
 
-    fn emit_user_var_event(&mut self, pane_id: PaneId, name: String, _value: String) {
+    fn emit_user_var_event(&mut self, pane_id: PaneId, name: String, value: String) {
         if !self.window_contains_pane(pane_id) {
             return;
         }
         if name.starts_with("claude_") {
+            // Reset the poll timer so update_sidebar_info() refreshes
+            // the data immediately on the next paint frame, not after
+            // the 1s throttle expires.
+            self.last_sidebar_info_poll = std::time::Instant::now() - std::time::Duration::from_secs(2);
             self.invalidate_tab_sidebar();
+        }
+        // React immediately to claude_status → waiting_input instead of
+        // waiting for the next poll cycle (up to 1s delay).
+        if name == "claude_status" && value == "waiting_input" {
+            self.check_claude_idle_notifications_now();
         }
         self.update_title();
     }
@@ -2380,8 +2389,9 @@ impl TermWindow {
         let result: Vec<String> = cleaned
             .iter()
             .map(|l| {
-                if l.len() > 120 {
-                    format!("{}…", &l[..119])
+                if l.chars().count() > 120 {
+                    let truncated: String = l.chars().take(119).collect();
+                    format!("{}…", truncated)
                 } else {
                     l.to_string()
                 }
@@ -2467,25 +2477,33 @@ impl TermWindow {
     }
 
     /// Check if any Claude pane has gone idle and fire a Windows + Slack notification.
-    /// Called every paint frame; internally throttled to check every 2 seconds.
+    /// Called every paint frame; internally throttled to check every 1 second.
     ///
     /// Two detection modes:
     /// 1. User-var based (precise): fires on `claude_status` transition to `WaitingInput`
     /// 2. Idle timeout fallback: fires after 3s idle for Claude panes without user vars
     pub fn check_claude_idle_notifications(&mut self) {
-        use mux::pane::CachePolicy;
-
-        // Throttle: only check every 2 seconds
         static LAST_CHECK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as u64;
         let last = LAST_CHECK.load(std::sync::atomic::Ordering::Relaxed);
-        if now_ms.saturating_sub(last) < 2000 {
+        if now_ms.saturating_sub(last) < 1000 {
             return;
         }
         LAST_CHECK.store(now_ms, std::sync::atomic::Ordering::Relaxed);
+        self.check_claude_idle_notifications_inner();
+    }
+
+    /// Immediate variant — called from the SetUserVar event handler
+    /// when claude_status transitions to waiting_input, bypassing throttle.
+    pub fn check_claude_idle_notifications_now(&mut self) {
+        self.check_claude_idle_notifications_inner();
+    }
+
+    fn check_claude_idle_notifications_inner(&mut self) {
+        use mux::pane::CachePolicy;
 
         let idle_threshold = Duration::from_secs(3);
         let now = Instant::now();
@@ -2511,12 +2529,17 @@ impl TermWindow {
             for pos in tab.iter_panes_ignoring_zoom() {
                 let pane = &pos.pane;
                 let process_name = pane.get_foreground_process_name(CachePolicy::AllowStale);
+                let pane_title = pane.get_title();
                 let user_vars = pane.copy_user_vars();
                 let has_claude_vars = user_vars.keys().any(|k| k.starts_with("claude_"));
 
-                // Only detect Claude if the foreground process name matches.
-                // User vars alone are not sufficient — they persist after Claude exits.
-                let is_claude = process_name.as_deref().map_or(false, |name| {
+                // Detect Claude via:
+                // 1. Foreground process name
+                // 2. Pane title
+                // 3. Full process tree
+                // 4. Active user vars (needed for WSL — Windows process tree
+                //    only shows wslhost.exe, real Claude process is in Linux VM)
+                let is_claude_proc = |name: &str| -> bool {
                     let basename = std::path::Path::new(name)
                         .file_name()
                         .and_then(|n| n.to_str())
@@ -2524,7 +2547,21 @@ impl TermWindow {
                         .to_lowercase();
                     let basename = basename.strip_suffix(".exe").unwrap_or(&basename);
                     matches!(basename, "claude" | "claude-code")
-                });
+                };
+                let has_active_claude_vars = user_vars.contains_key("claude_status");
+                let is_claude = process_name.as_deref().map_or(false, &is_claude_proc)
+                    || {
+                        let lower = pane_title.to_lowercase();
+                        lower.contains("claude code")
+                            || lower.contains("claude-code")
+                            || lower.starts_with("claude ")
+                            || lower == "claude"
+                    }
+                    || pane
+                        .get_process_names_in_tree(CachePolicy::AllowStale)
+                        .iter()
+                        .any(|n| is_claude_proc(n))
+                    || has_active_claude_vars;
 
                 if !is_claude {
                     continue;

@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-03-24
+
+### Fixed
+- Crash (panic) when Claude notification text contains multi-byte UTF-8 characters (emojis) — string truncation now operates on character boundaries instead of byte offsets
+
 ## 2026-03-19
 
 ### Added
