@@ -51,10 +51,12 @@ use mux::window::WindowId as MuxWindowId;
 use mux::{Mux, MuxNotification};
 // STRIPPED: mux_lua removed; use local stub
 use crate::scripting::guiwin::MuxPane;
+#[cfg(windows)]
+use chrono::Datelike as _;
 use smol::channel::Sender;
 use smol::Timer;
 use std::cell::{RefCell, RefMut};
-use std::collections::{HashMap, LinkedList};
+use std::collections::{HashMap, HashSet, LinkedList};
 use std::ops::Add;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -92,6 +94,9 @@ const ATLAS_SIZE: usize = 128;
 lazy_static::lazy_static! {
     static ref WINDOW_CLASS: Mutex<String> = Mutex::new(terminaler_gui_subcommands::DEFAULT_WINDOW_CLASS.to_owned());
     static ref POSITION: Mutex<Option<GuiPosition>> = Mutex::new(None);
+    /// Pane IDs with notifications muted — shared between TermWindow and frontend.
+    /// TermWindow writes on toggle; frontend reads before firing toast notifications.
+    pub static ref MUTED_PANES: Mutex<HashSet<PaneId>> = Mutex::new(HashSet::new());
 }
 
 pub const ICON_DATA: &'static [u8] = include_bytes!("../../../assets/icon/terminal.png");
@@ -197,6 +202,112 @@ pub struct ClaudeSessionInfo {
     pub status: Option<ClaudeStatus>,
 }
 
+/// Tracks cumulative Claude API usage costs across sessions.
+/// Persisted to `claude-usage.json` in the config directory.
+#[cfg(windows)]
+pub struct ClaudeUsageTracker {
+    daily_cost: f32,
+    weekly_cost: f32,
+    current_date: String,
+    week_start: String,
+    last_seen_costs: HashMap<mux::pane::PaneId, f32>,
+    last_persist: Instant,
+}
+
+#[cfg(windows)]
+impl ClaudeUsageTracker {
+    fn new() -> Self {
+        let now = chrono::Local::now();
+        let today = now.format("%Y-%m-%d").to_string();
+        let monday = now
+            - chrono::Duration::days(now.weekday().num_days_from_monday() as i64);
+        let week_start = monday.format("%Y-%m-%d").to_string();
+        let mut tracker = Self {
+            daily_cost: 0.0,
+            weekly_cost: 0.0,
+            current_date: today,
+            week_start,
+            last_seen_costs: HashMap::new(),
+            last_persist: Instant::now(),
+        };
+        tracker.load();
+        tracker
+    }
+
+    fn usage_file_path() -> std::path::PathBuf {
+        let appdata = std::env::var("APPDATA").unwrap_or_else(|_| ".".to_string());
+        std::path::PathBuf::from(appdata)
+            .join("Terminaler")
+            .join("claude-usage.json")
+    }
+
+    fn load(&mut self) {
+        let path = Self::usage_file_path();
+        if let Ok(data) = std::fs::read_to_string(&path) {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&data) {
+                let saved_date = json["date"].as_str().unwrap_or("");
+                let saved_week = json["weekStart"].as_str().unwrap_or("");
+                if saved_date == self.current_date {
+                    self.daily_cost = json["dailyCost"].as_f64().unwrap_or(0.0) as f32;
+                }
+                if saved_week == self.week_start {
+                    self.weekly_cost = json["weeklyCost"].as_f64().unwrap_or(0.0) as f32;
+                }
+            }
+        }
+    }
+
+    fn persist(&mut self) {
+        if self.last_persist.elapsed() < std::time::Duration::from_secs(30) {
+            return;
+        }
+        self.last_persist = Instant::now();
+        let json = serde_json::json!({
+            "date": self.current_date,
+            "weekStart": self.week_start,
+            "dailyCost": self.daily_cost,
+            "weeklyCost": self.weekly_cost,
+        });
+        let path = Self::usage_file_path();
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::write(&path, serde_json::to_string_pretty(&json).unwrap_or_default());
+    }
+
+    fn check_date_rollover(&mut self) {
+        let now = chrono::Local::now();
+        let today = now.format("%Y-%m-%d").to_string();
+        if today != self.current_date {
+            self.daily_cost = 0.0;
+            self.current_date = today;
+            let monday = now
+                - chrono::Duration::days(now.weekday().num_days_from_monday() as i64);
+            let new_week_start = monday.format("%Y-%m-%d").to_string();
+            if new_week_start != self.week_start {
+                self.weekly_cost = 0.0;
+                self.week_start = new_week_start;
+            }
+            // Force persist on rollover
+            self.last_persist = Instant::now() - std::time::Duration::from_secs(60);
+        }
+    }
+
+    fn update_costs(&mut self, pane_claude_infos: &[(mux::pane::PaneId, f32)]) {
+        self.check_date_rollover();
+        for &(pane_id, cost) in pane_claude_infos {
+            let prev = self.last_seen_costs.get(&pane_id).copied().unwrap_or(0.0);
+            if cost > prev {
+                let delta = cost - prev;
+                self.daily_cost += delta;
+                self.weekly_cost += delta;
+            }
+            self.last_seen_costs.insert(pane_id, cost);
+        }
+        self.persist();
+    }
+}
+
 pub struct SidebarTabInfo {
     pub cwd_short: String,
     pub git_branch: Option<String>,
@@ -228,6 +339,7 @@ pub enum TabSidebarItem {
     Tab { tab_idx: usize, active: bool },
     Pane { tab_idx: usize, pane_idx: usize },
     ClosePane { pane_id: usize },
+    MuteNotifications { pane_id: usize },
     NewTabButton,
     ResizeHandle,
 }
@@ -287,6 +399,8 @@ pub struct PaneState {
     bell_start: Option<Instant>,
     notification_start: Option<Instant>,
     pub notification_count: u32,
+    /// When true, suppress Windows toast notifications and in-tab indicators for this pane
+    pub notifications_muted: bool,
     pub mouse_terminal_coords: Option<(ClickPosition, StableRowIndex)>,
     /// Per-pane font scale factor (1.0 = default, >1.0 = larger, <1.0 = smaller)
     pub font_scale: f64,
@@ -301,6 +415,7 @@ impl Default for PaneState {
             bell_start: None,
             notification_start: None,
             notification_count: 0,
+            notifications_muted: false,
             mouse_terminal_coords: None,
             font_scale: 1.0,
         }
@@ -318,6 +433,10 @@ pub struct TabInformation {
     pub window_id: MuxWindowId,
     pub tab_title: String,
     pub has_notification: bool,
+    /// True if any pane in this tab has notifications muted
+    pub has_muted_pane: bool,
+    /// Effective zoom percentage for the active pane (None when 100%)
+    pub zoom_pct: Option<u16>,
 }
 
 
@@ -410,6 +529,9 @@ pub struct TermWindow {
     claude_idle_notified: std::collections::HashSet<PaneId>,
     /// Previous claude_status per pane, for detecting transitions to WaitingInput.
     claude_prev_status: HashMap<PaneId, Option<ClaudeStatus>>,
+    /// Cumulative Claude API usage tracker (persisted to disk).
+    #[cfg(windows)]
+    claude_usage_tracker: ClaudeUsageTracker,
     pub right_status: String,
     pub left_status: String,
     last_ui_item: Option<UIItem>,
@@ -782,6 +904,8 @@ impl TermWindow {
             pane_last_output: HashMap::new(),
             claude_idle_notified: std::collections::HashSet::new(),
             claude_prev_status: HashMap::new(),
+            #[cfg(windows)]
+            claude_usage_tracker: ClaudeUsageTracker::new(),
             right_status: String::new(),
             left_status: String::new(),
             last_mouse_coords: (0, -1),
@@ -1329,9 +1453,12 @@ impl TermWindow {
                     pane_id,
                 } => {
                     if self.window_contains_pane(pane_id) {
-                        let mut per_pane = self.pane_state(pane_id);
-                        per_pane.notification_start.replace(Instant::now());
-                        per_pane.notification_count += 1;
+                        let muted = self.pane_state(pane_id).notifications_muted;
+                        if !muted {
+                            let mut per_pane = self.pane_state(pane_id);
+                            per_pane.notification_start.replace(Instant::now());
+                            per_pane.notification_count += 1;
+                        }
                     }
                     window.invalidate();
                     self.update_title();
@@ -2401,27 +2528,136 @@ impl TermWindow {
         Some(result.join("\n"))
     }
 
-    /// Build a notification message with context from ClaudeSessionInfo.
-    fn claude_notification_message(
-        info: Option<&ClaudeSessionInfo>,
-        cwd: &str,
-        question: Option<&str>,
-    ) -> String {
-        let mut parts = Vec::new();
-        if let Some(q) = question {
-            parts.push(q.to_string());
-        } else {
-            parts.push("Awaiting your input".to_string());
-        }
-        if let Some(info) = info {
-            if let Some(cost) = info.cost_usd {
-                parts.push(format!("Cost: ${:.2}", cost));
+    /// Extract the Claude prompt/question from the terminal when status is WaitingInput.
+    /// Reads the last ~12 lines, filters out Claude UI chrome (spinner, keybinding hints,
+    /// box-drawing, option markers), and returns the meaningful prompt text.
+    fn extract_claude_prompt(pane_id: PaneId) -> Option<String> {
+        let mux = Mux::get();
+        let pane = mux.get_pane(pane_id)?;
+        let dims = pane.get_dimensions();
+
+        let fetch_rows = 30usize.min(dims.scrollback_rows);
+        let end = dims.scrollback_rows as StableRowIndex;
+        let start = end.saturating_sub(fetch_rows as StableRowIndex);
+
+        let (_first, lines) = pane.get_lines(start..end);
+
+        let is_chrome = |line: &str| -> bool {
+            let l = line.trim();
+            if l.is_empty() {
+                return true;
+            }
+            // Spinner-only or prompt-only lines
+            if l.chars()
+                .all(|c| "❯›>$#%⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏─│╭╮╰╯┌┐└┘├┤┬┴┼ ".contains(c))
+            {
+                return true;
+            }
+            // Claude keybinding hints (including wrapped fragments from narrow panes)
+            if l.contains("Esc to cancel")
+                || l.contains("Tab to amend")
+                || l.contains("ctrl+e to explain")
+                || l == "to explain"
+                || l == "to cancel"
+                || l == "to amend"
+                || l == "explain"
+            {
+                return true;
+            }
+            // Tree connectors and tool invocation lines — match any variant:
+            // └ (U+2514), ╰ (U+2570), ⎿ (U+23BF), ├ (U+251C), ╭ (U+256D)
+            // ● (U+25CF), ○ (U+25CB)
+            // Also catch "Running" in short lines (tree child status)
+            if l.starts_with("\u{2514}")
+                || l.starts_with("\u{2570}")
+                || l.starts_with("\u{23bf}")  // ⎿ (Claude Code tree connector)
+                || l.starts_with("\u{251c}")
+                || l.starts_with("\u{256d}")
+                || l.starts_with("\u{25cf}")
+                || l.starts_with("\u{25cb}")
+                || (l.len() < 30 && l.contains("Running"))
+            {
+                return true;
+            }
+            false
+        };
+
+        // Strip option markers (❯, bullet numbers) but keep the text
+        let clean_option = |line: &str| -> String {
+            let l = line.trim();
+            // "❯ 1. Yes" → "1. Yes", "  2. No" → "2. No"
+            let l = l.trim_start_matches(|c: char| "❯› ".contains(c));
+            l.to_string()
+        };
+
+        let mut text_lines: Vec<String> = Vec::new();
+        for line in lines.iter().rev() {
+            let text = line.as_str().trim().to_string();
+            if is_chrome(&text) {
+                continue;
+            }
+            text_lines.push(clean_option(&text));
+            if text_lines.len() >= 5 {
+                break;
             }
         }
-        if !cwd.is_empty() {
-            parts.push(format!("Project: {}", cwd));
+
+        if text_lines.is_empty() {
+            return None;
         }
-        parts.join("\n")
+
+        text_lines.reverse();
+
+        let truncated: Vec<String> = text_lines
+            .iter()
+            .map(|l| {
+                if l.chars().count() > 100 {
+                    let t: String = l.chars().take(99).collect();
+                    format!("{}…", t)
+                } else {
+                    l.clone()
+                }
+            })
+            .collect();
+
+        // Merge consecutive numbered options onto one line
+        // e.g. ["1. Yes", "2. No"] → ["1. Yes  |  2. No"]
+        let is_option = |s: &str| {
+            let s = s.trim().as_bytes();
+            s.len() >= 3 && s[0].is_ascii_digit() && s[1] == b'.' && s[2] == b' '
+        };
+        let mut merged: Vec<String> = Vec::new();
+        let mut option_buf: Vec<String> = Vec::new();
+        for line in &truncated {
+            if is_option(line) {
+                option_buf.push(line.clone());
+            } else {
+                if !option_buf.is_empty() {
+                    merged.push(option_buf.join("  |  "));
+                    option_buf.clear();
+                }
+                merged.push(line.clone());
+            }
+        }
+        if !option_buf.is_empty() {
+            merged.push(option_buf.join("  |  "));
+        }
+
+        Some(merged.join("\n"))
+    }
+
+    /// Build a toast notification message. When there's a question, show only the
+    /// question — Windows toasts are capped at ~4 body lines so metadata would
+    /// push the options off-screen.
+    fn claude_notification_message(
+        _info: Option<&ClaudeSessionInfo>,
+        _cwd: &str,
+        question: Option<&str>,
+    ) -> String {
+        match question {
+            Some(q) => q.to_string(),
+            None => "Awaiting your input".to_string(),
+        }
     }
 
     /// Build a Slack mrkdwn notification message with context.
@@ -2618,6 +2854,7 @@ impl TermWindow {
 
         for pane_info in &claude_panes {
             let pane_id = pane_info.pane_id;
+            let is_muted = self.pane_state(pane_id).notifications_muted;
 
             if pane_info.has_user_vars {
                 // Phase 1: User-var based detection (precise)
@@ -2626,14 +2863,32 @@ impl TermWindow {
                 let curr = pane_info.status;
 
                 if curr == Some(ClaudeStatus::WaitingInput) && prev != Some(ClaudeStatus::WaitingInput) {
-                    if !self.claude_idle_notified.contains(&pane_id) {
+                    if !self.claude_idle_notified.contains(&pane_id) && !is_muted {
                         self.claude_idle_notified.insert(pane_id);
-                        let question = Self::extract_pane_last_text(pane_id, 4);
+                        // Extract prompt from terminal scrollback (has chrome filtering).
+                        // Fall back to claude_question user var if extraction fails.
+                        let question: Option<String> =
+                            Self::extract_claude_prompt(pane_id).or_else(|| {
+                                let mux = Mux::get();
+                                mux.get_pane(pane_id).and_then(|p| {
+                                    let vars = p.copy_user_vars();
+                                    vars.get("claude_question").cloned()
+                                })
+                            });
                         log::info!(
                             "Claude pane {} status → WaitingInput — firing notification (question: {:?})",
                             pane_id,
                             question,
                         );
+                        // Set notification state on PaneState so tab sidebar shows
+                        // the flashing indicator until the tab is activated
+                        {
+                            let mut ps = self.pane_state(pane_id);
+                            ps.notification_start.replace(Instant::now());
+                            ps.notification_count += 1;
+                        }
+                        // Force sidebar rebuild so it picks up the new notification_start
+                        self.invalidate_tab_sidebar();
                         self.fire_claude_notification(
                             pane_info.session_info.as_ref(),
                             &pane_info.cwd,
@@ -2650,21 +2905,25 @@ impl TermWindow {
                 self.claude_prev_status.insert(pane_id, curr);
             } else {
                 // Phase 2: Idle timeout fallback (for Claude without user vars)
-                if self.claude_idle_notified.contains(&pane_id) {
+                if self.claude_idle_notified.contains(&pane_id) || is_muted {
                     continue;
                 }
                 if let Some(last_output) = self.pane_last_output.get(&pane_id) {
                     let idle_duration = now.duration_since(*last_output);
                     if idle_duration >= idle_threshold {
                         self.claude_idle_notified.insert(pane_id);
-                        let question = Self::extract_pane_last_text(pane_id, 4);
+                        {
+                            let mut ps = self.pane_state(pane_id);
+                            ps.notification_start.replace(Instant::now());
+                            ps.notification_count += 1;
+                        }
+                        self.invalidate_tab_sidebar();
                         log::info!(
-                            "Claude pane {} idle for {:.1}s — firing notification (question: {:?})",
+                            "Claude pane {} idle for {:.1}s — firing notification",
                             pane_id,
                             idle_duration.as_secs_f64(),
-                            question,
                         );
-                        self.fire_claude_notification(None, &pane_info.cwd, question.as_deref());
+                        self.fire_claude_notification(None, &pane_info.cwd, None);
                     }
                 }
             }
@@ -3209,12 +3468,79 @@ impl TermWindow {
                 self.activate_tab_relative(*n, false)?;
             }
             ActivateLastTab => self.activate_last_tab()?,
-            DecreaseFontSize => self.decrease_font_size(),
-            IncreaseFontSize => self.increase_font_size(),
-            ResetFontSize => self.reset_font_size(),
+            DecreaseFontSize => {
+                let pane_id = pane.pane_id();
+                let current = self.pane_font_scale(pane_id);
+                let new_scale = (current / 1.1).max(0.5);
+                self.pane_state(pane_id).font_scale = new_scale;
+                self.resize_pane_for_font_scale(pane_id);
+                self.shape_generation += 1;
+                self.shape_cache.borrow_mut().clear();
+                self.invalidate_tab_sidebar();
+                if let Some(w) = window.as_ref() {
+                    w.invalidate();
+                }
+            }
+            IncreaseFontSize => {
+                let pane_id = pane.pane_id();
+                let current = self.pane_font_scale(pane_id);
+                let new_scale = (current * 1.1).min(3.0);
+                self.pane_state(pane_id).font_scale = new_scale;
+                self.resize_pane_for_font_scale(pane_id);
+                self.shape_generation += 1;
+                self.shape_cache.borrow_mut().clear();
+                self.invalidate_tab_sidebar();
+                if let Some(w) = window.as_ref() {
+                    w.invalidate();
+                }
+            }
+            ResetFontSize => {
+                let pane_id = pane.pane_id();
+                let had_scale = {
+                    let mut ps = self.pane_state(pane_id);
+                    let had = (ps.font_scale - 1.0).abs() > 0.001;
+                    ps.font_scale = 1.0;
+                    had
+                };
+                if had_scale {
+                    self.resize_pane_for_font_scale(pane_id);
+                    self.shape_generation += 1;
+                    self.shape_cache.borrow_mut().clear();
+                }
+                self.invalidate_tab_sidebar();
+                if let Some(w) = window.as_ref() {
+                    w.invalidate();
+                }
+            }
             ResetFontAndWindowSize => {
                 if let Some(w) = window.as_ref() {
                     self.reset_font_and_window_size(&w)?
+                }
+            }
+            TogglePaneNotifications => {
+                let pane_id = pane.pane_id();
+                let muted = {
+                    let mut ps = self.pane_state(pane_id);
+                    ps.notifications_muted = !ps.notifications_muted;
+                    if ps.notifications_muted {
+                        ps.notification_start = None;
+                        ps.notification_count = 0;
+                    }
+                    ps.notifications_muted
+                };
+                // Sync with the global static so frontend.rs can check it
+                {
+                    let mut set = MUTED_PANES.lock().unwrap();
+                    if muted {
+                        set.insert(pane_id);
+                    } else {
+                        set.remove(&pane_id);
+                    }
+                }
+                log::info!("Pane {} notifications muted: {}", pane_id, muted);
+                self.invalidate_tab_sidebar();
+                if let Some(w) = window.as_ref() {
+                    w.invalidate();
                 }
             }
             ActivateTab(n) => {
@@ -3769,6 +4095,9 @@ impl TermWindow {
         };
 
         let action_type = action["type"].as_str().unwrap_or("");
+        if action_type != "refocus" {
+            log::info!("sidebar IPC: {}", msg);
+        }
         match action_type {
             "activate_tab" => {
                 if let Some(idx) = action["tabIdx"].as_u64() {
@@ -3808,6 +4137,54 @@ impl TermWindow {
                 use config::keyassignment::SpawnTabDomain;
                 self.spawn_tab(&SpawnTabDomain::CurrentPaneDomain);
             }
+            "toggle_mute" => {
+                if let Some(pane_id) = action["paneId"].as_u64() {
+                    let pane_id = pane_id as PaneId;
+                    let muted = {
+                        let mut ps = self.pane_state(pane_id);
+                        ps.notifications_muted = !ps.notifications_muted;
+                        if ps.notifications_muted {
+                            ps.notification_start = None;
+                            ps.notification_count = 0;
+                        }
+                        ps.notifications_muted
+                    };
+                    {
+                        let mut set = MUTED_PANES.lock().unwrap();
+                        if muted {
+                            set.insert(pane_id);
+                        } else {
+                            set.remove(&pane_id);
+                        }
+                    }
+                    log::info!("Pane {} notifications muted: {} (via sidebar)", pane_id, muted);
+                    self.invalidate_tab_sidebar();
+                    if let Some(w) = self.window.as_ref() {
+                        w.invalidate();
+                    }
+                }
+            }
+            "reset_zoom" => {
+                if let Some(pane) = self.get_active_pane_or_overlay() {
+                    let pane_id = pane.pane_id();
+                    let had_scale = {
+                        let mut ps = self.pane_state(pane_id);
+                        let had = (ps.font_scale - 1.0).abs() > 0.001;
+                        ps.font_scale = 1.0;
+                        had
+                    };
+                    if had_scale {
+                        self.resize_pane_for_font_scale(pane_id);
+                        self.shape_generation += 1;
+                        self.shape_cache.borrow_mut().clear();
+                    }
+                    self.invalidate_tab_sidebar();
+                    if let Some(w) = self.window.as_ref() {
+                        w.invalidate();
+                    }
+                }
+                log::info!("Zoom reset to 100% (via sidebar)");
+            }
             "refocus" | _ if action_type.is_empty() => {}
             _ => {
                 log::trace!("Unknown sidebar IPC action: {}", msg);
@@ -3823,7 +4200,7 @@ impl TermWindow {
 
     /// Serialize current sidebar state as JSON for the WebView.
     #[cfg(windows)]
-    pub fn serialize_sidebar_state(&self) -> String {
+    pub fn serialize_sidebar_state(&mut self) -> String {
         let mux = mux::Mux::get();
         let mux_window = match mux.get_window(self.mux_window_id) {
             Some(w) => w,
@@ -3884,6 +4261,10 @@ impl TermWindow {
                                 });
                             let pane_claude =
                                 info.and_then(|i| i.pane_claude_info.get(&pane_id));
+                            let pane_has_notif = {
+                                let states = self.pane_state.borrow();
+                                states.get(&pane_id).map_or(false, |ps| ps.notification_start.is_some())
+                            };
 
                             serde_json::json!({
                                 "paneId": pane_id,
@@ -3891,12 +4272,40 @@ impl TermWindow {
                                 "title": pane_title,
                                 "cwdShort": pane_cwd,
                                 "isActive": pp.is_active,
+                                "hasNotification": pane_has_notif,
                                 "claudeInfo": pane_claude.map(|c| claude_to_json(c)),
                             })
                         })
                         .collect()
                 } else {
                     vec![]
+                };
+
+                // Per-pane muted state (active pane)
+                let active_pane_muted = panes
+                    .iter()
+                    .find(|p| p.is_active)
+                    .map(|p| self.pane_state(p.pane.pane_id()).notifications_muted)
+                    .unwrap_or(false);
+                let active_pane_id = panes
+                    .iter()
+                    .find(|p| p.is_active)
+                    .map(|p| p.pane.pane_id());
+
+                // Zoom percentage for active tab
+                let zoom_pct = if is_active {
+                    panes
+                        .iter()
+                        .find(|p| p.is_active)
+                        .map(|p| {
+                            let pane_scale = self.pane_state(p.pane.pane_id()).font_scale;
+                            let global_scale = self.fonts.get_font_scale();
+                            let pct = (pane_scale * global_scale * 100.0).round() as u16;
+                            pct
+                        })
+                        .filter(|&pct| pct != 100)
+                } else {
+                    None
                 };
 
                 serde_json::json!({
@@ -3908,11 +4317,110 @@ impl TermWindow {
                     "isActive": is_active,
                     "hasNotification": has_notification,
                     "notificationCount": notif_count,
+                    "notificationsMuted": active_pane_muted,
+                    "activePaneId": active_pane_id,
+                    "zoomPct": zoom_pct,
                     "panes": pane_entries,
                     "claudeInfo": claude_json,
                 })
             })
             .collect();
+
+        // Aggregate Claude stats across all tabs/panes
+        let claude_stats = {
+            let mut active: u32 = 0;
+            let mut working: u32 = 0;
+            let mut waiting: u32 = 0;
+            let mut idle: u32 = 0;
+            let mut errored: u32 = 0;
+            let mut session_cost: f32 = 0.0;
+            let mut session_dur: u64 = 0;
+            let mut total_added: u32 = 0;
+            let mut total_removed: u32 = 0;
+            let mut ctx_sum: u32 = 0;
+            let mut ctx_count: u32 = 0;
+            let mut models: Vec<String> = Vec::new();
+            let mut cost_pairs: Vec<(mux::pane::PaneId, f32)> = Vec::new();
+
+            for info in self.tab_sidebar_info.values() {
+                for (pane_id, c) in &info.pane_claude_info {
+                    if let Some(st) = c.status {
+                        active += 1;
+                        match st {
+                            ClaudeStatus::Working => working += 1,
+                            ClaudeStatus::WaitingInput => waiting += 1,
+                            ClaudeStatus::Idle => idle += 1,
+                            ClaudeStatus::Error => errored += 1,
+                        }
+                        session_cost += c.cost_usd.unwrap_or(0.0);
+                        session_dur += c.duration_ms.unwrap_or(0);
+                        total_added += c.lines_added.unwrap_or(0);
+                        total_removed += c.lines_removed.unwrap_or(0);
+                        if let Some(pct) = c.context_pct {
+                            ctx_sum += pct as u32;
+                            ctx_count += 1;
+                        }
+                        if let Some(ref m) = c.model {
+                            if !models.contains(m) {
+                                models.push(m.clone());
+                            }
+                        }
+                        if let Some(cost) = c.cost_usd {
+                            cost_pairs.push((*pane_id, cost));
+                        }
+                    }
+                }
+            }
+
+            // Update cumulative usage tracker
+            #[cfg(windows)]
+            self.claude_usage_tracker.update_costs(&cost_pairs);
+
+            let has_data = active > 0;
+            #[cfg(windows)]
+            let has_data = has_data || self.claude_usage_tracker.daily_cost > 0.0;
+
+            if has_data {
+                #[cfg(windows)]
+                let daily_budget = self.config.claude_daily_budget_usd;
+                #[cfg(windows)]
+                let weekly_budget = self.config.claude_weekly_budget_usd;
+                #[cfg(not(windows))]
+                let daily_budget: Option<f32> = None;
+                #[cfg(not(windows))]
+                let weekly_budget: Option<f32> = None;
+
+                #[cfg(windows)]
+                let (daily_spent, weekly_spent) = (
+                    self.claude_usage_tracker.daily_cost,
+                    self.claude_usage_tracker.weekly_cost,
+                );
+                #[cfg(not(windows))]
+                let (daily_spent, weekly_spent): (f32, f32) = (0.0, 0.0);
+
+                Some(serde_json::json!({
+                    "activeSessions": active,
+                    "working": working,
+                    "waitingInput": waiting,
+                    "idle": idle,
+                    "error": errored,
+                    "totalCostUsd": session_cost,
+                    "totalDurationMs": session_dur,
+                    "totalLinesAdded": total_added,
+                    "totalLinesRemoved": total_removed,
+                    "avgContextPct": if ctx_count > 0 { Some(ctx_sum / ctx_count) } else { None::<u32> },
+                    "models": models,
+                    "dailySpent": daily_spent,
+                    "dailyBudget": daily_budget,
+                    "weeklySpent": weekly_spent,
+                    "weeklyBudget": weekly_budget,
+                    "dailyRemaining": daily_budget.map(|b| (b - daily_spent).max(0.0)),
+                    "weeklyRemaining": weekly_budget.map(|b| (b - weekly_spent).max(0.0)),
+                }))
+            } else {
+                None
+            }
+        };
 
         let position = match self.config.tab_sidebar_position {
             config::TabSidebarPosition::Left => "left",
@@ -3922,6 +4430,7 @@ impl TermWindow {
         serde_json::json!({
             "tabs": tabs,
             "sidebarPosition": position,
+            "claudeStats": claude_stats,
         })
         .to_string()
     }
@@ -4284,6 +4793,27 @@ impl TermWindow {
                                     .notification_start
                                     .is_some()
                             })
+                    },
+                    has_muted_pane: panes
+                        .iter()
+                        .any(|p| self.pane_state(p.pane.pane_id()).notifications_muted),
+                    zoom_pct: if tab_index == idx {
+                        panes
+                            .iter()
+                            .find(|p| p.is_active)
+                            .and_then(|p| {
+                                let pane_scale =
+                                    self.pane_state(p.pane.pane_id()).font_scale;
+                                let global_scale = self.fonts.get_font_scale();
+                                let pct = (pane_scale * global_scale * 100.0).round() as u16;
+                                if pct != 100 {
+                                    Some(pct)
+                                } else {
+                                    None
+                                }
+                            })
+                    } else {
+                        None
                     },
                 }
             })

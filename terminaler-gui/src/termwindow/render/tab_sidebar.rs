@@ -58,7 +58,7 @@ impl crate::TermWindow {
 
     /// Poll CWD and git branch info for each tab, throttled to every 2 seconds.
     pub fn update_sidebar_info(&mut self) {
-        if self.last_sidebar_info_poll.elapsed() < Duration::from_secs(2) {
+        if self.last_sidebar_info_poll.elapsed() < Duration::from_secs(1) {
             return;
         }
         self.last_sidebar_info_poll = Instant::now();
@@ -103,10 +103,19 @@ impl crate::TermWindow {
                 let process_name = pane.get_foreground_process_name(CachePolicy::AllowStale);
                 let pane_title = pane.get_title();
                 let user_vars = pane.copy_user_vars();
-                // Only detect Claude if the foreground process or title matches.
-                // User vars alone are not sufficient — they persist after Claude exits.
+                // Detect Claude via:
+                // 1. Foreground process name ("claude" / "claude-code")
+                // 2. Pane title containing "claude"
+                // 3. Any process in the full tree matching Claude
+                // 4. User vars with active claude_status (needed for WSL where
+                //    the Windows process tree only shows wslhost.exe and the
+                //    real Claude process is inside the Linux VM)
+                let tree_names = pane.get_process_names_in_tree(CachePolicy::AllowStale);
+                let has_active_claude_vars = user_vars.contains_key("claude_status");
                 let is_claude = process_name.as_deref().map_or(false, is_claude_process)
-                    || is_claude_title(&pane_title);
+                    || is_claude_title(&pane_title)
+                    || tree_names.iter().any(|n| is_claude_process(n))
+                    || has_active_claude_vars;
 
                 if is_claude {
                     let status = user_vars.get("claude_status").map(|s| match s.as_str() {
@@ -399,10 +408,94 @@ impl crate::TermWindow {
                 children.push(notif_element);
             }
 
-            let tab_bg = if is_active {
+            // Mute/unmute notifications toggle
+            let active_pane_id = panes.iter().find(|p| p.is_active).map(|p| p.pane.pane_id());
+            if let Some(pid) = active_pane_id {
+                let is_muted = self.pane_state(pid).notifications_muted;
+                let (label, text_col, bg_col, hover_bg) = if is_muted {
+                    (
+                        "MUTED (click to unmute)",
+                        LinearRgba::with_components(1.0, 0.7, 0.2, 1.0),
+                        LinearRgba::with_components(0.6, 0.3, 0.0, 0.3),
+                        LinearRgba::with_components(0.6, 0.3, 0.0, 0.5),
+                    )
+                } else {
+                    (
+                        "mute notifications",
+                        dimmed_color,
+                        LinearRgba::with_components(0.0, 0.0, 0.0, 0.0),
+                        LinearRgba::with_components(bg_color.0 + 0.08, bg_color.1 + 0.08, bg_color.2 + 0.08, 0.5),
+                    )
+                };
+                let mute_element = Element::new(
+                    &title_font,
+                    ElementContent::Text(label.to_string()),
+                )
+                .display(DisplayType::Block)
+                .line_height(Some(0.9))
+                .item_type(UIItemType::TabSidebar(TabSidebarItem::MuteNotifications {
+                    pane_id: pid as usize,
+                }))
+                .colors(ElementColors {
+                    border: BorderColor::default(),
+                    bg: bg_col.into(),
+                    text: text_col.into(),
+                })
+                .hover_colors(Some(ElementColors {
+                    border: BorderColor::default(),
+                    bg: hover_bg.into(),
+                    text: text_color.into(),
+                }));
+                children.push(mute_element);
+            }
+
+            // Zoom level indicator for active tab
+            if is_active {
+                if let Some(active_pane) = panes.iter().find(|p| p.is_active) {
+                    let pane_scale = self.pane_state(active_pane.pane.pane_id()).font_scale;
+                    let global_scale = self.fonts.get_font_scale();
+                    let pct = (pane_scale * global_scale * 100.0).round() as u16;
+                    if pct != 100 {
+                        let zoom_element = Element::new(
+                            &font,
+                            ElementContent::Text(format!("Zoom: {}%  (Ctrl+0 reset)", pct)),
+                        )
+                        .display(DisplayType::Block)
+                        .line_height(Some(1.0))
+                        .colors(ElementColors {
+                            border: BorderColor::default(),
+                            bg: LinearRgba::with_components(0.0, 0.3, 0.3, 0.3).into(),
+                            text: LinearRgba::with_components(0.0, 0.9, 0.9, 1.0).into(),
+                        });
+                        children.push(zoom_element);
+                    }
+                }
+            }
+
+            let base_tab_bg = if is_active {
                 active_tab_colors.bg_color.to_linear()
             } else {
                 bg_color
+            };
+            let tab_bg = if has_notification {
+                // Pulse background between normal and notification color
+                let notif_start = self
+                    .pane_state_for_tab(tab_id)
+                    .and_then(|ps| ps.notification_start);
+                let elapsed = notif_start
+                    .map(|start| Instant::now().duration_since(start).as_secs_f32())
+                    .unwrap_or(0.0);
+                let period = 1.5_f32;
+                let t = ((elapsed * std::f32::consts::TAU / period).sin() + 1.0) / 2.0;
+                let blend = t * 0.35;
+                LinearRgba::with_components(
+                    base_tab_bg.0 + (notif_color.0 - base_tab_bg.0) * blend,
+                    base_tab_bg.1 + (notif_color.1 - base_tab_bg.1) * blend,
+                    base_tab_bg.2 + (notif_color.2 - base_tab_bg.2) * blend,
+                    base_tab_bg.3,
+                )
+            } else {
+                base_tab_bg
             };
 
             let hover_bg = inactive_tab_hover_colors.bg_color.to_linear();
@@ -846,6 +939,28 @@ impl crate::TermWindow {
             height: (window_height - bg_y) as usize,
             item_type: UIItemType::TabSidebar(TabSidebarItem::ResizeHandle),
         });
+
+        // Check if any tab has a notification — if so, force rebuild
+        // each frame for the pulsing animation.
+        // Collect tab IDs first, then check pane state separately to avoid
+        // nested Mux borrows.
+        let tab_ids: Vec<TabId> = {
+            let mux = Mux::get();
+            mux.get_window(self.mux_window_id)
+                .map(|w| w.iter().map(|tab| tab.tab_id()).collect())
+                .unwrap_or_default()
+        };
+        let has_flashing_tab = tab_ids.iter().any(|&tid| {
+            self.pane_state_for_tab(tid)
+                .map_or(false, |ps| ps.notification_start.is_some())
+        });
+
+        if has_flashing_tab {
+            // Force rebuild so animation updates
+            self.tab_sidebar.take();
+            // Schedule next frame for smooth animation (~30fps)
+            self.update_next_frame_time(Some(Instant::now() + Duration::from_millis(32)));
+        }
 
         if self.tab_sidebar.is_none() {
             let palette = self.palette().clone();

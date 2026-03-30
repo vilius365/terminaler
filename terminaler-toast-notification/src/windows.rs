@@ -19,6 +19,12 @@ fn unwrap_arg<T>(a: &Option<T>) -> Result<&T, WinError> {
 }
 
 fn show_notif_impl(toast: TN) -> Result<(), Box<dyn std::error::Error>> {
+    log::info!(
+        "Toast notification — title: {:?}, message: {:?}",
+        toast.title,
+        toast.message
+    );
+
     let xml = XmlDocument::new()?;
 
     let url_actions = if toast.url.is_some() {
@@ -31,26 +37,48 @@ fn show_notif_impl(toast: TN) -> Result<(), Box<dyn std::error::Error>> {
         ""
     };
 
+    // Use a single <text hint-wrap="true"> for the body so Windows wraps all
+    // lines instead of silently dropping everything past the 3rd <text> element.
+    let escaped_body: String = toast
+        .message
+        .lines()
+        .map(|line| escape_str_pcdata(line).to_string())
+        .collect::<Vec<_>>()
+        .join("&#xA;");
+
     xml.LoadXml(HSTRING::from(format!(
         r#"<toast duration="long">
         <visual>
             <binding template="ToastGeneric">
                 <text>{}</text>
-                <text>{}</text>
+                <text hint-wrap="true" hint-maxLines="8">{}</text>
             </binding>
         </visual>
         {}
     </toast>"#,
         escape_str_pcdata(&toast.title),
-        escape_str_pcdata(&toast.message),
+        escaped_body,
         url_actions
     )))?;
 
     let notif = ToastNotification::CreateToastNotification(xml)?;
 
-    notif.Activated(TypedEventHandler::new(
+    // Save for fallback before toast is moved into closure
+    let fallback_title = toast.title.clone();
+    let fallback_message = toast.message.clone();
+
+    notif.Failed(&TypedEventHandler::new(
+        |_sender: &Option<ToastNotification>,
+         result: &Option<windows::UI::Notifications::ToastFailedEventArgs>| {
+            if let Some(result) = result {
+                log::error!("Toast notification failed: {:?}", result.ErrorCode());
+            }
+            Ok(())
+        },
+    ))?;
+
+    notif.Activated(&TypedEventHandler::new(
         move |_: &Option<ToastNotification>, result: &Option<IInspectable>| {
-            // let myself = unwrap_arg(myself)?;
             let result = unwrap_arg(result)?.cast::<ToastActivatedEventArgs>()?;
 
             let args = result.Arguments()?;
@@ -67,21 +95,35 @@ fn show_notif_impl(toast: TN) -> Result<(), Box<dyn std::error::Error>> {
         },
     ))?;
 
-    /*
-    notif.dismissed(TypedEventHandler::new(|sender, result| {
-        log::info!("dismissed {:?}", result);
-        Ok(())
-    }))?;
-
-    notif.failed(TypedEventHandler::new(|sender, result| {
-        log::warn!("toasts are disabled {:?}", result);
-        Ok(())
-    }))?;
-    */
-
-    let notifier = ToastNotificationManager::CreateToastNotifierWithId(HSTRING::from(
+    let notifier = match ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(
         "org.wezfurlong.terminaler",
-    ))?;
+    )) {
+        Ok(n) => n,
+        Err(err) => {
+            log::warn!(
+                "CreateToastNotifierWithId failed (app not registered?), \
+                 trying PowerShell fallback: {:#}",
+                err
+            );
+            // Fallback: use PowerShell for a simple balloon notification
+            let _ = std::process::Command::new("powershell")
+                .args([
+                    "-WindowStyle", "Hidden",
+                    "-Command",
+                    &format!(
+                        "[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null; \
+                         $xml = [Windows.Data.Xml.Dom.XmlDocument]::new(); \
+                         $xml.LoadXml('<toast><visual><binding template=\"ToastGeneric\"><text>{}</text><text>{}</text></binding></visual></toast>'); \
+                         $toast = [Windows.UI.Notifications.ToastNotification]::new($xml); \
+                         [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('Terminaler').Show($toast)",
+                        escape_str_pcdata(&fallback_title),
+                        escape_str_pcdata(&fallback_message),
+                    ),
+                ])
+                .spawn();
+            return Ok(());
+        }
+    };
 
     notifier.Show(&notif)?;
 
