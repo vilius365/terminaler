@@ -197,6 +197,10 @@ pub fn bootstrap() {
         terminaler_version::terminaler_version(),
         terminaler_version::terminaler_target_triple(),
     );
+    // Ensure backtraces are always captured on panic, even in release.
+    if std::env::var_os("RUST_BACKTRACE").is_none() {
+        std::env::set_var("RUST_BACKTRACE", "1");
+    }
     setup_logger();
     register_panic_hook();
 

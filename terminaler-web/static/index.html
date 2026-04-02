@@ -7,16 +7,16 @@
     <link rel="stylesheet" href="xterm.css">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        html, body { height: 100%; overflow: hidden; background: #1a1a2e; color: #e0e0e0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+        html, body { height: 100%; overflow: hidden; background: #1a1a2e; color: #e0e0e0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; width: 100%; }
 
-        #app { display: flex; flex-direction: column; height: 100%; }
+        #app { display: flex; flex-direction: column; height: 100%; position: fixed; top: 0; left: 0; right: 0; bottom: 0; }
 
         #header {
             display: flex; align-items: center; gap: 8px;
             padding: 6px 12px; background: #16213e; border-bottom: 1px solid #0f3460;
-            flex-shrink: 0; overflow-x: auto; white-space: nowrap;
+            flex-shrink: 0; flex-wrap: wrap;
         }
-        #header .logo { font-weight: 700; font-size: 14px; color: #e94560; margin-right: 8px; }
+        #header .logo { font-weight: 700; font-size: 14px; color: #e94560; margin-right: 8px; flex-shrink: 0; }
         #status {
             margin-left: auto; font-size: 12px; padding: 2px 8px;
             border-radius: 10px; flex-shrink: 0;
@@ -26,6 +26,7 @@
 
         #pane-bar {
             display: flex; gap: 4px; align-items: center; overflow-x: auto;
+            min-width: 0; flex: 1;
         }
         .pane-btn {
             padding: 4px 12px; border: 1px solid #0f3460; border-radius: 4px;
@@ -36,18 +37,75 @@
         .pane-btn.active { background: #e94560; color: #fff; border-color: #e94560; }
 
         #terminal-container {
-            flex: 1; padding: 4px; position: relative; overflow: hidden;
+            flex: 1; padding: 4px; position: relative;
+            overflow: hidden;
+            min-height: 0;
         }
-        #terminal-container .xterm { height: 100%; }
+
+        /* Enable native touch scrolling on xterm terminal */
+        .xterm-viewport { touch-action: pan-y; -webkit-overflow-scrolling: touch; }
+        .xterm-screen { touch-action: pan-y; }
+
+        /* Grey scrollbar matching the dark theme */
+        .xterm-viewport::-webkit-scrollbar { width: 8px; }
+        .xterm-viewport::-webkit-scrollbar-track { background: #1a1a2e; }
+        .xterm-viewport::-webkit-scrollbar-thumb { background: #444; border-radius: 4px; }
+        .xterm-viewport::-webkit-scrollbar-thumb:hover { background: #666; }
 
         #no-panes {
             display: flex; align-items: center; justify-content: center;
             height: 100%; color: #666; font-size: 18px;
         }
 
+        /* Mobile navigation toolbar */
+        #nav-toolbar {
+            display: none; flex-shrink: 0;
+            background: #16213e; border-top: 1px solid #0f3460;
+            padding: 6px 4px; gap: 4px;
+            flex-direction: column;
+        }
+        #nav-toolbar .toolbar-row {
+            display: flex; gap: 3px;
+        }
+        #nav-toolbar button {
+            flex: 1; min-width: 0; min-height: 40px;
+            padding: 4px 4px;
+            border: 1px solid #0f3460; border-radius: 6px;
+            background: #1a1a2e; color: #c0c0c0;
+            font-size: 13px; font-family: inherit;
+            cursor: pointer;
+            touch-action: manipulation;
+            -webkit-tap-highlight-color: transparent;
+            user-select: none;
+            display: flex; align-items: center; justify-content: center;
+            transition: background 0.1s;
+        }
+        #nav-toolbar button:active {
+            background: #e94560; color: #fff;
+        }
+        #nav-toolbar button.modifier-active {
+            background: #0f3460; color: #fff; border-color: #e94560;
+        }
+        #nav-toolbar button .key-icon {
+            font-size: 16px;
+        }
+
         @media (max-width: 600px) {
-            #header { padding: 4px 8px; }
+            #header { padding: 4px 8px; gap: 4px; }
             .pane-btn { padding: 3px 8px; font-size: 12px; }
+            #nav-toolbar { display: flex; }
+        }
+        @media (max-width: 400px) {
+            #header { padding: 4px 6px; gap: 4px; }
+            #header .logo { font-size: 12px; margin-right: 4px; }
+            .pane-btn { padding: 2px 6px; font-size: 11px; }
+            #status { font-size: 11px; padding: 2px 6px; }
+            #nav-toolbar button { font-size: 12px; min-height: 36px; }
+        }
+
+        /* Also show toolbar on touch devices regardless of width */
+        @media (pointer: coarse) {
+            #nav-toolbar { display: flex; }
         }
     </style>
 </head>
@@ -61,36 +119,158 @@
         <div id="terminal-container">
             <div id="no-panes">No panes available</div>
         </div>
+        <div id="fake-keyboard" style="display:none; flex-shrink:0; height:260px; background:#333; border-top:1px solid #555; color:#888; font-size:14px; display:none; align-items:center; justify-content:center;">
+            Fake Keyboard (260px)
+        </div>
+        <div id="nav-toolbar">
+            <div class="toolbar-row">
+                <button id="kb-toggle" title="Toggle fake keyboard" style="background:#0f3460; max-width:40px;">KB</button>
+                <button data-key="Escape" title="Escape">Esc</button>
+                <button data-key="Tab" title="Tab">Tab</button>
+                <button data-key="ArrowUp" title="Up"><span class="key-icon">&#x25B2;</span></button>
+                <button data-key="ctrl+c" title="Ctrl+C">^C</button>
+                <button data-key="ctrl+d" title="Ctrl+D">^D</button>
+                <button data-key="ctrl+z" title="Ctrl+Z">^Z</button>
+                <button data-key="ctrl+l" title="Clear">^L</button>
+            </div>
+            <div class="toolbar-row">
+                <button data-key="ArrowLeft" title="Left"><span class="key-icon">&#x25C0;</span></button>
+                <button data-key="ArrowDown" title="Down"><span class="key-icon">&#x25BC;</span></button>
+                <button data-key="ArrowRight" title="Right"><span class="key-icon">&#x25B6;</span></button>
+                <button data-key="PageUp" title="Page Up">PgUp</button>
+                <button data-key="PageDown" title="Page Down">PgDn</button>
+                <button data-key="Home" title="Home">Home</button>
+                <button data-key="End" title="End">End</button>
+            </div>
+        </div>
     </div>
 
     <script src="xterm.min.js"></script>
-    <script src="xterm-addon-fit.min.js"></script>
     <script>
     (function() {
         'use strict';
 
-        const params = new URLSearchParams(window.location.search);
-        const token = params.get('token') || '';
+        var params = new URLSearchParams(window.location.search);
+        var token = params.get('token') || '';
 
-        let ws = null;
-        let term = null;
-        let fitAddon = null;
-        let currentPaneId = null;
-        let panes = [];
-        let reconnectTimer = null;
-        let reconnectDelay = 1000;
+        var ws = null;
+        var term = null;
+        var currentPaneId = null;
+        var panes = [];
+        var reconnectTimer = null;
+        var reconnectDelay = 1000;
 
-        const statusEl = document.getElementById('status');
-        const paneBar = document.getElementById('pane-bar');
-        const termContainer = document.getElementById('terminal-container');
-        const noPanesEl = document.getElementById('no-panes');
+        // Server PTY dimensions (adopted from server, never changed by client)
+        var serverCols = 80;
+        var serverRows = 24;
+
+        var statusEl = document.getElementById('status');
+        var paneBar = document.getElementById('pane-bar');
+        var termContainer = document.getElementById('terminal-container');
+        var noPanesEl = document.getElementById('no-panes');
+        var navToolbar = document.getElementById('nav-toolbar');
+
+        // Key escape sequence mapping
+        var KEY_MAP = {
+            'Escape':    '\x1b',
+            'Tab':       '\t',
+            'ArrowUp':   '\x1b[A',
+            'ArrowDown': '\x1b[B',
+            'ArrowRight':'\x1b[C',
+            'ArrowLeft': '\x1b[D',
+            'Home':      '\x1b[H',
+            'End':       '\x1b[F',
+            'PageUp':    '\x1b[5~',
+            'PageDown':  '\x1b[6~',
+            'ctrl+c':    '\x03',
+            'ctrl+d':    '\x04',
+            'ctrl+z':    '\x1a',
+            'ctrl+l':    '\x0c',
+        };
+
+        // Special actions handled client-side (currently none — all keys sent to server)
+        var LOCAL_ACTIONS = {};
+
+        // Check if user is scrolled to the bottom of the terminal buffer
+        function isScrolledToBottom() {
+            if (!term) return true;
+            var buf = term.buffer.active;
+            return buf.viewportY >= buf.baseY;
+        }
+
+        // Web terminal sizing: calculate OWN cols/rows from screen size.
+        // Uses width-fitting (80 cols at whatever font fits) then fills height.
+        // Sends resize message to server so the PTY matches web dimensions.
+        //
+        // Two modes:
+        //   adaptTerminal(true)  — recalculate font + rows (real resize/orientation)
+        //   adaptTerminal(false) — recalculate rows only, keep font (keyboard)
+        var currentFontSize = 8;
+        function adaptTerminal(recalcFont) {
+            if (!term) return;
+            var container = document.getElementById('terminal-container');
+            var host = document.getElementById('xterm-host');
+            if (!container || !host) return;
+
+            var containerW = container.clientWidth;
+            var containerH = container.clientHeight;
+
+            host.style.height = '1px';
+            host.style.overflow = 'hidden';
+
+            if (recalcFont) {
+                // Binary search for largest font where 80 cols fit the width
+                var lo = 5, hi = 20;
+                for (var i = 0; i < 12; i++) {
+                    var mid = Math.floor(((lo + hi) / 2) * 10) / 10;
+                    term.options.fontSize = mid;
+                    term.resize(80, 24);
+                    var screenW = document.querySelector('.xterm-screen')?.clientWidth || 0;
+                    if (screenW <= containerW) { lo = mid; } else { hi = mid; }
+                }
+                currentFontSize = lo;
+            }
+
+            term.options.fontSize = currentFontSize;
+            term.resize(80, 24);
+
+            // Measure cell height and fill rows (subtract padding to avoid overlap)
+            var screenH = document.querySelector('.xterm-screen')?.clientHeight || 0;
+            var cellH = screenH / 24;
+            var usableH = containerH - 8; // account for container padding (4px top + 4px bottom)
+            var fitRows = cellH > 0 ? Math.max(24, Math.floor(usableH / cellH)) : 24;
+
+            term.resize(80, fitRows);
+
+            // Set host to fill container
+            host.style.height = containerH + 'px';
+            host.style.overflow = '';
+
+            // Tell the server to resize the PTY to match
+            if (currentPaneId !== null) {
+                sendResize(currentPaneId, 80, fitRows);
+            }
+        }
+
+        function sendResize(paneId, cols, rows) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'resize', pane_id: paneId, cols: cols, rows: rows }));
+            }
+        }
+
+        // Backward-compat alias
+        function adaptFontSize() { adaptTerminal(true); }
 
         function initTerminal() {
             if (term) return;
+
             term = new Terminal({
                 cursorBlink: true,
                 fontSize: 14,
                 fontFamily: "'Cascadia Code', 'Consolas', 'Courier New', monospace",
+                scrollback: 5000,
+                cols: 80,
+                rows: 24,
                 theme: {
                     background: '#1a1a2e',
                     foreground: '#e0e0e0',
@@ -99,37 +279,90 @@
                 },
                 allowProposedApi: true,
             });
-            fitAddon = new FitAddon.FitAddon();
-            term.loadAddon(fitAddon);
 
             noPanesEl.style.display = 'none';
-            const termEl = document.createElement('div');
+            var termEl = document.createElement('div');
             termEl.id = 'xterm-host';
-            termEl.style.height = '100%';
             termContainer.appendChild(termEl);
             term.open(termEl);
-            fitAddon.fit();
+
+            // Initial font adaptation (run twice: immediately + delayed for mobile
+            // where the terminal may not be fully laid out yet)
+            adaptFontSize();
+            requestAnimationFrame(function() { adaptFontSize(); });
+            setTimeout(function() { adaptFontSize(); }, 500);
 
             // Send keyboard input to server
             term.onData(function(data) {
-                if (ws && ws.readyState === WebSocket.OPEN && currentPaneId !== null) {
-                    ws.send(JSON.stringify({ type: 'input', pane_id: currentPaneId, data: data }));
-                }
+                sendInput(data);
             });
 
-            // Handle resize
-            term.onResize(function(size) {
-                if (ws && ws.readyState === WebSocket.OPEN && currentPaneId !== null) {
-                    ws.send(JSON.stringify({
-                        type: 'resize', pane_id: currentPaneId,
-                        cols: size.cols, rows: size.rows
-                    }));
-                }
+            window.addEventListener('resize', debounce(function() {
+                adaptTerminal(true);
+            }, 150));
+
+            // Handle orientation change on mobile
+            window.addEventListener('orientationchange', function() {
+                setTimeout(function() {
+                    adaptTerminal(true);
+                }, 200);
             });
 
-            window.addEventListener('resize', function() {
-                if (fitAddon) fitAddon.fit();
-            });
+            // Touch scrolling is handled natively by the browser via CSS
+            // touch-action: pan-y on .xterm-viewport and .xterm-screen
+        }
+
+        // Handle virtual keyboard and viewport changes.
+        // By default, #app fills the screen via CSS (position:fixed + inset:0).
+        // When the virtual keyboard opens, visualViewport shrinks significantly —
+        // we then set an explicit height so content isn't hidden behind the keyboard.
+        // When the keyboard closes, we remove the override and let CSS handle it.
+        // Font size is NEVER recalculated due to keyboard — only on width changes.
+        var appEl = document.getElementById('app');
+        var lastViewportWidth = window.visualViewport ? window.visualViewport.width : window.innerWidth;
+        var baseHeight = window.innerHeight;
+        function handleViewportResize() {
+            if (window.visualViewport) {
+                var vvH = window.visualViewport.height;
+                var vvTop = window.visualViewport.offsetTop;
+                var heightDiff = baseHeight - vvH;
+
+                // Keyboard is considered "open" if viewport shrank by >100px
+                // without a width change (rules out orientation changes)
+                var widthChanged = Math.abs(window.visualViewport.width - lastViewportWidth) > 1;
+
+                if (widthChanged) {
+                    // Real resize or orientation change — update baseline, re-scale font + rows
+                    lastViewportWidth = window.visualViewport.width;
+                    baseHeight = vvH;
+                    appEl.style.height = '';
+                    appEl.style.top = '';
+                    adaptTerminal(true);
+                } else if (heightDiff > 100) {
+                    // Keyboard is open — shrink app to visible area, recalc rows only
+                    appEl.style.height = vvH + 'px';
+                    appEl.style.top = vvTop + 'px';
+                    adaptTerminal(false);
+                } else {
+                    // Keyboard closed or minor change — clear override, recalc rows
+                    baseHeight = window.innerHeight;
+                    appEl.style.height = '';
+                    appEl.style.top = '';
+                    adaptTerminal(false);
+                }
+            }
+            // Keep cursor visible when keyboard opens
+            if (term) term.scrollToBottom();
+        }
+        if (window.visualViewport) {
+            window.visualViewport.addEventListener('resize', handleViewportResize);
+            window.visualViewport.addEventListener('scroll', handleViewportResize);
+        }
+
+        function sendInput(data) {
+            if (ws && ws.readyState === WebSocket.OPEN && currentPaneId !== null) {
+                ws.send(JSON.stringify({ type: 'input', pane_id: currentPaneId, data: data }));
+            }
         }
 
         function setStatus(connected) {
@@ -140,7 +373,7 @@
         function updatePaneBar() {
             paneBar.innerHTML = '';
             panes.forEach(function(pane) {
-                const btn = document.createElement('button');
+                var btn = document.createElement('button');
                 btn.className = 'pane-btn' + (pane.id === currentPaneId ? ' active' : '');
                 btn.textContent = pane.title || ('Pane ' + pane.id);
                 btn.onclick = function() { attachPane(pane.id); };
@@ -150,12 +383,12 @@
             if (panes.length === 0) {
                 noPanesEl.style.display = 'flex';
                 if (term) {
-                    const termEl = document.getElementById('xterm-host');
+                    var termEl = document.getElementById('xterm-host');
                     if (termEl) termEl.style.display = 'none';
                 }
             } else {
                 noPanesEl.style.display = 'none';
-                const termEl = document.getElementById('xterm-host');
+                var termEl = document.getElementById('xterm-host');
                 if (termEl) termEl.style.display = '';
             }
         }
@@ -176,15 +409,14 @@
                 reconnectTimer = null;
             }
 
-            const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const wsUrl = proto + '//' + window.location.host + '/ws?token=' + encodeURIComponent(token);
+            var proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            var wsUrl = proto + '//' + window.location.host + '/ws?token=' + encodeURIComponent(token);
 
             ws = new WebSocket(wsUrl);
 
             ws.onopen = function() {
                 setStatus(true);
                 reconnectDelay = 1000;
-                // Request pane list
                 ws.send(JSON.stringify({ type: 'list_panes' }));
             };
 
@@ -196,7 +428,6 @@
                     case 'pane_list':
                         panes = msg.panes || [];
                         updatePaneBar();
-                        // Auto-attach to first pane if none selected
                         if (currentPaneId === null && panes.length > 0) {
                             attachPane(panes[0].id);
                         }
@@ -204,12 +435,21 @@
 
                     case 'output':
                         if (term && msg.data) {
-                            // If cols/rows provided (full refresh), resize terminal
+                            var wasAtBottom = isScrolledToBottom();
                             if (msg.cols && msg.rows) {
-                                term.resize(msg.cols, msg.rows);
-                                setTimeout(function() { if (fitAddon) fitAddon.fit(); }, 50);
+                                // Full refresh — note server dimensions but use our own
+                                serverCols = msg.cols;
+                                serverRows = msg.rows;
+                                // Don't adopt server size — web terminal has its own dimensions
+                                term.write(msg.data, function() {
+                                    term.scrollToBottom();
+                                });
+                            } else {
+                                // Delta update — only auto-scroll if user was at bottom
+                                term.write(msg.data, function() {
+                                    if (wasAtBottom) term.scrollToBottom();
+                                });
                             }
-                            term.write(msg.data);
                         }
                         break;
 
@@ -217,7 +457,6 @@
                         if (msg.pane_id === currentPaneId) {
                             currentPaneId = null;
                             if (term) term.clear();
-                            // Auto-attach to another pane
                             if (panes.length > 0) {
                                 var remaining = panes.filter(function(p) { return p.id !== msg.pane_id; });
                                 if (remaining.length > 0) attachPane(remaining[0].id);
@@ -239,6 +478,64 @@
                 ws.close();
             };
         }
+
+        // Handle toolbar button press (shared logic for touch and mouse)
+        function handleToolbarButton(key) {
+            // Check local actions first (PgUp/PgDn scroll the buffer)
+            if (LOCAL_ACTIONS[key]) {
+                LOCAL_ACTIONS[key]();
+                return;
+            }
+            // Otherwise send the escape sequence to the remote terminal
+            var seq = KEY_MAP[key];
+            if (seq) {
+                sendInput(seq);
+            }
+        }
+
+        // Navigation toolbar button handler
+        navToolbar.addEventListener('touchstart', function(e) {
+            var btn = e.target.closest('button[data-key]');
+            if (!btn) return;
+            e.preventDefault();
+            handleToolbarButton(btn.getAttribute('data-key'));
+        }, { passive: false });
+
+        // Also handle mouse clicks (for desktop testing / hybrid devices)
+        navToolbar.addEventListener('mousedown', function(e) {
+            var btn = e.target.closest('button[data-key]');
+            if (!btn) return;
+            e.preventDefault();
+            handleToolbarButton(btn.getAttribute('data-key'));
+        });
+
+        function debounce(fn, ms) {
+            var timer;
+            return function() {
+                clearTimeout(timer);
+                timer = setTimeout(fn, ms);
+            };
+        }
+
+        // Fake keyboard toggle for testing (simulates virtual keyboard behavior:
+        // container shrinks but font size stays the same)
+        var fakeKb = document.getElementById('fake-keyboard');
+        var kbToggle = document.getElementById('kb-toggle');
+        kbToggle.addEventListener('click', function() {
+            if (fakeKb.style.display === 'flex') {
+                fakeKb.style.display = 'none';
+                kbToggle.style.background = '#0f3460';
+            } else {
+                fakeKb.style.display = 'flex';
+                kbToggle.style.background = '#e94560';
+            }
+            // Do NOT call adaptFontSize() — matches real keyboard behavior:
+            // font stays the same, terminal content is clipped/scrollable.
+            if (term) term.scrollToBottom();
+        });
+
+        // Expose terminal for debugging
+        window._adaptFontSize = adaptFontSize;
 
         // Start connection
         connect();

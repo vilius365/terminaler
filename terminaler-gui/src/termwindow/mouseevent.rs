@@ -371,6 +371,7 @@ impl super::TermWindow {
                 self.resize_pane_for_font_scale(pane_id);
                 self.shape_generation += 1;
                 self.shape_cache.borrow_mut().clear();
+                self.invalidate_tab_sidebar();
                 context.invalidate();
                 return;
             }
@@ -1905,6 +1906,28 @@ impl super::TermWindow {
                 TabSidebarItem::ClosePane { pane_id } => {
                     self.close_pane_by_id(pane_id as mux::pane::PaneId, true);
                 }
+                TabSidebarItem::MuteNotifications { pane_id } => {
+                    let pane_id = pane_id as mux::pane::PaneId;
+                    let muted = {
+                        let mut ps = self.pane_state(pane_id);
+                        ps.notifications_muted = !ps.notifications_muted;
+                        if ps.notifications_muted {
+                            ps.notification_start = None;
+                            ps.notification_count = 0;
+                        }
+                        ps.notifications_muted
+                    };
+                    {
+                        let mut set = crate::termwindow::MUTED_PANES.lock().unwrap();
+                        if muted {
+                            set.insert(pane_id);
+                        } else {
+                            set.remove(&pane_id);
+                        }
+                    }
+                    log::info!("Pane {} notifications muted: {}", pane_id, muted);
+                    self.invalidate_tab_sidebar();
+                }
                 TabSidebarItem::NewTabButton => {
                     self.spawn_tab(&SpawnTabDomain::CurrentPaneDomain);
                 }
@@ -1935,6 +1958,7 @@ impl super::TermWindow {
                 }
                 TabSidebarItem::NewTabButton
                 | TabSidebarItem::ClosePane { .. }
+                | TabSidebarItem::MuteNotifications { .. }
                 | TabSidebarItem::Tab { .. }
                 | TabSidebarItem::Pane { .. } => {
                     context.set_cursor(Some(MouseCursor::Hand));

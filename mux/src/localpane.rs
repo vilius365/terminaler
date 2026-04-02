@@ -513,6 +513,14 @@ impl Pane for LocalPane {
         self.divine_foreground_process(policy)
     }
 
+    fn get_process_names_in_tree(&self, policy: CachePolicy) -> HashSet<String> {
+        if let Some(info) = self.divine_process_list(policy) {
+            info.root.flatten_to_exe_names()
+        } else {
+            HashSet::new()
+        }
+    }
+
     fn get_foreground_process_name(&self, policy: CachePolicy) -> Option<String> {
         #[cfg(unix)]
         {

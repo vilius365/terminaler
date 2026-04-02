@@ -36,7 +36,7 @@ impl LevelRing {
     fn new(level: Level) -> Self {
         let mut entries = vec![];
         let now = Local::now();
-        for _ in 0..16 {
+        for _ in 0..64 {
             entries.push(Entry {
                 then: now,
                 level,

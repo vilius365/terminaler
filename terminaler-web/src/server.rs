@@ -20,15 +20,15 @@ pub struct AppState {
 const INDEX_HTML: &str = include_str!("../static/index.html");
 const XTERM_JS: &str = include_str!("../static/xterm.min.js");
 const XTERM_CSS: &str = include_str!("../static/xterm.css");
-const XTERM_FIT_JS: &str = include_str!("../static/xterm-addon-fit.min.js");
+const TERMINAL_HTML: &str = include_str!("../static/terminal.html");
 
 /// Build the axum router.
 pub fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/", get(index_handler))
+        .route("/terminal", get(terminal_handler))
         .route("/xterm.min.js", get(xterm_js_handler))
         .route("/xterm.css", get(xterm_css_handler))
-        .route("/xterm-addon-fit.min.js", get(xterm_fit_handler))
         .route("/ws", get(ws_handler))
         .with_state(state)
 }
@@ -44,6 +44,17 @@ async fn index_handler(
     Html(INDEX_HTML).into_response()
 }
 
+/// Serve the custom terminal HTML page (requires valid token).
+async fn terminal_handler(
+    State(state): State<AppState>,
+    query: Query<HashMap<String, String>>,
+) -> Response {
+    if let Err(resp) = auth::check_token(&query, &state.token) {
+        return resp;
+    }
+    Html(TERMINAL_HTML).into_response()
+}
+
 /// Serve xterm.js (no auth needed since it's a static asset and HTML already requires auth).
 async fn xterm_js_handler() -> impl IntoResponse {
     (
@@ -57,14 +68,6 @@ async fn xterm_css_handler() -> impl IntoResponse {
     (
         [(axum::http::header::CONTENT_TYPE, "text/css")],
         XTERM_CSS,
-    )
-}
-
-/// Serve xterm fit addon.
-async fn xterm_fit_handler() -> impl IntoResponse {
-    (
-        [(axum::http::header::CONTENT_TYPE, "application/javascript")],
-        XTERM_FIT_JS,
     )
 }
 

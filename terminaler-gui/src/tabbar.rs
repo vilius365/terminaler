@@ -26,13 +26,73 @@ pub enum FormatItem {
     Background(FormatColor),
 }
 
-/// Minimal stub for termwiz_funcs::format_as_escapes
-/// Converts FormatItems to an escape-sequence string (simplified, no colors).
+/// Converts FormatItems to an escape-sequence string with ANSI color codes.
 fn format_as_escapes(items: Vec<FormatItem>) -> anyhow::Result<String> {
     let mut result = String::new();
     for item in items {
-        if let FormatItem::Text(s) = item {
-            result.push_str(&s);
+        match item {
+            FormatItem::Text(s) => result.push_str(&s),
+            FormatItem::Foreground(color) => match color {
+                FormatColor::AnsiColor(c) => {
+                    let code = match c {
+                        AnsiColor::Black => 30,
+                        AnsiColor::Maroon => 31,
+                        AnsiColor::Green => 32,
+                        AnsiColor::Olive => 33,
+                        AnsiColor::Navy => 34,
+                        AnsiColor::Purple => 35,
+                        AnsiColor::Teal => 36,
+                        AnsiColor::Silver => 37,
+                        AnsiColor::Grey => 90,
+                        AnsiColor::Red => 91,
+                        AnsiColor::Lime => 92,
+                        AnsiColor::Yellow => 93,
+                        AnsiColor::Blue => 94,
+                        AnsiColor::Fuchsia => 95,
+                        AnsiColor::Aqua => 96,
+                        AnsiColor::White => 97,
+                    };
+                    result.push_str(&format!("\x1b[{}m", code));
+                }
+                FormatColor::Color(rgb) => {
+                    let (r, g, b) = rgb.to_tuple_rgb8();
+                    result.push_str(&format!("\x1b[38;2;{};{};{}m", r, g, b));
+                }
+                FormatColor::Default => {
+                    result.push_str("\x1b[39m");
+                }
+            },
+            FormatItem::Background(color) => match color {
+                FormatColor::AnsiColor(c) => {
+                    let code = match c {
+                        AnsiColor::Black => 40,
+                        AnsiColor::Maroon => 41,
+                        AnsiColor::Green => 42,
+                        AnsiColor::Olive => 43,
+                        AnsiColor::Navy => 44,
+                        AnsiColor::Purple => 45,
+                        AnsiColor::Teal => 46,
+                        AnsiColor::Silver => 47,
+                        AnsiColor::Grey => 100,
+                        AnsiColor::Red => 101,
+                        AnsiColor::Lime => 102,
+                        AnsiColor::Yellow => 103,
+                        AnsiColor::Blue => 104,
+                        AnsiColor::Fuchsia => 105,
+                        AnsiColor::Aqua => 106,
+                        AnsiColor::White => 107,
+                    };
+                    result.push_str(&format!("\x1b[{}m", code));
+                }
+                FormatColor::Color(rgb) => {
+                    let (r, g, b) = rgb.to_tuple_rgb8();
+                    result.push_str(&format!("\x1b[48;2;{};{};{}m", r, g, b));
+                }
+                FormatColor::Default => {
+                    result.push_str("\x1b[49m");
+                }
+            },
+            FormatItem::Attribute(_) => {}
         }
     }
     Ok(result)
@@ -135,6 +195,29 @@ fn compute_tab_title(
             title = format!("{}{classic_spacing}", title);
         }
 
+        // Notification indicator for OSC 9/777 toast notifications.
+        // Uses a bright colored text prefix that's hard to miss.
+        if tab.has_notification {
+            let indicator = "!! ".to_string();
+            len += unicode_column_width(&indicator, None);
+            items.push(FormatItem::Foreground(FormatColor::AnsiColor(
+                AnsiColor::Red,
+            )));
+            items.push(FormatItem::Text(indicator));
+            items.push(FormatItem::Foreground(FormatColor::Default));
+        }
+
+        // Muted bell indicator when any pane in tab has notifications muted
+        if tab.has_muted_pane {
+            let indicator = "[MUTED] ".to_string();
+            len += unicode_column_width(&indicator, None);
+            items.push(FormatItem::Foreground(FormatColor::AnsiColor(
+                AnsiColor::Silver,
+            )));
+            items.push(FormatItem::Text(indicator));
+            items.push(FormatItem::Foreground(FormatColor::Default));
+        }
+
         match pane.progress {
             Progress::None => {}
             Progress::Percentage(pct) | Progress::Error(pct) => {
@@ -152,6 +235,17 @@ fn compute_tab_title(
             Progress::Indeterminate => {
                 // TODO: Decide what to do here to indicate this
             }
+        }
+
+        // Zoom level indicator for active tab when zoom != 100%
+        if let Some(pct) = tab.zoom_pct {
+            let zoom_text = format!(" [{}%]", pct);
+            len += unicode_column_width(&zoom_text, None);
+            items.push(FormatItem::Foreground(FormatColor::AnsiColor(
+                AnsiColor::Aqua,
+            )));
+            items.push(FormatItem::Text(zoom_text));
+            items.push(FormatItem::Foreground(FormatColor::Default));
         }
 
         // We have a preferred soft minimum on tab width to make it

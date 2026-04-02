@@ -362,42 +362,42 @@ impl crate::TermWindow {
                         .colors(if active {
                             ElementColors {
                                 border: BorderColor::new(
-                                    LinearRgba(0.40, 0.70, 0.38, 1.0),
+                                    LinearRgba(0.30, 0.65, 0.35, 1.0),
                                 ),
-                                bg: LinearRgba(0.30, 0.60, 0.28, 1.0).into(),
+                                bg: LinearRgba(0.247, 0.725, 0.314, 0.8).into(),
                                 text: InheritableColor::Color(
-                                    LinearRgba(0.95, 0.95, 0.95, 1.0),
+                                    LinearRgba(0.878, 0.878, 0.878, 1.0),
                                 ),
                             }
                         } else {
                             ElementColors {
                                 border: BorderColor::new(
-                                    LinearRgba(0.35, 0.35, 0.40, 1.0),
+                                    LinearRgba(0.227, 0.227, 0.227, 1.0),
                                 ),
                                 bg: bar_colors.bg.clone(),
                                 text: InheritableColor::Color(
-                                    LinearRgba(0.50, 0.50, 0.55, 1.0),
+                                    LinearRgba(0.4, 0.4, 0.4, 1.0),
                                 ),
                             }
                         })
                         .hover_colors(Some(if active {
                             ElementColors {
                                 border: BorderColor::new(
-                                    LinearRgba(0.45, 0.75, 0.43, 1.0),
+                                    LinearRgba(0.35, 0.75, 0.40, 1.0),
                                 ),
-                                bg: LinearRgba(0.35, 0.65, 0.33, 1.0).into(),
+                                bg: LinearRgba(0.30, 0.78, 0.37, 0.9).into(),
                                 text: InheritableColor::Color(
-                                    LinearRgba(1.0, 1.0, 1.0, 1.0),
+                                    LinearRgba(0.878, 0.878, 0.878, 1.0),
                                 ),
                             }
                         } else {
                             ElementColors {
                                 border: BorderColor::new(
-                                    LinearRgba(0.45, 0.45, 0.50, 1.0),
+                                    LinearRgba(0.180, 0.180, 0.180, 1.0),
                                 ),
-                                bg: LinearRgba(0.25, 0.25, 0.30, 1.0).into(),
+                                bg: LinearRgba(0.133, 0.133, 0.133, 1.0).into(),
                                 text: InheritableColor::Color(
-                                    LinearRgba(0.75, 0.75, 0.80, 1.0),
+                                    LinearRgba(0.6, 0.6, 0.6, 1.0),
                                 ),
                             }
                         }))
@@ -537,19 +537,12 @@ impl crate::TermWindow {
 
         let content = ElementContent::Children(children);
 
-        // When sidebar is on the right, narrow the title bar to avoid overlap
-        let sidebar_right_width = if self.show_tab_sidebar
-            && self.config.tab_sidebar_position == config::TabSidebarPosition::Right
-        {
-            self.tab_sidebar_width as f32
-        } else {
-            0.
-        };
+        // Title bar spans full window width, renders on top of sidebar
         let tabs = Element::new(&font, content)
             .display(DisplayType::Block)
             .item_type(UIItemType::TabBar(TabBarItem::None))
             .min_width(Some(Dimension::Pixels(
-                self.dimensions.pixel_width as f32 - sidebar_right_width,
+                self.dimensions.pixel_width as f32,
             )))
             .min_height(Some(Dimension::Pixels(tab_bar_height)))
             .vertical_align(VerticalAlign::Bottom)
@@ -573,8 +566,7 @@ impl crate::TermWindow {
                     border.left.get() as f32,
                     0.,
                     self.dimensions.pixel_width as f32
-                        - (border.left + border.right).get() as f32
-                        - sidebar_right_width,
+                        - (border.left + border.right).get() as f32,
                     tab_bar_height,
                 ),
                 metrics: &metrics,

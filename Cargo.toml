@@ -22,7 +22,7 @@ exclude = [
 
 [profile.release]
 opt-level = 3
-strip = true
+strip = "debuginfo"  # keep symbol names for panic backtraces
 lto = "thin"
 # debug = 2
 
@@ -223,6 +223,7 @@ wgpu = "25.0.2"
 whoami = "1.5"
 winapi = "0.3.9"
 window = {path="window"}
+wry = { version = "0.54", default-features = false }
 windows = "0.33.0"
 winreg = "0.10"
 xml-rs = "0.8"

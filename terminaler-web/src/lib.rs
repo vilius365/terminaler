@@ -1,6 +1,7 @@
 pub mod ansi_render;
 pub mod auth;
 pub mod bridge;
+pub mod json_render;
 pub mod server;
 pub mod ws_session;
 

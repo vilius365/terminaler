@@ -553,6 +553,7 @@ pub enum KeyAssignment {
     DecreaseFontSize,
     ResetFontSize,
     ResetFontAndWindowSize,
+    TogglePaneNotifications,
     ActivateTab(isize),
     ActivateLastTab,
     SendString(String),

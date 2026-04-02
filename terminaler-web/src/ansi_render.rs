@@ -74,6 +74,91 @@ pub fn full_screen_ansi(lines: &[Line], cols: usize, rows: usize) -> String {
     out
 }
 
+/// Render scrollback history + viewport for xterm.js.
+///
+/// Scrollback lines are written as flowing text so xterm.js accumulates them
+/// in its scrollback buffer. Then the viewport is cleared and rewritten with
+/// cursor positioning, so delta updates (which also use cursor positioning)
+/// overwrite cleanly without creating duplicates.
+///
+/// `cursor_row` and `cursor_col` are 1-based viewport-relative positions.
+pub fn full_refresh_with_scrollback(
+    scrollback_lines: &[Line],
+    viewport_lines: &[Line],
+    cols: usize,
+    viewport_rows: usize,
+    cursor_row: usize,
+    cursor_col: usize,
+) -> String {
+    let total_lines = scrollback_lines.len() + viewport_rows;
+    let mut out = String::with_capacity(total_lines * cols * 2);
+
+    // Full terminal reset (clears screen + scrollback buffer in xterm.js)
+    out.push_str("\x1bc");
+
+    // Phase 1: Write scrollback lines as flowing text.
+    // These accumulate in xterm.js's scrollback buffer.
+    let mut prev_attrs = CellAttributes::default();
+    for (i, line) in scrollback_lines.iter().enumerate() {
+        if i > 0 {
+            out.push_str("\r\n");
+        }
+        for cell in line.visible_cells() {
+            let attrs = cell.attrs();
+            emit_sgr_diff(&mut out, &prev_attrs, attrs);
+            prev_attrs = attrs.clone();
+            let text = cell.str();
+            if text.is_empty() || text == "\0" {
+                out.push(' ');
+            } else {
+                out.push_str(text);
+            }
+        }
+    }
+
+    // Push all scrollback content above the viewport by emitting
+    // viewport_rows worth of newlines. This ensures every scrollback line
+    // is in xterm.js's scrollback buffer, not the visible viewport.
+    if !scrollback_lines.is_empty() {
+        for _ in 0..viewport_rows {
+            out.push_str("\r\n");
+        }
+    }
+
+    // Reset attributes before viewport phase
+    out.push_str("\x1b[0m");
+
+    // Phase 2: Write viewport lines with cursor positioning.
+    // This overwrites the blank lines pushed in above and matches
+    // the format used by delta updates (lines_to_ansi), so subsequent
+    // deltas overwrite these rows cleanly.
+    prev_attrs = CellAttributes::default();
+    for (i, line) in viewport_lines.iter().enumerate() {
+        if i >= viewport_rows {
+            break;
+        }
+        let row = i + 1; // 1-based
+        write!(out, "\x1b[{row};1H\x1b[2K").unwrap();
+        for cell in line.visible_cells() {
+            let attrs = cell.attrs();
+            emit_sgr_diff(&mut out, &prev_attrs, attrs);
+            prev_attrs = attrs.clone();
+            let text = cell.str();
+            if text.is_empty() || text == "\0" {
+                out.push(' ');
+            } else {
+                out.push_str(text);
+            }
+        }
+    }
+
+    // Reset attributes and position cursor
+    out.push_str("\x1b[0m");
+    write!(out, "\x1b[{};{}H", cursor_row, cursor_col).unwrap();
+
+    out
+}
+
 /// Emit SGR (Select Graphic Rendition) escape sequences for attribute changes.
 fn emit_sgr_diff(out: &mut String, prev: &CellAttributes, next: &CellAttributes) {
     // Quick path: if attributes are identical, skip

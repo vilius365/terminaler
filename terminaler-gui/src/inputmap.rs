@@ -322,6 +322,19 @@ impl InputMap {
                     },
                     PasteFrom(ClipboardPasteSource::PrimarySelection)
                 ],
+                // Right-click paste (PuTTY-style)
+                [
+                    MouseEventTriggerMods {
+                        mods: Modifiers::NONE,
+                        mouse_reporting: false,
+                        alt_screen: MouseEventAltScreen::Any,
+                    },
+                    MouseEventTrigger::Down {
+                        streak: 1,
+                        button: MouseButton::Right
+                    },
+                    PasteFrom(ClipboardPasteSource::Clipboard)
+                ],
                 [
                     MouseEventTriggerMods {
                         mods: Modifiers::SUPER,

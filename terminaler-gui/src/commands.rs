@@ -942,6 +942,14 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             menubar: &["View", "Font Size"],
             icon: Some("md_format_size"),
         },
+        TogglePaneNotifications => CommandDef {
+            brief: "Toggle Pane Notifications".into(),
+            doc: "Mutes or unmutes notifications from the active pane".into(),
+            keys: vec![(Modifiers::CTRL | Modifiers::SHIFT, "g".into())],
+            args: &[ArgType::ActivePane],
+            menubar: &["Window"],
+            icon: Some("md_notifications_off"),
+        },
         SpawnTab(SpawnTabDomain::CurrentPaneDomain) => CommandDef {
             brief: "New Tab".into(),
             doc: "Create a new tab in the same domain as the current pane".into(),
@@ -2097,6 +2105,7 @@ fn compute_default_actions() -> Vec<KeyAssignment> {
         ScrollToTop,
         ScrollToBottom,
         // ----------------- Window
+        TogglePaneNotifications,
         ToggleFullScreen,
         ToggleAlwaysOnTop,
         ToggleAlwaysOnBottom,

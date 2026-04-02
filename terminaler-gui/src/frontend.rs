@@ -1,6 +1,6 @@
 use crate::scripting::guiwin::GuiWin;
 use crate::spawn::SpawnWhere;
-use crate::termwindow::TermWindowNotif;
+use crate::termwindow::{TermWindowNotif, MUTED_PANES};
 use crate::TermWindow;
 use ::window::*;
 use anyhow::{Context, Error};
@@ -121,13 +121,35 @@ impl GuiFrontEnd {
                                 }
                             };
 
-                            if show {
+                            // Check per-pane mute
+                            let is_muted = MUTED_PANES
+                                .lock()
+                                .map_or(false, |set| set.contains(&pane_id));
+
+                            if show && !is_muted {
+                                // Build tab context for the notification
+                                let tab_context = mux.get_window(window_id).and_then(|w| {
+                                    let tab_idx = w.iter().position(|t| t.tab_id() == tab_id);
+                                    let tab_title = w
+                                        .iter()
+                                        .find(|t| t.tab_id() == tab_id)
+                                        .map(|t| t.get_title());
+                                    match (tab_idx, tab_title) {
+                                        (Some(idx), Some(t)) if !t.is_empty() => {
+                                            Some(format!("[Tab {}] ", idx + 1))
+                                        }
+                                        (Some(idx), _) => Some(format!("[Tab {}] ", idx + 1)),
+                                        _ => None,
+                                    }
+                                });
+                                let prefix = tab_context.as_deref().unwrap_or("");
+
+                                let enriched_title = match &title {
+                                    Some(t) => format!("{}{}", prefix, t),
+                                    None => format!("{}{}", prefix, body),
+                                };
                                 let message = if title.is_none() { "" } else { &body };
-                                let title = title.as_ref().unwrap_or(&body);
-                                // FIXME: if notification.focus is true, we should do
-                                // something here to arrange to focus pane_id when the
-                                // notification is clicked
-                                persistent_toast_notification(title, message);
+                                persistent_toast_notification(&enriched_title, message);
                             }
                         }
                     }

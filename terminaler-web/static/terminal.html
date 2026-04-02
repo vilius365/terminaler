@@ -1,0 +1,896 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Terminaler</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body { height: 100%; overflow: hidden; background: #1e1e2e; color: #cdd6f4; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; width: 100%; }
+
+        #app {
+            display: flex; flex-direction: column; height: 100dvh;
+            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+            padding: env(safe-area-inset-top, 0) env(safe-area-inset-right, 0) env(safe-area-inset-bottom, 0) env(safe-area-inset-left, 0);
+        }
+
+        /* Tab bar */
+        #tab-bar {
+            display: flex; align-items: center; gap: 6px;
+            padding: 5px 10px; background: #181825; border-bottom: 1px solid #313244;
+            flex-shrink: 0; overflow-x: auto;
+        }
+        #tab-bar .logo { font-weight: 700; font-size: 13px; color: #f38ba8; margin-right: 6px; flex-shrink: 0; }
+        #tabs { display: flex; gap: 4px; flex: 1; min-width: 0; overflow-x: auto; }
+        .tab-btn {
+            padding: 4px 12px; border: 1px solid #313244; border-radius: 4px;
+            background: #1e1e2e; color: #a6adc8; cursor: pointer;
+            font-size: 12px; white-space: nowrap; transition: all 0.15s;
+            font-family: inherit;
+        }
+        .tab-btn:hover { background: #313244; color: #cdd6f4; }
+        .tab-btn.active { background: #f38ba8; color: #1e1e2e; border-color: #f38ba8; font-weight: 600; }
+        #status-dot {
+            width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+            background: #f38ba8; transition: background 0.3s;
+        }
+        #status-dot.connected { background: #a6e3a1; }
+        #status-dot.disconnected { background: #f38ba8; }
+
+        /* Terminal area */
+        #term-container {
+            flex: 1; overflow: hidden; position: relative; min-height: 0;
+        }
+        #term-screen {
+            font-family: 'Cascadia Code', 'Cascadia Mono', 'Consolas', 'Courier New', monospace;
+            font-size: 14px; line-height: 1.2;
+            white-space: pre; overflow-y: auto; overflow-x: hidden;
+            height: 100%; width: 100%; padding: 2px 4px;
+            -webkit-overflow-scrolling: touch;
+            -webkit-text-size-adjust: none;
+            text-size-adjust: none;
+            font-variant-ligatures: none;
+            font-feature-settings: "liga" 0, "calt" 0;
+            /* column-reverse: browser natively anchors scroll to bottom (viewport).
+               Scrolling up reveals scrollback. No JS scroll pinning needed. */
+            display: flex;
+            flex-direction: column-reverse;
+        }
+        #term-screen::-webkit-scrollbar { width: 6px; }
+        #term-screen::-webkit-scrollbar-track { background: transparent; }
+        #term-screen::-webkit-scrollbar-thumb { background: #45475a; border-radius: 3px; }
+        #term-screen::-webkit-scrollbar-thumb:hover { background: #585b70; }
+
+        .tl { height: 1lh; min-height: 1em; }
+        /* Force each character to occupy exactly 1ch for box-drawing alignment */
+        .tl span, .tl { letter-spacing: 0; word-spacing: 0; }
+
+        /* Cursor */
+        #cursor {
+            position: absolute; pointer-events: none; z-index: 10;
+            background: #f5e0dc; opacity: 0.7;
+            animation: blink 1s step-end infinite;
+        }
+        @keyframes blink {
+            0%, 100% { opacity: 0.7; }
+            50% { opacity: 0; }
+        }
+        #cursor.bar { width: 2px !important; }
+        #cursor.underline { height: 2px !important; }
+        #cursor.hidden { display: none; }
+
+        /* Keyboard toggle button */
+        #kb-toggle {
+            position: fixed; bottom: 8px; right: 8px; z-index: 100;
+            width: 36px; height: 36px; border-radius: 50%;
+            background: #313244; color: #cdd6f4; border: 1px solid #45475a;
+            font-size: 16px; cursor: pointer; display: none;
+            align-items: center; justify-content: center;
+            touch-action: manipulation; -webkit-tap-highlight-color: transparent;
+        }
+        #kb-toggle.open { background: #f38ba8; color: #1e1e2e; }
+
+        /* On-screen keyboard */
+        #keyboard-bar {
+            flex-shrink: 0; background: #181825; border-top: 1px solid #313244;
+            padding: 0; max-height: 0; overflow: hidden;
+            transition: max-height 0.2s ease, padding 0.2s ease;
+        }
+        #keyboard-bar.expanded {
+            max-height: 200px; padding: 6px 4px;
+        }
+        .kb-row { display: flex; gap: 3px; margin-bottom: 3px; }
+        .kb-row:last-child { margin-bottom: 0; }
+        #keyboard-bar button {
+            flex: 1; min-width: 0; min-height: 38px;
+            padding: 4px 2px; border: 1px solid #313244; border-radius: 6px;
+            background: #1e1e2e; color: #a6adc8; font-size: 12px; font-family: inherit;
+            cursor: pointer; touch-action: manipulation;
+            -webkit-tap-highlight-color: transparent; user-select: none;
+            display: flex; align-items: center; justify-content: center;
+            transition: background 0.1s;
+        }
+        #keyboard-bar button:active { background: #f38ba8; color: #1e1e2e; }
+        #keyboard-bar button.active { background: #313244; color: #f38ba8; border-color: #f38ba8; }
+
+        /* Hidden input for keyboard capture.
+           Positioned at bottom of term-container, small but focusable.
+           pointer-events:none by default so scrolling works on the terminal.
+           The term-screen click/touch handler calls .focus() to open keyboard. */
+        #hidden-input {
+            position: absolute; bottom: 0; left: 0;
+            width: 100%; height: 2px;
+            border: none; outline: none; padding: 0;
+            margin: 0; resize: none; overflow: hidden;
+            z-index: 5; font-size: 16px; /* 16px prevents iOS zoom on focus */
+            color: transparent; background: transparent;
+            caret-color: transparent;
+            opacity: 0.011; /* > 0 so Android treats it as real focusable element */
+            -webkit-tap-highlight-color: transparent;
+            pointer-events: none; /* let scrolling pass through to term-screen */
+        }
+
+        /* Character measurement probe */
+        #char-probe {
+            position: absolute; left: -9999px; top: -9999px;
+            font-family: 'Cascadia Code', 'Cascadia Mono', 'Consolas', 'Courier New', monospace;
+            font-size: 14px; line-height: 1.2; white-space: pre;
+            visibility: hidden;
+        }
+
+        /* Mobile / touch adjustments */
+        @media (pointer: coarse) {
+            #kb-toggle { display: flex; }
+        }
+        @media (max-width: 600px) {
+            #kb-toggle { display: flex; }
+            #tab-bar { padding: 4px 6px; gap: 4px; }
+            .tab-btn { padding: 3px 8px; font-size: 11px; }
+        }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <div id="tab-bar">
+            <span class="logo">Terminaler</span>
+            <div id="tabs"></div>
+            <div id="status-dot" class="disconnected"></div>
+        </div>
+        <div id="term-container">
+            <div id="term-screen">
+                <div id="viewport"></div>
+                <div id="scrollback"></div>
+                <div id="cursor"></div>
+            </div>
+            <textarea id="hidden-input" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" inputmode="text" enterkeyhint="send" rows="1"></textarea>
+        </div>
+        <div id="keyboard-bar" class="collapsed">
+            <div class="kb-row">
+                <button data-seq="\x1b">Esc</button>
+                <button data-seq="\t">Tab</button>
+                <button data-seq="\x03">^C</button>
+                <button data-seq="\x04">^D</button>
+                <button data-seq="\x1a">^Z</button>
+                <button data-seq="\x0c">^L</button>
+                <button data-seq="\x01">^A</button>
+                <button data-seq="\x05">^E</button>
+            </div>
+            <div class="kb-row">
+                <button data-seq="\x1b[A">&uarr;</button>
+                <button data-seq="\x1b[B">&darr;</button>
+                <button data-seq="\x1b[D">&larr;</button>
+                <button data-seq="\x1b[C">&rarr;</button>
+                <button data-seq="\x1b[H">Home</button>
+                <button data-seq="\x1b[F">End</button>
+                <button data-seq="\x1b[5~">PgUp</button>
+                <button data-seq="\x1b[6~">PgDn</button>
+            </div>
+            <div class="kb-row">
+                <button class="sticky-mod" data-mod="ctrl">Ctrl</button>
+                <button class="sticky-mod" data-mod="alt">Alt</button>
+            </div>
+        </div>
+        <button id="kb-toggle" onclick="toggleKeyboard(event)">&#x2328;</button>
+        <span id="char-probe">W</span>
+    </div>
+
+    <script>
+    (function() {
+        'use strict';
+
+        // --- Configuration ---
+        var params = new URLSearchParams(window.location.search);
+        var token = params.get('token') || '';
+
+        // --- State ---
+        var ws = null;
+        var attachedPaneId = null;
+        var panes = [];
+        var reconnectDelay = 1000;
+        var currentCols = 80;
+        var currentRows = 24;
+        var charW = 8;
+        var charH = 16;
+        var stickyCtrl = false;
+        var stickyAlt = false;
+        var userScrolledUp = false;
+
+        // --- DOM refs ---
+        var statusDot = document.getElementById('status-dot');
+        var tabsEl = document.getElementById('tabs');
+        var termScreen = document.getElementById('term-screen');
+        var scrollbackEl = document.getElementById('scrollback');
+        var viewportEl = document.getElementById('viewport');
+        var cursorEl = document.getElementById('cursor');
+        var hiddenInput = document.getElementById('hidden-input');
+        var charProbe = document.getElementById('char-probe');
+        var kbBar = document.getElementById('keyboard-bar');
+        var kbToggle = document.getElementById('kb-toggle');
+        var appEl = document.getElementById('app');
+
+        // --- 256-Color Palette ---
+        var PALETTE = [
+            '#000000','#800000','#008000','#808000','#000080','#800080','#008080','#c0c0c0',
+            '#808080','#ff0000','#00ff00','#ffff00','#0000ff','#ff00ff','#00ffff','#ffffff'
+        ];
+        // 216 color cube (indices 16-231)
+        for (var ri = 0; ri < 6; ri++) {
+            for (var gi = 0; gi < 6; gi++) {
+                for (var bi = 0; bi < 6; bi++) {
+                    PALETTE.push('#' + hexByte(ri * 51) + hexByte(gi * 51) + hexByte(bi * 51));
+                }
+            }
+        }
+        // 24 grayscale (indices 232-255)
+        for (var gi2 = 0; gi2 < 24; gi2++) {
+            var v = 8 + gi2 * 10;
+            PALETTE.push('#' + hexByte(v) + hexByte(v) + hexByte(v));
+        }
+
+        function hexByte(n) {
+            var s = n.toString(16);
+            return s.length < 2 ? '0' + s : s;
+        }
+
+        // --- HTML Escaping ---
+        var escDiv = document.createElement('div');
+        var escText = document.createTextNode('');
+        escDiv.appendChild(escText);
+        function escapeHTML(str) {
+            escText.nodeValue = str;
+            return escDiv.innerHTML;
+        }
+
+        // --- Color Resolution ---
+        function resolveColor(c) {
+            if (!c) return null;
+            if (c.charAt(0) === '#') return c;
+            if (c.charAt(0) === 'p') return PALETTE[parseInt(c.substring(1))] || c;
+            return c;
+        }
+
+        // --- Span Rendering ---
+        // Count the display width of a string (ASCII=1, wide CJK chars=2)
+        function charWidth(str) {
+            var w = 0;
+            for (var i = 0; i < str.length; i++) {
+                var code = str.charCodeAt(i);
+                // Surrogate pair — skip low surrogate, count as 1 (or 2 for CJK)
+                if (code >= 0xD800 && code <= 0xDBFF && i + 1 < str.length) {
+                    i++; // skip low surrogate
+                    w += 1;
+                } else if (
+                    (code >= 0x1100 && code <= 0x115F) || // Hangul Jamo
+                    (code >= 0x2E80 && code <= 0x9FFF) || // CJK
+                    (code >= 0xAC00 && code <= 0xD7AF) || // Hangul Syllables
+                    (code >= 0xF900 && code <= 0xFAFF) || // CJK Compat
+                    (code >= 0xFE10 && code <= 0xFE6F) || // CJK forms
+                    (code >= 0xFF01 && code <= 0xFF60) || // Fullwidth
+                    (code >= 0xFFE0 && code <= 0xFFE6)    // Fullwidth signs
+                ) {
+                    w += 2;
+                } else {
+                    w += 1;
+                }
+            }
+            return w;
+        }
+
+        // Regex to detect box-drawing / block element characters (U+2500-U+259F)
+        var BOX_DRAW_RE = /[\u2500-\u259F]/;
+
+        function spanStyleStr(sp) {
+            var styles = [];
+            var decorations = [];
+            if (sp.fg) { var fc = resolveColor(sp.fg); if (fc) styles.push('color:' + fc); }
+            if (sp.bg) { var bc = resolveColor(sp.bg); if (bc) styles.push('background:' + bc); }
+            if (sp.b) styles.push('font-weight:bold');
+            if (sp.d) styles.push('opacity:0.6');
+            if (sp.i) styles.push('font-style:italic');
+            if (sp.u) decorations.push('underline');
+            if (sp.s) decorations.push('line-through');
+            if (sp.o) decorations.push('overline');
+            if (decorations.length > 0) styles.push('text-decoration:' + decorations.join(' '));
+            if (sp.r) styles.push('filter:invert(1)');
+            return styles.join(';');
+        }
+
+        function spansToHTML(spans) {
+            if (!spans || spans.length === 0) return ' ';
+
+            // Check if any span in this line contains box-drawing characters
+            var hasBoxDraw = false;
+            for (var i = 0; i < spans.length; i++) {
+                if (BOX_DRAW_RE.test(spans[i].t)) { hasBoxDraw = true; break; }
+            }
+
+            var html = '';
+            if (hasBoxDraw) {
+                // Per-character rendering using pixel widths (not ch units).
+                // ch units fail on mobile when fallback fonts have different
+                // glyph widths for box-drawing chars vs the '0' reference glyph.
+                // charW is measured in pixels from the probe element.
+                var pw = charW; // pixel width per character cell
+                for (var i = 0; i < spans.length; i++) {
+                    var sp = spans[i];
+                    var sty = spanStyleStr(sp);
+                    var text = sp.t;
+                    for (var j = 0; j < text.length; j++) {
+                        var ch = text[j];
+                        var code = text.charCodeAt(j);
+                        // Handle surrogate pairs
+                        if (code >= 0xD800 && code <= 0xDBFF && j + 1 < text.length) {
+                            ch = text[j] + text[j + 1];
+                            j++;
+                        }
+                        var cw = charWidth(ch);
+                        html += '<span style="display:inline-block;width:' + (cw * pw) + 'px;overflow:hidden' + (sty ? ';' + sty : '') + '">' + escapeHTML(ch) + '</span>';
+                    }
+                }
+            } else {
+                // Normal rendering: one span per styled run, width in ch units
+                for (var i = 0; i < spans.length; i++) {
+                    var sp = spans[i];
+                    var cw = charWidth(sp.t);
+                    var sty = spanStyleStr(sp);
+                    html += '<span style="display:inline-block;width:' + cw + 'ch;overflow:hidden' + (sty ? ';' + sty : '') + '">' + escapeHTML(sp.t) + '</span>';
+                }
+            }
+            return html || ' ';
+        }
+
+        // --- DOM Rendering ---
+        function renderScrollback(lines) {
+            scrollbackEl.innerHTML = '';
+            if (!lines || lines.length === 0) return;
+            var frag = document.createDocumentFragment();
+            for (var i = 0; i < lines.length; i++) {
+                var div = document.createElement('div');
+                div.className = 'tl';
+                div.innerHTML = spansToHTML(lines[i]);
+                frag.appendChild(div);
+            }
+            scrollbackEl.appendChild(frag);
+        }
+
+        function renderViewport(lines, cols, rows) {
+            viewportEl.innerHTML = '';
+            var frag = document.createDocumentFragment();
+            for (var i = 0; i < rows; i++) {
+                var div = document.createElement('div');
+                div.className = 'tl';
+                div.innerHTML = (lines && lines[i]) ? spansToHTML(lines[i]) : ' ';
+                frag.appendChild(div);
+            }
+            viewportEl.appendChild(frag);
+        }
+
+        function renderViewportRow(row, spans) {
+            if (row >= 0 && row < viewportEl.children.length) {
+                viewportEl.children[row].innerHTML = spansToHTML(spans);
+            }
+        }
+
+        function updateCursor(cursor) {
+            if (!cursor) { cursorEl.className = 'hidden'; return; }
+            if (!cursor.visible) { cursorEl.className = 'hidden'; return; }
+
+            // Calculate position relative to viewport
+            var viewportRect = viewportEl.getBoundingClientRect();
+            var screenRect = termScreen.getBoundingClientRect();
+
+            cursorEl.className = cursor.shape || 'block';
+            cursorEl.style.left = (viewportRect.left - screenRect.left + cursor.x * charW) + 'px';
+            cursorEl.style.top = (viewportRect.top - screenRect.top + cursor.y * charH - termScreen.scrollTop) + 'px';
+            cursorEl.style.width = charW + 'px';
+            cursorEl.style.height = charH + 'px';
+        }
+
+        // --- Scroll Management ---
+        // Uses CSS flex-direction: column-reverse on #term-screen.
+        // Browser natively anchors scroll to the bottom (viewport).
+        // Scrolling up reveals scrollback. No JS scroll pinning needed.
+        //
+        // With column-reverse, scrollTop=0 is the BOTTOM (viewport).
+        // Negative scroll (which browsers clamp to 0) means "at bottom".
+        // scrollTop > 0 means user scrolled up into scrollback.
+        function isAtBottom() {
+            return termScreen.scrollTop <= 5;
+        }
+
+        function scrollToBottom() {
+            termScreen.scrollTop = 0;
+        }
+
+        var ignoreScrollEvents = false;
+        termScreen.addEventListener('scroll', function() {
+            if (!ignoreScrollEvents) userScrolledUp = !isAtBottom();
+        });
+
+        // Aggressively pin to bottom during keyboard open/close animation.
+        // Uses RAF loop for 500ms to keep overriding browser scroll adjustments.
+        // Aggressively pin to bottom during keyboard open/close.
+        // RAF loop for 800ms + window resize fallback.
+        var pinTimer = null;
+        var pinActive = false;
+        function pinToBottom() {
+            userScrolledUp = false;
+            ignoreScrollEvents = true;
+            scrollToBottom();
+            pinActive = true;
+            var start = Date.now();
+            if (pinTimer) cancelAnimationFrame(pinTimer);
+            function tick() {
+                scrollToBottom();
+                if (Date.now() - start < 800) {
+                    pinTimer = requestAnimationFrame(tick);
+                } else {
+                    ignoreScrollEvents = false;
+                    userScrolledUp = false;
+                    pinActive = false;
+                    pinTimer = null;
+                    // One final scroll after everything settled
+                    scrollToBottom();
+                }
+            }
+            pinTimer = requestAnimationFrame(tick);
+        }
+
+        // Also scroll to bottom when window resizes (catches keyboard close layout shift)
+        window.addEventListener('resize', function() {
+            if (pinActive) scrollToBottom();
+        });
+
+        // --- Tab Bar ---
+        function renderTabs(paneList) {
+            tabsEl.innerHTML = '';
+            for (var i = 0; i < paneList.length; i++) {
+                var pane = paneList[i];
+                var btn = document.createElement('button');
+                btn.className = 'tab-btn' + (pane.id === attachedPaneId ? ' active' : '');
+                btn.textContent = pane.title || ('Pane ' + pane.id);
+                btn.setAttribute('data-pane-id', pane.id);
+                btn.onclick = (function(pid) { return function() { attachToPane(pid); }; })(pane.id);
+                tabsEl.appendChild(btn);
+            }
+        }
+
+        function attachToPane(paneId) {
+            if (!ws || ws.readyState !== WebSocket.OPEN) return;
+            attachedPaneId = paneId;
+            scrollbackEl.innerHTML = '';
+            viewportEl.innerHTML = '';
+            cursorEl.className = 'hidden';
+            ws.send(JSON.stringify({ type: 'attach', pane_id: paneId, format: 'json' }));
+            renderTabs(panes);
+            hiddenInput.focus();
+        }
+
+        // --- WebSocket ---
+        function connect() {
+            var proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            var wsUrl = proto + '//' + window.location.host + '/ws?token=' + encodeURIComponent(token);
+            ws = new WebSocket(wsUrl);
+
+            ws.onopen = function() {
+                statusDot.className = 'connected';
+                reconnectDelay = 1000;
+                ws.send(JSON.stringify({ type: 'list_panes' }));
+            };
+
+            ws.onmessage = function(e) {
+                var msg;
+                try { msg = JSON.parse(e.data); } catch (err) { return; }
+                handleMessage(msg);
+            };
+
+            ws.onclose = function() {
+                statusDot.className = 'disconnected';
+                setTimeout(connect, reconnectDelay);
+                reconnectDelay = Math.min(reconnectDelay * 2, 10000);
+            };
+
+            ws.onerror = function() { ws.close(); };
+        }
+
+        var pendingUpdate = null;
+        function handleMessage(msg) {
+            switch (msg.type) {
+                case 'pane_list':
+                    panes = msg.panes || [];
+                    renderTabs(panes);
+                    if (attachedPaneId === null && panes.length > 0) {
+                        attachToPane(panes[0].id);
+                    }
+                    break;
+
+                case 'screen':
+                    // Cancel any pending delta — full refresh supersedes it
+                    pendingUpdate = null;
+                    if (msg._debug) console.log('[screen debug]', JSON.stringify(msg._debug));
+                    console.log('[screen] scrollback=' + (msg.scrollback ? msg.scrollback.length : 0) + ' viewport=' + (msg.viewport ? msg.viewport.length : 0) + ' rows=' + msg.rows);
+                    var dimsChanged = msg.cols !== currentCols || msg.rows !== currentRows;
+                    currentCols = msg.cols;
+                    currentRows = msg.rows;
+                    if (dimsChanged) fitFont();
+                    scrollbackEl.innerHTML = '';
+                    viewportEl.innerHTML = '';
+                    renderScrollback(msg.scrollback);
+                    renderViewport(msg.viewport, msg.cols, msg.rows);
+                    updateCursor(msg.cursor);
+                    scrollToBottom();
+                    break;
+
+                case 'screen_delta':
+                    // Batch delta updates with requestAnimationFrame
+                    if (!pendingUpdate) {
+                        pendingUpdate = msg;
+                        requestAnimationFrame(function() {
+                            var m = pendingUpdate;
+                            pendingUpdate = null;
+                            // Append scrollback lines first (before updating viewport)
+                            if (m && m.scrollback_append && m.scrollback_append.length > 0) {
+                                var frag = document.createDocumentFragment();
+                                for (var si = 0; si < m.scrollback_append.length; si++) {
+                                    var div = document.createElement('div');
+                                    div.className = 'tl';
+                                    div.innerHTML = spansToHTML(m.scrollback_append[si]);
+                                    frag.appendChild(div);
+                                }
+                                scrollbackEl.appendChild(frag);
+                            }
+                            // Update changed viewport rows
+                            if (m && m.lines) {
+                                for (var rowStr in m.lines) {
+                                    var row = parseInt(rowStr);
+                                    renderViewportRow(row, m.lines[rowStr]);
+                                }
+                            }
+                            updateCursor(m ? m.cursor : null);
+                            if (!userScrolledUp) scrollToBottom();
+                        });
+                    } else {
+                        // Merge delta into pending
+                        if (msg.lines) {
+                            for (var rowStr in msg.lines) {
+                                pendingUpdate.lines[rowStr] = msg.lines[rowStr];
+                            }
+                        }
+                        if (msg.cursor) pendingUpdate.cursor = msg.cursor;
+                        // Merge scrollback_append arrays
+                        if (msg.scrollback_append && msg.scrollback_append.length > 0) {
+                            if (!pendingUpdate.scrollback_append) pendingUpdate.scrollback_append = [];
+                            for (var ai = 0; ai < msg.scrollback_append.length; ai++) {
+                                pendingUpdate.scrollback_append.push(msg.scrollback_append[ai]);
+                            }
+                        }
+                    }
+                    break;
+
+                case 'pane_removed':
+                    if (attachedPaneId === msg.pane_id) {
+                        attachedPaneId = null;
+                        scrollbackEl.innerHTML = '';
+                        viewportEl.innerHTML = '';
+                        cursorEl.className = 'hidden';
+                    }
+                    // Re-attach to first remaining pane
+                    var remaining = panes.filter(function(p) { return p.id !== msg.pane_id; });
+                    if (remaining.length > 0 && attachedPaneId === null) {
+                        attachToPane(remaining[0].id);
+                    }
+                    break;
+
+                case 'output':
+                    // Ignore ANSI output messages (from old protocol) — we only handle JSON
+                    break;
+            }
+        }
+
+        // --- Input Handling ---
+        function sendInput(data) {
+            if (ws && ws.readyState === WebSocket.OPEN && attachedPaneId !== null) {
+                ws.send(JSON.stringify({ type: 'input', pane_id: attachedPaneId, data: data }));
+            }
+        }
+
+        // Focus hidden input on terminal click
+        // Focus hidden input on tap (not swipe).
+        // Use touchend to detect taps — .focus() in a direct user gesture opens keyboard on mobile.
+        var touchStartY = 0;
+        termScreen.addEventListener('touchstart', function(e) {
+            touchStartY = e.touches[0].clientY;
+        }, { passive: true });
+        termScreen.addEventListener('touchend', function(e) {
+            var dy = Math.abs(e.changedTouches[0].clientY - touchStartY);
+            if (dy < 10) {
+                // Tap, not scroll — focus the input to open keyboard
+                hiddenInput.style.pointerEvents = 'auto';
+                hiddenInput.focus();
+                setTimeout(function() { hiddenInput.style.pointerEvents = 'none'; }, 100);
+            }
+        });
+        // Desktop fallback
+        termScreen.addEventListener('click', function() {
+            hiddenInput.style.pointerEvents = 'auto';
+            hiddenInput.focus();
+            setTimeout(function() { hiddenInput.style.pointerEvents = 'none'; }, 100);
+        });
+
+        // Keyboard input via hidden textarea
+        hiddenInput.addEventListener('keydown', function(e) {
+            var seq = mapKeyToSequence(e);
+            if (seq !== null) {
+                e.preventDefault();
+                sendInput(seq);
+            }
+            // Let 'input' event handle regular character keys
+        });
+
+        hiddenInput.addEventListener('input', function() {
+            var data = hiddenInput.value;
+            hiddenInput.value = '';
+            if (data) sendInput(data);
+        });
+
+        hiddenInput.addEventListener('paste', function(e) {
+            var text = e.clipboardData ? e.clipboardData.getData('text') : '';
+            if (text) {
+                e.preventDefault();
+                hiddenInput.value = '';
+                ws.send(JSON.stringify({ type: 'paste', pane_id: attachedPaneId, data: text }));
+            }
+        });
+
+        // When input loses focus (keyboard closes), scroll back to bottom
+        hiddenInput.addEventListener('blur', function() {
+            pinToBottom();
+        });
+
+        function mapKeyToSequence(e) {
+            var key = e.key;
+            var ctrl = e.ctrlKey || stickyCtrl;
+            var alt = e.altKey || stickyAlt;
+
+            // Clear sticky modifiers after use (if real key, not just modifier)
+            if (key !== 'Control' && key !== 'Alt' && key !== 'Shift' && key !== 'Meta') {
+                clearStickyMods();
+            }
+
+            // Ctrl+key combos
+            if (ctrl && !alt) {
+                if (key.length === 1) {
+                    var code = key.toUpperCase().charCodeAt(0);
+                    if (code >= 65 && code <= 90) { // A-Z
+                        return String.fromCharCode(code - 64);
+                    }
+                }
+                if (key === '[') return '\x1b';
+                if (key === '\\') return '\x1c';
+                if (key === ']') return '\x1d';
+            }
+
+            // Alt+key
+            if (alt && !ctrl && key.length === 1) {
+                return '\x1b' + key;
+            }
+
+            // Special keys
+            switch (key) {
+                case 'Enter':     return '\r';
+                case 'Backspace': return '\x7f';
+                case 'Tab':       return '\t';
+                case 'Escape':    return '\x1b';
+                case 'ArrowUp':   return '\x1b[A';
+                case 'ArrowDown': return '\x1b[B';
+                case 'ArrowRight':return '\x1b[C';
+                case 'ArrowLeft': return '\x1b[D';
+                case 'Home':      return '\x1b[H';
+                case 'End':       return '\x1b[F';
+                case 'PageUp':    return '\x1b[5~';
+                case 'PageDown':  return '\x1b[6~';
+                case 'Insert':    return '\x1b[2~';
+                case 'Delete':    return '\x1b[3~';
+                case 'F1':  return '\x1bOP';
+                case 'F2':  return '\x1bOQ';
+                case 'F3':  return '\x1bOR';
+                case 'F4':  return '\x1bOS';
+                case 'F5':  return '\x1b[15~';
+                case 'F6':  return '\x1b[17~';
+                case 'F7':  return '\x1b[18~';
+                case 'F8':  return '\x1b[19~';
+                case 'F9':  return '\x1b[20~';
+                case 'F10': return '\x1b[21~';
+                case 'F11': return '\x1b[23~';
+                case 'F12': return '\x1b[24~';
+            }
+
+            // Let 'input' event handle printable characters
+            return null;
+        }
+
+        // --- Font Fitting (Pure Viewer — no resize messages) ---
+        // The web client is a read/input-only viewer of the native terminal.
+        // It never sends resize messages — the PTY size is controlled by the
+        // native GUI. Font is scaled to fit server's cols in available width.
+        function measureChar() {
+            var probe = document.getElementById('char-probe');
+            var rect = probe.getBoundingClientRect();
+            charW = rect.width;
+            charH = rect.height;
+        }
+
+        function fitFont() {
+            if (currentCols < 1 || currentRows < 1) return;
+            var container = document.getElementById('term-container');
+            var screen = document.getElementById('term-screen');
+            var probe = document.getElementById('char-probe');
+            var targetCols = currentCols;
+            var targetRows = currentRows;
+            var lo = 4, hi = 24;
+
+            for (var iter = 0; iter < 12; iter++) {
+                var mid = Math.round((lo + hi) / 2 * 10) / 10;
+                screen.style.fontSize = mid + 'px';
+                probe.style.fontSize = mid + 'px';
+                var rect = probe.getBoundingClientRect();
+                var fitsWidth = rect.width * targetCols <= container.clientWidth - 8;
+                var fitsHeight = rect.height * targetRows <= container.clientHeight;
+                if (fitsWidth && fitsHeight) { lo = mid; } else { hi = mid; }
+            }
+            screen.style.fontSize = lo + 'px';
+            probe.style.fontSize = lo + 'px';
+            measureChar();
+        }
+
+        var resizeTimer;
+        window.addEventListener('resize', function() {
+            clearTimeout(resizeTimer);
+            resizeTimer = setTimeout(fitFont, 150);
+        });
+
+        window.addEventListener('orientationchange', function() {
+            setTimeout(fitFont, 200);
+        });
+
+        // --- Virtual Keyboard Handling ---
+        // Only adjusts app height so content isn't hidden — no resize messages.
+        var lastViewportWidth = window.visualViewport ? window.visualViewport.width : window.innerWidth;
+        var baseHeight = window.innerHeight;
+
+        function handleViewportResize() {
+            if (!window.visualViewport) return;
+            var vvH = window.visualViewport.height;
+            var vvTop = window.visualViewport.offsetTop;
+            var heightDiff = baseHeight - vvH;
+            var widthChanged = Math.abs(window.visualViewport.width - lastViewportWidth) > 1;
+
+            if (widthChanged) {
+                lastViewportWidth = window.visualViewport.width;
+                baseHeight = vvH;
+                appEl.style.height = '';
+                appEl.style.top = '';
+                fitFont();
+            } else if (heightDiff > 100) {
+                // Keyboard open — shrink app to visible area
+                appEl.style.height = vvH + 'px';
+                appEl.style.top = vvTop + 'px';
+                // Keep scrolling to bottom during keyboard animation
+                pinToBottom();
+            } else {
+                // Keyboard closed — restore full height
+                baseHeight = window.innerHeight;
+                appEl.style.height = '';
+                appEl.style.top = '';
+                pinToBottom();
+                setTimeout(fitFont, 200);
+            }
+        }
+
+        if (window.visualViewport) {
+            window.visualViewport.addEventListener('resize', handleViewportResize);
+            window.visualViewport.addEventListener('scroll', handleViewportResize);
+        }
+
+        // --- On-screen Keyboard ---
+        window.toggleKeyboard = function(e) {
+            if (e) { e.stopPropagation(); e.preventDefault(); }
+            var expanded = kbBar.classList.toggle('expanded');
+            kbToggle.classList.toggle('open', expanded);
+            // Also focus hidden input so the soft keyboard opens when bar expands
+            if (expanded) {
+                hiddenInput.style.pointerEvents = 'auto';
+                hiddenInput.focus();
+                setTimeout(function() { hiddenInput.style.pointerEvents = 'none'; }, 100);
+            }
+        };
+
+        // Sticky modifiers
+        function clearStickyMods() {
+            if (stickyCtrl) {
+                stickyCtrl = false;
+                var ctrlBtn = document.querySelector('[data-mod="ctrl"]');
+                if (ctrlBtn) ctrlBtn.classList.remove('active');
+            }
+            if (stickyAlt) {
+                stickyAlt = false;
+                var altBtn = document.querySelector('[data-mod="alt"]');
+                if (altBtn) altBtn.classList.remove('active');
+            }
+        }
+
+        // On-screen keyboard button handling
+        function parseSeq(raw) {
+            // Convert escape notation in data-seq attributes to actual characters
+            return raw.replace(/\\x([0-9a-fA-F]{2})/g, function(_, hex) {
+                return String.fromCharCode(parseInt(hex, 16));
+            }).replace(/\\t/g, '\t').replace(/\\r/g, '\r').replace(/\\n/g, '\n');
+        }
+
+        function handleKbButton(btn) {
+            if (btn.classList.contains('sticky-mod')) {
+                var mod = btn.getAttribute('data-mod');
+                if (mod === 'ctrl') { stickyCtrl = !stickyCtrl; btn.classList.toggle('active', stickyCtrl); }
+                if (mod === 'alt') { stickyAlt = !stickyAlt; btn.classList.toggle('active', stickyAlt); }
+                return;
+            }
+            var seq = btn.getAttribute('data-seq');
+            if (seq) {
+                sendInput(parseSeq(seq));
+                clearStickyMods();
+            }
+            hiddenInput.focus();
+        }
+
+        // Use both touchend and click for mobile compatibility.
+        // touchend fires on mobile; click fires on desktop.
+        var kbHandledByTouch = false;
+        kbBar.addEventListener('touchstart', function(e) {
+            var btn = e.target.closest('button');
+            if (btn) e.preventDefault(); // prevent focus steal + ghost click
+        }, { passive: false });
+        kbBar.addEventListener('touchend', function(e) {
+            var btn = e.target.closest('button');
+            if (!btn) return;
+            e.preventDefault();
+            kbHandledByTouch = true;
+            handleKbButton(btn);
+        });
+        kbBar.addEventListener('click', function(e) {
+            if (kbHandledByTouch) { kbHandledByTouch = false; return; }
+            var btn = e.target.closest('button');
+            if (!btn) return;
+            e.preventDefault();
+            handleKbButton(btn);
+        });
+
+        // --- Initial Setup ---
+        fitFont();
+        connect();
+
+        // Focus input on load
+        setTimeout(function() { hiddenInput.focus(); }, 100);
+    })();
+    </script>
+</body>
+</html>

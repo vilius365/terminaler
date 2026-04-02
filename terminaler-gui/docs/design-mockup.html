@@ -1,0 +1,895 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Terminaler — Design Mockup</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
+
+  :root {
+    --bg-base: #121212;
+    --bg-surface: #1a1a1a;
+    --bg-elevated: #222222;
+    --border-subtle: #2e2e2e;
+    --border-default: #3a3a3a;
+    --text-primary: #e0e0e0;
+    --text-secondary: #999999;
+    --text-tertiary: #666666;
+    --accent-blue: #4d9eff;
+    --accent-green: #3fb950;
+    --accent-yellow: #d29922;
+    --accent-red: #f85149;
+    --accent-orange: #db8b0b;
+
+    --font-ui: 'Inter', -apple-system, 'Segoe UI', system-ui, sans-serif;
+    --font-mono: 'Cascadia Code', 'JetBrains Mono', Consolas, monospace;
+
+    --radius-sm: 4px;
+    --radius-md: 6px;
+    --radius-lg: 8px;
+
+    --transition: 150ms ease;
+  }
+
+  *, *::before, *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+
+  body {
+    margin: 0;
+    background: #0a0a0a;
+    font-family: var(--font-ui);
+    color: var(--text-primary);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+  }
+
+  /* ── Main Shell ─────────────────────────────────── */
+  .app-shell {
+    width: 1400px;
+    height: 900px;
+    display: grid;
+    grid-template-rows: 36px 1fr 24px;
+    grid-template-columns: 1fr 300px;
+    grid-template-areas:
+      "topbar  topbar"
+      "panes   sidebar"
+      "status  status";
+    overflow: hidden;
+    border-radius: 10px;
+    border: 1px solid var(--border-subtle);
+    box-shadow: 0 24px 80px rgba(0,0,0,0.6), 0 0 1px rgba(255,255,255,0.05);
+  }
+
+  /* ── Top Tab Bar ────────────────────────────────── */
+  .topbar {
+    grid-area: topbar;
+    background: var(--bg-surface);
+    border-bottom: 1px solid var(--border-subtle);
+    display: flex;
+    align-items: center;
+    padding: 0 12px;
+    gap: 8px;
+    -webkit-app-region: drag;
+    user-select: none;
+  }
+
+  .topbar-appname {
+    font-size: 13px;
+    color: var(--text-tertiary);
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    margin-right: 8px;
+    flex-shrink: 0;
+  }
+
+  .topbar-tabs {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex: 1;
+    justify-content: center;
+    min-width: 0;
+  }
+
+  .tab-pill {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 14px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: background var(--transition), color var(--transition);
+    position: relative;
+    white-space: nowrap;
+  }
+
+  .tab-pill:hover {
+    background: rgba(255,255,255,0.04);
+    color: var(--text-primary);
+  }
+
+  .tab-pill.active {
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+  }
+
+  .tab-pill.active::after {
+    content: '';
+    position: absolute;
+    bottom: -1px;
+    left: 8px;
+    right: 8px;
+    height: 2px;
+    background: var(--accent-blue);
+    border-radius: 1px;
+  }
+
+  .tab-pill .tab-close {
+    width: 14px;
+    height: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    font-size: 10px;
+    line-height: 1;
+    opacity: 0;
+    transition: opacity var(--transition), background var(--transition), color var(--transition);
+    color: var(--text-tertiary);
+    flex-shrink: 0;
+  }
+
+  .tab-pill:hover .tab-close {
+    opacity: 1;
+  }
+
+  .tab-pill .tab-close:hover {
+    background: var(--accent-red);
+    color: #fff;
+  }
+
+  .window-controls {
+    display: flex;
+    align-items: stretch;
+    flex-shrink: 0;
+    height: 100%;
+    margin-right: -12px;
+  }
+
+  .window-controls .wc {
+    width: 46px;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: background var(--transition);
+    color: var(--text-secondary);
+  }
+
+  .window-controls .wc:hover {
+    background: rgba(255,255,255,0.07);
+    color: var(--text-primary);
+  }
+
+  .wc-close:hover {
+    background: var(--accent-red) !important;
+    color: #fff !important;
+  }
+
+  .wc svg {
+    width: 10px;
+    height: 10px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.2;
+  }
+
+  /* ── Sidebar ────────────────────────────────────── */
+  .sidebar {
+    grid-area: sidebar;
+    background: var(--bg-surface);
+    border-left: 1px solid var(--border-subtle);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .sidebar-scroll {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .sidebar-scroll::-webkit-scrollbar {
+    width: 4px;
+  }
+  .sidebar-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .sidebar-scroll::-webkit-scrollbar-thumb {
+    background: var(--border-default);
+    border-radius: 2px;
+  }
+
+  .sidebar-bottom {
+    padding: 8px;
+    border-top: 1px solid var(--border-subtle);
+  }
+
+  .btn-new-tab {
+    width: 100%;
+    height: 32px;
+    border: 1px dashed var(--border-default);
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--text-secondary);
+    font-family: var(--font-ui);
+    font-size: 12px;
+    cursor: pointer;
+    transition: border-color var(--transition), color var(--transition), background var(--transition);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+  }
+
+  .btn-new-tab:hover {
+    border-color: var(--text-secondary);
+    color: var(--text-primary);
+    background: rgba(255,255,255,0.02);
+  }
+
+  /* ── Sidebar Cards ──────────────────────────────── */
+  .card {
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    padding: 10px 12px;
+    cursor: pointer;
+    transition: background var(--transition), border-color var(--transition);
+    position: relative;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+  }
+
+  .card:hover {
+    background: var(--bg-elevated);
+  }
+
+  .card:hover .card-close {
+    opacity: 1;
+  }
+
+  .card.active {
+    background: var(--bg-elevated);
+  }
+
+  /* Left accent stripe */
+  .card-accent {
+    position: absolute;
+    left: 0;
+    top: 6px;
+    bottom: 6px;
+    width: 3px;
+    border-radius: 0 2px 2px 0;
+  }
+
+  .card-accent-blue   { background: var(--accent-blue); }
+  .card-accent-orange { background: var(--accent-orange); }
+  .card-accent-red    { background: var(--accent-red); }
+
+  .card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 4px;
+  }
+
+  .card-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+
+  .card.active .card-title {
+    font-size: 14px;
+  }
+
+  .card-title-inactive {
+    color: var(--text-secondary);
+    font-weight: 500;
+  }
+
+  .card-close {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 9px;
+    color: var(--text-tertiary);
+    opacity: 0;
+    transition: opacity var(--transition), background var(--transition), color var(--transition);
+    flex-shrink: 0;
+    line-height: 1;
+    border: none;
+    background: none;
+    cursor: pointer;
+    font-family: var(--font-ui);
+  }
+
+  .card-close:hover {
+    background: var(--accent-red);
+    color: #fff;
+    opacity: 1;
+  }
+
+  .card-meta {
+    font-size: 11px;
+    color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 2px;
+  }
+
+  .card-meta-dim {
+    color: var(--text-tertiary);
+  }
+
+  .card-git {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    color: var(--text-secondary);
+  }
+
+  .card-git svg {
+    width: 11px;
+    height: 11px;
+    fill: currentColor;
+    opacity: 0.7;
+  }
+
+  /* Status dot */
+  .status-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    margin-top: 4px;
+  }
+
+  .status-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .status-dot-green {
+    background: var(--accent-green);
+    animation: pulse-green 2s ease-in-out infinite;
+  }
+
+  .status-dot-yellow {
+    background: var(--accent-yellow);
+    animation: pulse-yellow 2s ease-in-out infinite;
+  }
+
+  .status-dot-red {
+    background: var(--accent-red);
+  }
+
+  @keyframes pulse-green {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(63,185,80,0.4); }
+    50%      { box-shadow: 0 0 0 4px rgba(63,185,80,0); }
+  }
+
+  @keyframes pulse-yellow {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(210,153,34,0.4); }
+    50%      { box-shadow: 0 0 0 4px rgba(210,153,34,0); }
+  }
+
+  /* Context bar */
+  .context-bar {
+    height: 3px;
+    border-radius: 2px;
+    background: var(--border-subtle);
+    margin-top: 6px;
+    overflow: hidden;
+    position: relative;
+  }
+
+  .context-bar-fill {
+    height: 100%;
+    border-radius: 2px;
+    background: linear-gradient(90deg, var(--accent-orange), rgba(219,139,11,0.3));
+  }
+
+  .card-stats {
+    font-size: 10px;
+    color: var(--text-tertiary);
+    margin-top: 4px;
+    font-family: var(--font-mono);
+    letter-spacing: -0.02em;
+  }
+
+  .stat-add { color: var(--accent-green); }
+  .stat-remove { color: var(--accent-red); }
+
+  /* Expandable pane tree */
+  .card-expand {
+    font-size: 10px;
+    color: var(--text-tertiary);
+    cursor: pointer;
+    user-select: none;
+    margin-left: 4px;
+  }
+
+  .pane-tree {
+    margin-top: 6px;
+    font-size: 10px;
+    font-family: var(--font-mono);
+    color: var(--text-tertiary);
+    line-height: 1.6;
+    overflow: hidden;
+    transition: max-height 200ms ease, opacity 200ms ease;
+  }
+
+  .pane-tree.collapsed {
+    max-height: 0;
+    opacity: 0;
+  }
+
+  .pane-tree.expanded {
+    max-height: 200px;
+    opacity: 1;
+  }
+
+  .pane-tree-line {
+    padding-left: 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .pane-tree-line .process {
+    color: var(--text-secondary);
+  }
+
+  /* ── Terminal Panes ─────────────────────────────── */
+  .panes {
+    grid-area: panes;
+    background: var(--bg-base);
+    display: flex;
+    overflow: hidden;
+  }
+
+  .pane {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .pane + .pane {
+    border-left: 2px solid var(--border-default);
+  }
+
+  .pane.pane-active {
+    box-shadow: inset 0 0 0 1px rgba(77,158,255,0.15);
+  }
+
+  .pane-content {
+    flex: 1;
+    padding: 12px 16px;
+    font-family: var(--font-mono);
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--text-primary);
+    white-space: pre;
+    overflow: hidden;
+  }
+
+  .pane-content .prompt {
+    color: var(--text-secondary);
+  }
+
+  .pane-content .cmd {
+    color: #e0e0e0;
+    font-weight: 500;
+  }
+
+  .pane-content .c-green {
+    color: var(--accent-green);
+  }
+
+  .pane-content .c-white-bold {
+    color: #ffffff;
+    font-weight: 600;
+  }
+
+  .pane-content .c-cyan {
+    color: #56d4dd;
+  }
+
+  .pane-content .c-yellow {
+    color: var(--accent-yellow);
+  }
+
+  .pane-content .c-dim {
+    color: var(--text-tertiary);
+  }
+
+  .cursor-block {
+    display: inline-block;
+    width: 8px;
+    height: 16px;
+    background: var(--text-primary);
+    animation: blink-cursor 1s step-end infinite;
+    vertical-align: text-bottom;
+    margin-left: 1px;
+  }
+
+  @keyframes blink-cursor {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0; }
+  }
+
+  /* ── Status Bar ─────────────────────────────────── */
+  .statusbar {
+    grid-area: status;
+    background: var(--bg-surface);
+    border-top: 1px solid var(--border-subtle);
+    display: flex;
+    align-items: center;
+    padding: 0 12px;
+    gap: 0;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-tertiary);
+    user-select: none;
+  }
+
+  .sb-segment {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 0 10px;
+  }
+
+  .sb-segment:first-child {
+    padding-left: 0;
+  }
+
+  .sb-divider {
+    color: var(--border-default);
+    font-size: 11px;
+    line-height: 1;
+  }
+
+  .sb-spacer {
+    flex: 1;
+  }
+
+  .mode-badge {
+    font-size: 10px;
+    font-weight: 600;
+    font-family: var(--font-ui);
+    padding: 1px 8px;
+    border-radius: var(--radius-sm);
+    background: var(--accent-blue);
+    color: #fff;
+    letter-spacing: 0.04em;
+    cursor: pointer;
+    transition: background var(--transition);
+  }
+
+  .mode-badge[data-mode="INSERT"] {
+    background: var(--accent-green);
+  }
+
+  .mode-badge[data-mode="VISUAL"] {
+    background: var(--accent-yellow);
+    color: #111;
+  }
+
+  .sb-git-branch {
+    color: var(--accent-green);
+  }
+
+  .sb-git-branch svg {
+    width: 11px;
+    height: 11px;
+    fill: var(--accent-green);
+    vertical-align: -1px;
+  }
+
+  .sb-path {
+    color: var(--text-secondary);
+  }
+
+  .sb-online-dot {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--accent-green);
+    flex-shrink: 0;
+  }
+</style>
+</head>
+<body>
+
+<div class="app-shell">
+  <!-- ── Top Tab Bar ── -->
+  <div class="topbar">
+    <span class="topbar-appname">Terminaler</span>
+
+    <div class="topbar-tabs">
+      <div class="tab-pill active" data-tab="0">
+        terminaler
+        <span class="tab-close">&times;</span>
+      </div>
+      <div class="tab-pill" data-tab="1">
+        dotfiles
+        <span class="tab-close">&times;</span>
+      </div>
+      <div class="tab-pill" data-tab="2">
+        notes
+        <span class="tab-close">&times;</span>
+      </div>
+    </div>
+
+    <div class="window-controls">
+      <div class="wc wc-min"><svg viewBox="0 0 10 10"><line x1="1" y1="5" x2="9" y2="5"/></svg></div>
+      <div class="wc wc-max"><svg viewBox="0 0 10 10"><rect x="1" y="1" width="8" height="8" rx="0.5"/></svg></div>
+      <div class="wc wc-close"><svg viewBox="0 0 10 10"><line x1="1.5" y1="1.5" x2="8.5" y2="8.5"/><line x1="8.5" y1="1.5" x2="1.5" y2="8.5"/></svg></div>
+    </div>
+  </div>
+
+  <!-- ── Sidebar ── -->
+  <div class="sidebar">
+    <div class="sidebar-scroll">
+
+      <!-- Card 1: Active normal tab -->
+      <div class="card active" data-card="0">
+        <div class="card-accent card-accent-blue"></div>
+        <div class="card-header">
+          <span class="card-title">terminaler</span>
+          <button class="card-close">&times;</button>
+        </div>
+        <div class="card-meta">
+          <span>~/projects/terminaler</span>
+          <span class="card-git">
+            <svg viewBox="0 0 16 16"><path d="M11.75 2.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5zm-2.25.75a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.5 2.5 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25zM4.25 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5zM3.5 3.25a.75.75 0 1 1 1.5 0 .75.75 0 0 1-1.5 0z"/></svg>
+            main
+          </span>
+        </div>
+      </div>
+
+      <!-- Card 2: Claude working -->
+      <div class="card" data-card="1">
+        <div class="card-accent card-accent-orange"></div>
+        <div class="card-header">
+          <span class="card-title" style="font-size:13px;">claude: refactor API</span>
+          <button class="card-close">&times;</button>
+        </div>
+        <div class="card-meta">
+          <span>~/projects/terminaler</span>
+        </div>
+        <div class="status-row">
+          <span class="status-dot status-dot-green"></span>
+          <span style="color:var(--accent-green);">working</span>
+        </div>
+        <div class="context-bar">
+          <div class="context-bar-fill" style="width:53%;"></div>
+        </div>
+        <div class="card-stats">$0.42 &middot; 3m 12s &middot; <span class="stat-add">+12</span> <span class="stat-remove">-5</span></div>
+      </div>
+
+      <!-- Card 3: Claude waiting -->
+      <div class="card" data-card="2">
+        <div class="card-accent card-accent-orange"></div>
+        <div class="card-header">
+          <span class="card-title" style="font-size:13px;">claude: fix tests</span>
+          <button class="card-close">&times;</button>
+        </div>
+        <div class="card-meta">
+          <span>~/projects/api</span>
+        </div>
+        <div class="status-row">
+          <span class="status-dot status-dot-yellow"></span>
+          <span style="color:var(--accent-yellow);">awaiting input</span>
+        </div>
+        <div class="context-bar">
+          <div class="context-bar-fill" style="width:78%;"></div>
+        </div>
+        <div class="card-stats">$1.23 &middot; 8m 45s &middot; <span class="stat-add">+45</span> <span class="stat-remove">-12</span></div>
+      </div>
+
+      <!-- Card 4: Inactive tab -->
+      <div class="card" data-card="3">
+        <div class="card-header">
+          <span class="card-title card-title-inactive">dotfiles</span>
+          <button class="card-close">&times;</button>
+        </div>
+        <div class="card-meta card-meta-dim">
+          <span>~/.dotfiles</span>
+          <span class="card-git" style="color:var(--text-tertiary);">
+            <svg viewBox="0 0 16 16" style="fill:var(--text-tertiary);"><path d="M11.75 2.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5zm-2.25.75a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.5 2.5 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25zM4.25 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5zM3.5 3.25a.75.75 0 1 1 1.5 0 .75.75 0 0 1-1.5 0z"/></svg>
+            main
+          </span>
+        </div>
+      </div>
+
+      <!-- Card 5: Multi-pane expandable -->
+      <div class="card" data-card="4">
+        <div class="card-accent card-accent-blue"></div>
+        <div class="card-header">
+          <span class="card-title" style="font-size:13px;">
+            dev-server
+            <span class="card-expand" id="expand-toggle" title="Toggle pane tree">&#9662;</span>
+            <span style="font-size:10px;color:var(--text-tertiary);font-weight:400;margin-left:4px;">(3 panes)</span>
+          </span>
+          <button class="card-close">&times;</button>
+        </div>
+        <div class="card-meta">
+          <span>~/projects/webapp</span>
+          <span class="card-git">
+            <svg viewBox="0 0 16 16"><path d="M11.75 2.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5zm-2.25.75a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.5 2.5 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25zM4.25 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5zM3.5 3.25a.75.75 0 1 1 1.5 0 .75.75 0 0 1-1.5 0z"/></svg>
+            dev
+          </span>
+        </div>
+        <div class="pane-tree expanded" id="pane-tree">
+          <div class="pane-tree-line">&nbsp;&#9500; zsh &#8212; <span class="process">npm start</span></div>
+          <div class="pane-tree-line">&nbsp;&#9500; zsh &#8212; <span class="process">vim index.ts</span></div>
+          <div class="pane-tree-line">&nbsp;&#9492; zsh &#8212; <span class="process">tail -f logs</span></div>
+        </div>
+      </div>
+
+      <!-- Card 6: Disconnected -->
+      <div class="card" data-card="5">
+        <div class="card-accent card-accent-red"></div>
+        <div class="card-header">
+          <span class="card-title" style="font-size:13px;">ssh: prod-server</span>
+          <button class="card-close">&times;</button>
+        </div>
+        <div class="card-meta">
+          <span>user@192.168.1.50</span>
+        </div>
+        <div class="status-row">
+          <span class="status-dot status-dot-red"></span>
+          <span style="color:var(--accent-red);">disconnected</span>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="sidebar-bottom">
+      <button class="btn-new-tab">+ New Tab</button>
+    </div>
+  </div>
+
+  <!-- ── Terminal Panes ── -->
+  <div class="panes">
+    <div class="pane pane-active">
+      <div class="pane-content"><span class="prompt">$</span> <span class="cmd">cargo build --release</span>
+   <span class="c-green">Compiling</span> <span class="c-white-bold">terminaler-term v0.1.0</span>
+   <span class="c-green">Compiling</span> <span class="c-white-bold">terminaler-font v0.1.0</span>
+   <span class="c-green">Compiling</span> <span class="c-white-bold">terminaler-gui v0.1.0</span>
+    <span class="c-green">Finished</span> release [optimized] target(s) in <span class="c-cyan">42.3s</span>
+<span class="prompt">$</span> <span class="cursor-block"></span></div>
+    </div>
+    <div class="pane">
+      <div class="pane-content"><span class="prompt">$</span> <span class="cmd">git log --oneline -5</span>
+<span class="c-yellow">4eac666</span> Fix selection offset when zoomed
+<span class="c-yellow">81fd957</span> Fix tab sidebar resize drag
+<span class="c-yellow">82f2722</span> Vertical tab sidebar with Claude Card
+<span class="c-yellow">b3d3a55</span> Larger tab bar, improved close confirmations
+<span class="c-yellow">74821e3</span> Fix text selection offset
+<span class="prompt">$</span> <span class="c-dim">_</span></div>
+    </div>
+  </div>
+
+  <!-- ── Status Bar ── -->
+  <div class="statusbar">
+    <div class="sb-segment">
+      <span class="mode-badge" id="mode-badge" data-mode="NORMAL">NORMAL</span>
+    </div>
+    <span class="sb-divider">|</span>
+    <div class="sb-segment">
+      <span class="sb-path">~/projects/terminaler</span>
+    </div>
+    <span class="sb-divider">|</span>
+    <div class="sb-segment">
+      <span class="sb-git-branch">
+        <svg viewBox="0 0 16 16"><path d="M11.75 2.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5zm-2.25.75a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.5 2.5 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25zM4.25 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5zM3.5 3.25a.75.75 0 1 1 1.5 0 .75.75 0 0 1-1.5 0z"/></svg>
+        main
+      </span>
+    </div>
+    <span class="sb-divider">|</span>
+    <div class="sb-segment">
+      <span>+3 ~2</span>
+    </div>
+
+    <div class="sb-spacer"></div>
+
+    <div class="sb-segment">
+      <span class="sb-online-dot"></span>
+      <span>local</span>
+    </div>
+    <span class="sb-divider">|</span>
+    <div class="sb-segment">
+      <span>14:23</span>
+    </div>
+  </div>
+</div>
+
+<script>
+  // Tab pill switching
+  document.querySelectorAll('.tab-pill').forEach(pill => {
+    pill.addEventListener('click', (e) => {
+      if (e.target.classList.contains('tab-close')) return;
+      document.querySelectorAll('.tab-pill').forEach(p => p.classList.remove('active'));
+      pill.classList.add('active');
+    });
+  });
+
+  // Card click to toggle active
+  document.querySelectorAll('.card').forEach(card => {
+    card.addEventListener('click', (e) => {
+      if (e.target.classList.contains('card-close') || e.target.id === 'expand-toggle') return;
+      document.querySelectorAll('.card').forEach(c => c.classList.remove('active'));
+      card.classList.add('active');
+      // Update accent: ensure only clicked card has active styling
+      document.querySelectorAll('.card').forEach(c => {
+        const accent = c.querySelector('.card-accent-blue');
+        // visual feedback is handled by .active class
+      });
+    });
+  });
+
+  // Pane tree expand/collapse
+  const expandToggle = document.getElementById('expand-toggle');
+  const paneTree = document.getElementById('pane-tree');
+  if (expandToggle && paneTree) {
+    expandToggle.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const isExpanded = paneTree.classList.contains('expanded');
+      paneTree.classList.toggle('expanded', !isExpanded);
+      paneTree.classList.toggle('collapsed', isExpanded);
+      expandToggle.textContent = isExpanded ? '\u25B8' : '\u25BE';
+    });
+  }
+
+  // Mode badge cycling
+  const modes = ['NORMAL', 'INSERT', 'VISUAL'];
+  let modeIndex = 0;
+  const modeBadge = document.getElementById('mode-badge');
+  if (modeBadge) {
+    modeBadge.addEventListener('click', () => {
+      modeIndex = (modeIndex + 1) % modes.length;
+      modeBadge.textContent = modes[modeIndex];
+      modeBadge.setAttribute('data-mode', modes[modeIndex]);
+    });
+  }
+</script>
+
+</body>
+</html>

@@ -209,30 +209,46 @@ fn collect_panes_inner(node: &LayoutNode, panes: &mut Vec<PaneSpec>) {
 /// The operations should be applied in order. Each operation splits an existing
 /// pane (by index) in the given direction with the given ratio. The new pane
 /// appears as the second child of the split.
+///
+/// Splits are emitted in parent-first (pre-order) sequence so that each
+/// split's target pane already exists when the operation is applied.
+/// Pane indices correspond to positions in a growing `pane_ids` list:
+/// - slot 0 is the initial pane that exists before any splits
+/// - each split on slot N keeps the first child at slot N and appends
+///   the second child as the next sequential slot
 pub fn collect_splits(node: &LayoutNode) -> Vec<SplitOp> {
     let mut ops = Vec::new();
-    let mut leaf_count = 0;
-    collect_splits_inner(node, &mut ops, &mut leaf_count);
+    let mut next_slot = 1; // slot 0 is the initial pane
+    collect_splits_inner(node, 0, &mut ops, &mut next_slot);
     ops
 }
 
-fn collect_splits_inner(node: &LayoutNode, ops: &mut Vec<SplitOp>, leaf_count: &mut usize) {
+fn collect_splits_inner(
+    node: &LayoutNode,
+    my_slot: usize,
+    ops: &mut Vec<SplitOp>,
+    next_slot: &mut usize,
+) {
     match node {
         LayoutNode::Pane { .. } => {
-            *leaf_count += 1;
+            // Leaf — nothing to split.
         }
         LayoutNode::Split { direction, ratio, first, second } => {
-            let split_target = *leaf_count;
-            // Process the first child — it occupies the current pane slot.
-            collect_splits_inner(first, ops, leaf_count);
-            // Record the split: split the pane at split_target.
+            // Allocate a slot for the second child (new pane created by split).
+            let second_slot = *next_slot;
+            *next_slot += 1;
+
+            // Emit the split first (parent before children).
             ops.push(SplitOp {
-                pane_index: split_target,
+                pane_index: my_slot,
                 direction: *direction,
                 ratio: *ratio,
             });
-            // Process the second child.
-            collect_splits_inner(second, ops, leaf_count);
+
+            // First child inherits this slot (the original pane stays).
+            collect_splits_inner(first, my_slot, ops, next_slot);
+            // Second child occupies the newly created slot.
+            collect_splits_inner(second, second_slot, ops, next_slot);
         }
     }
 }
@@ -422,6 +438,15 @@ mod tests {
         let ops = collect_splits(&quad.root);
         // quad = H(V(p,p), V(p,p)) → 3 splits
         assert_eq!(ops.len(), 3);
+        // 1. H split on pane 0 → left(0) + right(1)
+        assert_eq!(ops[0].pane_index, 0);
+        assert_eq!(ops[0].direction, SplitDirection::Horizontal);
+        // 2. V split on pane 0 → top-left(0) + bottom-left(2)
+        assert_eq!(ops[1].pane_index, 0);
+        assert_eq!(ops[1].direction, SplitDirection::Vertical);
+        // 3. V split on pane 1 → top-right(1) + bottom-right(3)
+        assert_eq!(ops[2].pane_index, 1);
+        assert_eq!(ops[2].direction, SplitDirection::Vertical);
     }
 
     #[test]
@@ -430,6 +455,12 @@ mod tests {
         let ops = collect_splits(&tr.root);
         // H(p, V(p,p)) → 2 splits
         assert_eq!(ops.len(), 2);
+        // 1. H split on pane 0 → left(0) + right(1)
+        assert_eq!(ops[0].pane_index, 0);
+        assert_eq!(ops[0].direction, SplitDirection::Horizontal);
+        // 2. V split on pane 1 → top-right(1) + bottom-right(2)
+        assert_eq!(ops[1].pane_index, 1);
+        assert_eq!(ops[1].direction, SplitDirection::Vertical);
     }
 
     #[test]

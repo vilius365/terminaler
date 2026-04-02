@@ -34,6 +34,8 @@ impl crate::TermWindow {
             }
         }
 
+        self.check_claude_idle_notifications();
+
         'pass: for pass in 0.. {
             match self.paint_pass() {
                 Ok(_) => match self.render_state.as_mut().unwrap().allocated_more_quads() {
@@ -283,13 +285,29 @@ impl crate::TermWindow {
                 .context("paint_toast_toolbar")?;
         }
 
-        if self.show_tab_bar {
-            self.paint_tab_bar(&mut layers).context("paint_tab_bar")?;
+        if self.show_tab_sidebar {
+            #[cfg(windows)]
+            let use_webview = self.webview_sidebar.is_some();
+            #[cfg(not(windows))]
+            let use_webview = false;
+
+            if use_webview {
+                #[cfg(windows)]
+                {
+                    self.update_sidebar_info();
+                    self.push_webview_sidebar_state();
+                    self.paint_sidebar_background(&mut layers)
+                        .context("webview sidebar background")?;
+                    self.register_sidebar_resize_handle();
+                }
+            } else {
+                self.paint_tab_sidebar(&mut layers)
+                    .context("paint_tab_sidebar")?;
+            }
         }
 
-        if self.show_tab_sidebar {
-            self.paint_tab_sidebar(&mut layers)
-                .context("paint_tab_sidebar")?;
+        if self.show_tab_bar {
+            self.paint_tab_bar(&mut layers).context("paint_tab_bar")?;
         }
 
         self.paint_window_borders(&mut layers)

@@ -2,7 +2,7 @@ use crate::scripting::guiwin::GuiWin;
 use config::keyassignment::Confirmation;
 use mux::termwiztermtab::TermWizTerminal;
 use crate::scripting::guiwin::MuxPane;
-use termwiz::cell::AttributeChange;
+use termwiz::cell::{unicode_column_width, AttributeChange};
 use termwiz::color::ColorAttribute;
 use termwiz::input::{InputEvent, KeyCode, KeyEvent, MouseButtons, MouseEvent};
 use termwiz::surface::{Change, CursorVisibility, Position};
@@ -12,31 +12,66 @@ pub fn run_confirmation(message: &str, term: &mut TermWizTerminal) -> anyhow::Re
     run_confirmation_impl(message, term)
 }
 
+/// Wrap text respecting Unicode display width.
+/// textwrap may miscalculate widths for emoji/CJK characters,
+/// so we do our own simple word-wrapping using terminal column widths.
+fn wrap_to_terminal_width(text: &str, max_width: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    for input_line in text.split('\n') {
+        if input_line.is_empty() {
+            lines.push(String::new());
+            continue;
+        }
+        let mut current_line = String::new();
+        let mut current_width = 0usize;
+        for word in input_line.split_whitespace() {
+            let word_width = unicode_column_width(word, None);
+            if current_width > 0 && current_width + 1 + word_width > max_width {
+                lines.push(current_line);
+                current_line = word.to_string();
+                current_width = word_width;
+            } else if current_width > 0 {
+                current_line.push(' ');
+                current_line.push_str(word);
+                current_width += 1 + word_width;
+            } else {
+                current_line.push_str(word);
+                current_width = word_width;
+            }
+        }
+        lines.push(current_line);
+    }
+    lines
+}
+
 fn run_confirmation_impl(message: &str, term: &mut TermWizTerminal) -> anyhow::Result<bool> {
     term.set_raw_mode()?;
 
     let size = term.get_screen_size()?;
 
-    // Render 80% wide, centered
-    let text_width = size.cols * 80 / 100;
-    let x_pos = size.cols * 10 / 100;
+    // Render 60% wide, centered (narrower for a dialog feel)
+    let text_width = (size.cols * 60 / 100).max(30);
+    let x_pos = (size.cols.saturating_sub(text_width)) / 2;
 
-    // Fit text to the width
-    let wrapped = textwrap::fill(message, text_width);
+    // Wrap text using Unicode-aware width calculation
+    let lines = wrap_to_terminal_width(message, text_width);
 
-    let message_rows = wrapped.split("\n").count();
-    // Now we want to vertically center the prompt in the view.
-    // After the prompt there will be a blank line and then the "buttons",
-    // so we add two to the number of rows.
-    let top_row = (size.rows - (message_rows + 2)) / 2;
+    let message_rows = lines.len();
+    // Vertically center: message lines + 1 blank line + 1 button row
+    let total_rows = message_rows + 2;
+    let top_row = size.rows.saturating_sub(total_rows) / 2;
 
     let button_row = top_row + message_rows + 1;
     let mut active = ActiveButton::None;
 
-    let yes_x = x_pos;
+    // Center buttons within the text area
+    let buttons_total_width = 7 + 4 + 6; // " [Y]es " + "    " + " [N]o "
+    let button_start = x_pos + text_width.saturating_sub(buttons_total_width) / 2;
+
+    let yes_x = button_start;
     let yes_w = 7;
 
-    let no_x =  yes_x + yes_w + 8 /* spacer */;
+    let no_x = yes_x + yes_w + 4;
     let no_w = 6;
 
     #[derive(Copy, Clone, PartialEq, Eq)]
@@ -52,8 +87,8 @@ fn run_confirmation_impl(message: &str, term: &mut TermWizTerminal) -> anyhow::R
             Change::CursorVisibility(CursorVisibility::Hidden),
         ];
 
-        for (y, row) in wrapped.split("\n").enumerate() {
-            let row = row.trim_end();
+        // Render message lines
+        for (y, row) in lines.iter().enumerate() {
             changes.push(Change::CursorPosition {
                 x: Position::Absolute(x_pos),
                 y: Position::Absolute(top_row + y),
@@ -61,8 +96,9 @@ fn run_confirmation_impl(message: &str, term: &mut TermWizTerminal) -> anyhow::R
             changes.push(Change::Text(row.to_string()));
         }
 
+        // Render buttons
         changes.push(Change::CursorPosition {
-            x: Position::Absolute(x_pos),
+            x: Position::Absolute(yes_x),
             y: Position::Absolute(button_row),
         });
 
@@ -74,7 +110,7 @@ fn run_confirmation_impl(message: &str, term: &mut TermWizTerminal) -> anyhow::R
             changes.push(AttributeChange::Reverse(false).into());
         }
 
-        changes.push("        ".into());
+        changes.push("    ".into());
 
         if active == ActiveButton::No {
             changes.push(AttributeChange::Reverse(true).into());

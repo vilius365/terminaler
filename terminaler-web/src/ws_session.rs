@@ -1,12 +1,21 @@
 use crate::ansi_render;
 use crate::bridge::MuxBridge;
+use crate::json_render;
 use axum::extract::ws::{Message, WebSocket};
 use futures_util::{SinkExt, StreamExt};
 use mux::pane::{Pane, PaneId};
 use mux::{Mux, MuxNotification};
 use std::sync::Arc;
+use terminaler_term::TerminalSize;
 use termwiz::surface::SequenceNo;
 use tokio::sync::broadcast;
+
+/// Output format negotiated per WebSocket session.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum OutputFormat {
+    Ansi,
+    Json,
+}
 
 /// Handle a single WebSocket connection.
 pub async fn handle_ws(socket: WebSocket, bridge: Arc<MuxBridge>) {
@@ -16,8 +25,9 @@ pub async fn handle_ws(socket: WebSocket, bridge: Arc<MuxBridge>) {
     // Current attached pane state
     let mut attached_pane_id: Option<PaneId> = None;
     let mut last_seqno: SequenceNo = 0;
-    let mut last_cols: usize = 0;
-    let mut last_rows: usize = 0;
+    let mut output_format = OutputFormat::Ansi;
+    // Track viewport top for scrollback detection in JSON mode
+    let mut last_physical_top: isize = 0;
 
     loop {
         tokio::select! {
@@ -31,6 +41,8 @@ pub async fn handle_ws(socket: WebSocket, bridge: Arc<MuxBridge>) {
                             &mut ws_tx,
                             &mut attached_pane_id,
                             &mut last_seqno,
+                            &mut last_physical_top,
+                            &mut output_format,
                         ).await {
                             log::debug!("WebSocket client message error: {:#}", e);
                             break;
@@ -46,8 +58,8 @@ pub async fn handle_ws(socket: WebSocket, bridge: Arc<MuxBridge>) {
                 match notification {
                     Ok(MuxNotification::PaneOutput(pane_id)) => {
                         if attached_pane_id == Some(pane_id) {
-                            if let Err(e) = send_delta_output(
-                                &mut ws_tx, pane_id, &mut last_seqno
+                            if let Err(e) = send_delta(
+                                &mut ws_tx, pane_id, &mut last_seqno, &mut last_physical_top, output_format
                             ).await {
                                 log::debug!("Failed to send delta output: {:#}", e);
                                 break;
@@ -58,8 +70,8 @@ pub async fn handle_ws(socket: WebSocket, bridge: Arc<MuxBridge>) {
                         // When the native app resizes, pane dimensions change.
                         // Send a full refresh so the web client repaints cleanly.
                         if let Some(pane_id) = attached_pane_id {
-                            if let Err(e) = send_full_refresh(
-                                &mut ws_tx, pane_id, &mut last_seqno
+                            if let Err(e) = send_refresh(
+                                &mut ws_tx, pane_id, &mut last_seqno, &mut last_physical_top, output_format
                             ).await {
                                 log::debug!("Failed to send refresh on resize: {:#}", e);
                                 break;
@@ -107,12 +119,15 @@ pub async fn handle_ws(socket: WebSocket, bridge: Arc<MuxBridge>) {
 
 type WsSink = futures_util::stream::SplitSink<WebSocket, Message>;
 
-/// Process a client JSON message.
+/// Process a client JSON message.  Returns true if a resize was handled and
+/// the caller should send a full refresh.
 async fn handle_client_message(
     text: &str,
     ws_tx: &mut WsSink,
     attached_pane_id: &mut Option<PaneId>,
     last_seqno: &mut SequenceNo,
+    last_physical_top: &mut isize,
+    output_format: &mut OutputFormat,
 ) -> anyhow::Result<()> {
     let msg: serde_json::Value = serde_json::from_str(text)?;
     let msg_type = msg.get("type").and_then(|v| v.as_str()).unwrap_or("");
@@ -130,11 +145,18 @@ async fn handle_client_message(
                 .and_then(|v| v.as_u64())
                 .ok_or_else(|| anyhow::anyhow!("missing pane_id"))? as PaneId;
 
+            // Parse optional format field
+            let format_str = msg.get("format").and_then(|v| v.as_str()).unwrap_or("ansi");
+            *output_format = match format_str {
+                "json" => OutputFormat::Json,
+                _ => OutputFormat::Ansi,
+            };
+
             *attached_pane_id = Some(pane_id);
             *last_seqno = 0;
 
-            // Send full screen refresh
-            send_full_refresh(ws_tx, pane_id, last_seqno).await?;
+            // Send full screen refresh in the negotiated format
+            send_refresh(ws_tx, pane_id, last_seqno, last_physical_top, *output_format).await?;
         }
         "input" => {
             let pane_id = msg
@@ -165,10 +187,24 @@ async fn handle_client_message(
                 .get("pane_id")
                 .and_then(|v| v.as_u64())
                 .ok_or_else(|| anyhow::anyhow!("missing pane_id"))? as PaneId;
-            let cols = msg.get("cols").and_then(|v| v.as_u64()).unwrap_or(80) as usize;
-            let rows = msg.get("rows").and_then(|v| v.as_u64()).unwrap_or(24) as usize;
+            let cols = msg
+                .get("cols")
+                .and_then(|v| v.as_u64())
+                .ok_or_else(|| anyhow::anyhow!("missing cols"))? as usize;
+            let rows = msg
+                .get("rows")
+                .and_then(|v| v.as_u64())
+                .ok_or_else(|| anyhow::anyhow!("missing rows"))? as usize;
 
             resize_pane(pane_id, cols, rows).await?;
+
+            // Send full refresh after resize
+            if let Some(pid) = *attached_pane_id {
+                if pid == pane_id {
+                    *last_seqno = 0;
+                    send_refresh(ws_tx, pane_id, last_seqno, last_physical_top, *output_format).await?;
+                }
+            }
         }
         _ => {
             log::debug!("Unknown WebSocket message type: {}", msg_type);
@@ -197,6 +233,34 @@ async fn build_pane_list() -> anyhow::Result<Vec<serde_json::Value>> {
     })
     .await;
     Ok(result)
+}
+
+/// Format-aware full refresh dispatcher.
+async fn send_refresh(
+    ws_tx: &mut WsSink,
+    pane_id: PaneId,
+    last_seqno: &mut SequenceNo,
+    last_physical_top: &mut isize,
+    format: OutputFormat,
+) -> anyhow::Result<()> {
+    match format {
+        OutputFormat::Ansi => send_full_refresh(ws_tx, pane_id, last_seqno).await,
+        OutputFormat::Json => send_full_refresh_json(ws_tx, pane_id, last_seqno, last_physical_top).await,
+    }
+}
+
+/// Format-aware delta update dispatcher.
+async fn send_delta(
+    ws_tx: &mut WsSink,
+    pane_id: PaneId,
+    last_seqno: &mut SequenceNo,
+    last_physical_top: &mut isize,
+    format: OutputFormat,
+) -> anyhow::Result<()> {
+    match format {
+        OutputFormat::Ansi => send_delta_output(ws_tx, pane_id, last_seqno).await,
+        OutputFormat::Json => send_delta_output_json(ws_tx, pane_id, last_seqno, last_physical_top).await,
+    }
 }
 
 /// Send a full screen refresh for the given pane, including scrollback history.
@@ -325,6 +389,199 @@ async fn send_delta_output(
     Ok(())
 }
 
+/// Send a full screen refresh in JSON span format.
+async fn send_full_refresh_json(
+    ws_tx: &mut WsSink,
+    pane_id: PaneId,
+    last_seqno: &mut SequenceNo,
+    last_physical_top: &mut isize,
+) -> anyhow::Result<()> {
+    let data = promise::spawn::spawn_into_main_thread(async move {
+        let mux = Mux::get();
+        if let Some(pane) = mux.get_pane(pane_id) {
+            let dims = pane.get_dimensions();
+            log::info!(
+                "web full_refresh: physical_top={} viewport_rows={} scrollback_top={} cols={}",
+                dims.physical_top, dims.viewport_rows, dims.scrollback_top, dims.cols
+            );
+
+            // Include up to 1000 scrollback lines above the viewport
+            let scrollback_limit: isize = 1000;
+            let scrollback_start =
+                (dims.physical_top - scrollback_limit).max(dims.scrollback_top);
+            let full_range =
+                scrollback_start..dims.physical_top + dims.viewport_rows as isize;
+            let (first_row, all_lines) = pane.get_lines(full_range);
+
+            let seqno = all_lines
+                .iter()
+                .map(|l| l.current_seqno())
+                .max()
+                .unwrap_or(0);
+
+            // Split into scrollback and viewport portions
+            let viewport_start_idx =
+                (dims.physical_top - first_row) as usize;
+            let viewport_start_idx = viewport_start_idx.min(all_lines.len());
+            let scrollback_lines = &all_lines[..viewport_start_idx];
+            let viewport_end_idx = (viewport_start_idx + dims.viewport_rows).min(all_lines.len());
+            let viewport_lines = &all_lines[viewport_start_idx..viewport_end_idx];
+
+            log::info!(
+                "web full_refresh: first_row={} all_lines={} vp_start_idx={} vp_end_idx={} vp_lines={} sb_lines={}",
+                first_row, all_lines.len(), viewport_start_idx, viewport_end_idx, viewport_lines.len(), scrollback_lines.len()
+            );
+
+            let scrollback_spans = json_render::lines_to_spans(scrollback_lines);
+            let viewport_spans = json_render::lines_to_spans(viewport_lines);
+
+            // Get cursor position (0-based, viewport-relative)
+            let cursor = pane.get_cursor_position();
+            let cursor_y = ((cursor.y - dims.physical_top) as usize).min(dims.viewport_rows.saturating_sub(1));
+            let cursor_info = json_render::CursorInfo {
+                x: cursor.x,
+                y: cursor_y,
+                shape: json_render::cursor_shape_to_string(cursor.shape).to_string(),
+                visible: cursor.visibility == termwiz::surface::CursorVisibility::Visible,
+            };
+
+            Some((scrollback_spans, viewport_spans, cursor_info, seqno, dims.cols, dims.viewport_rows, dims.physical_top, first_row, all_lines.len(), viewport_start_idx, viewport_end_idx))
+        } else {
+            None
+        }
+    })
+    .await;
+
+    if let Some((scrollback_spans, viewport_spans, cursor_info, seqno, cols, rows, physical_top, first_row, all_lines_len, vp_start_idx, vp_end_idx)) = data {
+        *last_seqno = seqno;
+        *last_physical_top = physical_top;
+        let msg = serde_json::json!({
+            "type": "screen",
+            "pane_id": pane_id,
+            "scrollback": scrollback_spans,
+            "viewport": viewport_spans,
+            "cursor": cursor_info,
+            "cols": cols,
+            "rows": rows,
+            "_debug": {
+                "physical_top": physical_top,
+                "first_row": first_row,
+                "all_lines": all_lines_len,
+                "vp_start_idx": vp_start_idx,
+                "vp_end_idx": vp_end_idx,
+                "viewport_rows": rows,
+                "scrollback_sent": vp_start_idx,
+            }
+        });
+        let text: String = msg.to_string();
+        ws_tx.send(Message::Text(text.into())).await?;
+    }
+    Ok(())
+}
+
+/// Send delta output in JSON span format for changed lines since last seqno.
+/// Also detects when content has scrolled off the viewport into scrollback
+/// and includes those lines as `scrollback_append` so the client can maintain
+/// a complete scrollback history.
+async fn send_delta_output_json(
+    ws_tx: &mut WsSink,
+    pane_id: PaneId,
+    last_seqno: &mut SequenceNo,
+    last_physical_top: &mut isize,
+) -> anyhow::Result<()> {
+    let prev_seqno = *last_seqno;
+    let prev_physical_top = *last_physical_top;
+    let data = promise::spawn::spawn_into_main_thread(async move {
+        let mux = Mux::get();
+        if let Some(pane) = mux.get_pane(pane_id) {
+            let dims = pane.get_dimensions();
+            let viewport_range = dims.physical_top
+                ..dims.physical_top + dims.viewport_rows as isize;
+
+            let changed = pane.get_changed_since(viewport_range.clone(), prev_seqno);
+
+            if changed.is_empty() && dims.physical_top == prev_physical_top {
+                return None;
+            }
+
+            // Build map of changed row index → spans.
+            // When physical_top changes, all viewport rows shifted — send them all.
+            let mut lines_map = serde_json::Map::new();
+            if dims.physical_top != prev_physical_top {
+                // Viewport scrolled: every row now shows different content
+                let (first_row, all_lines) = pane.get_lines(viewport_range);
+                let spans = json_render::lines_to_spans(&all_lines);
+                for (i, span_row) in spans.into_iter().enumerate() {
+                    let row_idx = (first_row - dims.physical_top) as usize + i;
+                    if row_idx >= dims.viewport_rows { break; }
+                    lines_map.insert(
+                        row_idx.to_string(),
+                        serde_json::to_value(&span_row).unwrap_or(serde_json::Value::Null),
+                    );
+                }
+            } else {
+                for range in changed.iter() {
+                    let (first_row, lines) = pane.get_lines(range.clone());
+                    let spans = json_render::lines_to_spans(&lines);
+                    for (i, span_row) in spans.into_iter().enumerate() {
+                        let row_idx = (first_row - dims.physical_top) as usize + i;
+                        if row_idx >= dims.viewport_rows { break; }
+                        lines_map.insert(
+                            row_idx.to_string(),
+                            serde_json::to_value(&span_row).unwrap_or(serde_json::Value::Null),
+                        );
+                    }
+                }
+            }
+
+            // Detect lines that scrolled off the viewport into scrollback.
+            // If physical_top increased, those lines moved from viewport → scrollback.
+            let scrollback_append = if dims.physical_top > prev_physical_top {
+                let scroll_start = prev_physical_top;
+                let scroll_end = dims.physical_top;
+                let (_, scrolled_lines) = pane.get_lines(scroll_start..scroll_end);
+                json_render::lines_to_spans(&scrolled_lines)
+            } else {
+                Vec::new()
+            };
+
+            // Get cursor position
+            let cursor = pane.get_cursor_position();
+            let cursor_y = ((cursor.y - dims.physical_top) as usize).min(dims.viewport_rows.saturating_sub(1));
+            let cursor_info = json_render::CursorInfo {
+                x: cursor.x,
+                y: cursor_y,
+                shape: json_render::cursor_shape_to_string(cursor.shape).to_string(),
+                visible: cursor.visibility == termwiz::surface::CursorVisibility::Visible,
+            };
+
+            let new_seqno = get_max_seqno(&pane, &dims);
+            Some((lines_map, scrollback_append, cursor_info, new_seqno, dims.physical_top))
+        } else {
+            None
+        }
+    })
+    .await;
+
+    if let Some((lines_map, scrollback_append, cursor_info, new_seqno, physical_top)) = data {
+        *last_seqno = new_seqno;
+        *last_physical_top = physical_top;
+        let mut msg = serde_json::json!({
+            "type": "screen_delta",
+            "pane_id": pane_id,
+            "lines": serde_json::Value::Object(lines_map),
+            "cursor": cursor_info,
+        });
+        if !scrollback_append.is_empty() {
+            msg["scrollback_append"] = serde_json::to_value(&scrollback_append)
+                .unwrap_or(serde_json::Value::Null);
+        }
+        let text: String = msg.to_string();
+        ws_tx.send(Message::Text(text.into())).await?;
+    }
+    Ok(())
+}
+
 /// Get the max sequence number from current viewport lines.
 fn get_max_seqno(
     pane: &Arc<dyn Pane>,
@@ -353,6 +610,27 @@ async fn send_input_to_pane(pane_id: PaneId, data: String) -> anyhow::Result<()>
     Ok(())
 }
 
+/// Resize a pane's PTY to the given dimensions.
+async fn resize_pane(pane_id: PaneId, cols: usize, rows: usize) -> anyhow::Result<()> {
+    promise::spawn::spawn_into_main_thread(async move {
+        let mux = Mux::get();
+        if let Some(pane) = mux.get_pane(pane_id) {
+            let size = TerminalSize {
+                cols,
+                rows,
+                pixel_width: 0,
+                pixel_height: 0,
+                dpi: 0,
+            };
+            if let Err(e) = pane.resize(size) {
+                log::error!("Failed to resize pane {}: {:#}", pane_id, e);
+            }
+        }
+    })
+    .await;
+    Ok(())
+}
+
 /// Send paste text to a pane.
 async fn send_paste_to_pane(pane_id: PaneId, data: String) -> anyhow::Result<()> {
     promise::spawn::spawn_into_main_thread(async move {
@@ -367,23 +645,3 @@ async fn send_paste_to_pane(pane_id: PaneId, data: String) -> anyhow::Result<()>
     Ok(())
 }
 
-/// Resize a pane via the smol main thread.
-async fn resize_pane(pane_id: PaneId, cols: usize, rows: usize) -> anyhow::Result<()> {
-    promise::spawn::spawn_into_main_thread(async move {
-        let mux = Mux::get();
-        if let Some(pane) = mux.get_pane(pane_id) {
-            let size = terminaler_term::TerminalSize {
-                rows,
-                cols,
-                pixel_width: cols * 8,
-                pixel_height: rows * 16,
-                dpi: 96,
-            };
-            if let Err(e) = pane.resize(size) {
-                log::error!("Failed to resize pane {}: {:#}", pane_id, e);
-            }
-        }
-    })
-    .await;
-    Ok(())
-}

@@ -987,11 +987,16 @@ impl SessionHandler {
                 .detach();
             }
 
+            Pdu::NotifyAlert(NotifyAlert { pane_id, alert }) => {
+                let mux = Mux::get();
+                mux.notify(MuxNotification::Alert { pane_id, alert });
+                send_response(Ok(Pdu::UnitResponse(UnitResponse {})));
+            }
+
             Pdu::Invalid { .. } => send_response(Err(anyhow!("invalid PDU {:?}", decoded.pdu))),
             Pdu::Pong { .. }
             | Pdu::ListPanesResponse { .. }
             | Pdu::SetClipboard { .. }
-            | Pdu::NotifyAlert { .. }
             | Pdu::SpawnResponse { .. }
             | Pdu::GetPaneRenderChangesResponse { .. }
             | Pdu::UnitResponse { .. }

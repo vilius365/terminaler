@@ -15,6 +15,7 @@ mod list_clients;
 mod move_pane_to_new_tab;
 mod proxy;
 mod rename_workspace;
+mod notify;
 mod send_text;
 mod set_tab_title;
 mod set_window_title;
@@ -111,6 +112,11 @@ Outputs the pane-id for the newly created pane on success"
     )]
     SpawnCommand(spawn_command::SpawnCommand),
 
+    /// Send a toast notification to a pane.
+    /// Can be used from Claude Code hooks or other external tools.
+    #[command(name = "notify", rename_all = "kebab")]
+    Notify(notify::Notify),
+
     /// Send text to a pane as though it were pasted.
     /// If bracketed paste mode is enabled in the pane, then the
     /// text will be sent as a bracketed paste.
@@ -184,6 +190,7 @@ async fn run_cli_async(opts: &crate::Opt, cli: CliCommand) -> anyhow::Result<()>
         CliSubCommand::List(cmd) => cmd.run(client).await,
         CliSubCommand::MovePaneToNewTab(cmd) => cmd.run(client).await,
         CliSubCommand::SplitPane(cmd) => cmd.run(client).await,
+        CliSubCommand::Notify(cmd) => cmd.run(client).await,
         CliSubCommand::SendText(cmd) => cmd.run(client).await,
         CliSubCommand::GetText(cmd) => cmd.run(client).await,
         CliSubCommand::SpawnCommand(cmd) => cmd.run(client, &crate::init_config(opts)?).await,

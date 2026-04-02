@@ -894,6 +894,14 @@ pub struct Config {
     /// Slack webhook URL for notifications (e.g., Claude Code awaiting input)
     #[dynamic(default)]
     pub slack_notification_webhook: Option<String>,
+
+    /// Daily budget for Claude API usage in USD. When set, the sidebar shows remaining budget.
+    #[dynamic(default)]
+    pub claude_daily_budget_usd: Option<f32>,
+
+    /// Weekly budget for Claude API usage in USD. When set, the sidebar shows remaining budget.
+    #[dynamic(default)]
+    pub claude_weekly_budget_usd: Option<f32>,
 }
 
 fn default_freetype_load_target() -> FreeTypeLoadTarget {

@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="1.5" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Background: rounded rectangle (terminal window) -->
+  <rect x="8" y="8" width="240" height="240" rx="20" ry="20" fill="#1e1e2e"/>
+
+  <!-- Subtle inner border -->
+  <rect x="8" y="8" width="240" height="240" rx="20" ry="20"
+        fill="none" stroke="#313244" stroke-width="2"/>
+
+  <!-- Prompt chevron ">" -->
+  <text x="48" y="162" font-family="Consolas, 'Courier New', monospace"
+        font-size="120" font-weight="bold" fill="#89dceb" filter="url(#glow)">
+    &gt;_
+  </text>
+
+  <!-- Block cursor -->
+  <rect x="196" y="104" width="24" height="60" rx="2" ry="2"
+        fill="#89dceb" opacity="0.85" filter="url(#glow)"/>
+</svg>

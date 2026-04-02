@@ -124,8 +124,7 @@ impl super::TermWindow {
         if let Err(err) = self.recreate_texture_atlas(None) {
             log::error!("recreate_texture_atlas: {:#}", err);
         }
-        self.invalidate_fancy_tab_bar();
-        self.invalidate_tab_sidebar();
+        self.update_title();
         self.invalidate_modal();
     }
 
@@ -479,45 +478,6 @@ impl super::TermWindow {
             // Now revise the pty size to fit the window
             self.apply_dimensions(&dimensions, None, window);
         }
-    }
-
-    pub fn decrease_font_size(&mut self) {
-        self.pending_scale_changes
-            .push_back(ScaleChange::Relative(1.0 / 1.1));
-        self.apply_pending_scale_changes();
-    }
-
-    pub fn increase_font_size(&mut self) {
-        self.pending_scale_changes
-            .push_back(ScaleChange::Relative(1.1));
-        self.apply_pending_scale_changes();
-    }
-
-    pub fn reset_font_size(&mut self) {
-        // Reset per-pane font scale for the active pane
-        if let Some(pane) = self.get_active_pane_or_overlay() {
-            let pane_id = pane.pane_id();
-            let had_scale = {
-                let mut states = self.pane_state.borrow_mut();
-                if let Some(state) = states.get_mut(&pane_id) {
-                    let had = (state.font_scale - 1.0).abs() > 0.001;
-                    state.font_scale = 1.0;
-                    had
-                } else {
-                    false
-                }
-            };
-            if had_scale {
-                self.resize_pane_for_font_scale(pane_id);
-                self.shape_generation += 1;
-                self.shape_cache.borrow_mut().clear();
-                return;
-            }
-        }
-        // If the active pane had no per-pane scale, fall through to global reset
-        self.pending_scale_changes
-            .push_back(ScaleChange::Absolute(1.0));
-        self.apply_pending_scale_changes();
     }
 
     pub fn set_window_size(&mut self, size: TerminalSize, window: &Window) -> anyhow::Result<()> {

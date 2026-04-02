@@ -2970,6 +2970,11 @@ unsafe fn do_wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> 
             }
             None
         }
+        // WM_APP + 100: deferred SetFocus posted by WebView sidebar
+        x if x == WM_APP + 100 => {
+            SetFocus(hwnd);
+            Some(0)
+        }
         _ => {
             if matches!(
                 msg,

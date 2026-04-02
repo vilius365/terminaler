@@ -412,7 +412,7 @@ impl crate::TermWindow {
         // Multiple concentric bands with decreasing alpha create a feathered
         // edge effect that works well with Windows 11 rounded corners.
         if pos.is_active {
-            let base_color = window::color::LinearRgba(0.7, 0.7, 0.7, 1.0);
+            let base_color = window::color::LinearRgba(0.6, 0.6, 0.6, 1.0);
             let glow_width = 4.0_f32; // total glow depth in pixels
             let bands: u32 = 4;
             let band_size = glow_width / bands as f32;
@@ -487,7 +487,7 @@ impl crate::TermWindow {
             );
             let abs_thumb_top = thumb_y_offset + info.top;
             let thumb_size = info.height;
-            let color = window::color::LinearRgba(0.6, 0.6, 0.6, 1.0);
+            let color = window::color::LinearRgba(0.4, 0.4, 0.4, 1.0);
 
             // Adjust the scrollbar thumb position
             let config = &self.config;
@@ -1062,8 +1062,8 @@ impl crate::TermWindow {
             ),
         };
 
-        // Semi-transparent accent color (blue at 30% alpha)
-        let color = window::color::LinearRgba(0.2, 0.4, 0.8, 0.3);
+        // Semi-transparent accent color (accent-blue at 30% alpha)
+        let color = window::color::LinearRgba(0.302, 0.620, 1.0, 0.3);
 
         self.filled_rectangle(layers, 2, overlay_rect, color)
             .context("paint_drop_zone_overlay")?;
@@ -1141,9 +1141,9 @@ impl crate::TermWindow {
         let grid_top = cy - grid_h / 2.0;
 
         let white = window::color::LinearRgba(1.0, 1.0, 1.0, 0.85);
-        let close_bg = window::color::LinearRgba(0.85, 0.15, 0.15, 0.95);
-        let layout_bg = window::color::LinearRgba(0.2, 0.25, 0.35, 0.95);
-        let tab_bg = window::color::LinearRgba(0.15, 0.45, 0.65, 0.95);
+        let close_bg = window::color::LinearRgba(0.973, 0.318, 0.286, 0.95);
+        let layout_bg = window::color::LinearRgba(0.133, 0.133, 0.133, 0.95);
+        let tab_bg = window::color::LinearRgba(0.302, 0.620, 1.0, 0.8);
         let icon_sz: euclid::Size2D<f32, window::PixelUnit> = euclid::size2(48.0, 48.0);
         let icon_area = 48.0f32;
 
@@ -1299,7 +1299,7 @@ impl crate::TermWindow {
         let is_expanded = self.toast_expanded_for == Some(hovered_id)
             && pane_visual_width >= TOAST_WIDTH + 10.0;
 
-        let bg_color = window::color::LinearRgba(0.12, 0.14, 0.12, 0.55);
+        let bg_color = window::color::LinearRgba(0.102, 0.102, 0.102, 0.55);
         let btn_bg = window::color::LinearRgba(1.0, 1.0, 1.0, 0.10);
         let white = window::color::LinearRgba(1.0, 1.0, 1.0, 0.92);
         let icon_sz: euclid::Size2D<f32, window::PixelUnit> =
@@ -1319,7 +1319,7 @@ impl crate::TermWindow {
                 bg_color,
             ).context("toast toolbar bg")?;
 
-            let close_btn_bg = window::color::LinearRgba(0.85, 0.2, 0.2, 0.45);
+            let close_btn_bg = window::color::LinearRgba(0.973, 0.318, 0.286, 0.45);
 
             for i in 0..TOAST_COUNT {
                 let bx = toast_left + TOAST_PADDING + i as f32 * (TOAST_BTN_SIZE + TOAST_GAP);

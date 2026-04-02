@@ -55,6 +55,10 @@ pub fn default_config_content() -> String {
 
     // Slack webhook for mobile/remote notifications (e.g., Claude Code)
     // "slack_notification_webhook": "https://hooks.slack.com/services/T.../B.../..."
+
+    // Claude usage budgets (USD) — shown in sidebar stats card
+    // "claude_daily_budget_usd": 5.0,
+    // "claude_weekly_budget_usd": 25.0
 }
 "#
     .to_string()

@@ -7,7 +7,7 @@ use downcast_rs::{impl_downcast, Downcast};
 use parking_lot::MappedMutexGuard;
 use rangeset::RangeSet;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::sync::Arc;
 use termwiz::hyperlink::Rule;
@@ -327,6 +327,14 @@ pub trait Pane: Downcast + Send + Sync {
         _policy: CachePolicy,
     ) -> Option<procinfo::LocalProcessInfo> {
         None
+    }
+
+    /// Returns the set of all executable basenames in the process tree
+    /// rooted at this pane's shell process. Used to detect whether a
+    /// specific program (e.g. "claude.exe") is running anywhere in the
+    /// pane, not just as the foreground (youngest) process.
+    fn get_process_names_in_tree(&self, _policy: CachePolicy) -> HashSet<String> {
+        HashSet::new()
     }
 
     fn tty_name(&self) -> Option<String> {
