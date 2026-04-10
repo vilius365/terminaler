@@ -467,73 +467,75 @@ impl crate::TermWindow {
             }
         }
 
-        // TODO: we only have a single scrollbar in a single position.
-        // We only update it for the active pane, but we should probably
-        // do a per-pane scrollbar.  That will require more extensive
-        // changes to ScrollHit, mouse positioning, PositionedPane
-        // and tab size calculation.
-        if pos.is_active && self.show_scroll_bar && dims.scrollback_rows > dims.viewport_rows {
-            let thumb_y_offset = top_bar_height as usize + border.top.get();
+        // Per-pane scrollbar: rendered inside each pane's pixel bounds
+        if self.show_scroll_bar && dims.scrollback_rows > dims.viewport_rows {
+            let pane_top_pixel = top_pixel_y as usize
+                + pos.top * self.render_metrics.cell_size.height as usize;
+            let pane_height_pixel = pos.pixel_height;
 
             let min_height = self.min_scroll_bar_height();
 
             let info = ScrollHit::thumb(
                 &*pos.pane,
                 current_viewport,
-                self.dimensions.pixel_height.saturating_sub(
-                    thumb_y_offset + border.bottom.get() + bottom_bar_height as usize,
-                ),
+                pane_height_pixel,
                 min_height as usize,
             );
-            let abs_thumb_top = thumb_y_offset + info.top;
+            let abs_thumb_top = pane_top_pixel + info.top;
             let thumb_size = info.height;
-            let color = window::color::LinearRgba(0.4, 0.4, 0.4, 1.0);
+            let color = if pos.is_active {
+                window::color::LinearRgba(0.5, 0.5, 0.5, 0.8)
+            } else {
+                window::color::LinearRgba(0.4, 0.4, 0.4, 0.5)
+            };
 
-            // Adjust the scrollbar thumb position
-            let config = &self.config;
-            let padding = self.effective_right_padding(&config) as f32;
+            // Position scrollbar at the right edge of this pane
+            let scrollbar_width = 6.0f32;
+            let hit_width = 12usize; // wider hit area for easier clicking
+            let pane_right_pixel = padding_left as usize
+                + border.left.get()
+                + sidebar_offset as usize
+                + (pos.left + pos.width) * self.render_metrics.cell_size.width as usize;
+            let thumb_x = pane_right_pixel.saturating_sub(hit_width);
 
-            let thumb_x = self.dimensions.pixel_width - padding as usize - border.right.get();
-
-            // Register the scroll bar location
+            // Register the scroll bar location for mouse hit-testing
             self.ui_items.push(UIItem {
                 x: thumb_x,
-                width: padding as usize,
-                y: thumb_y_offset,
+                width: hit_width,
+                y: pane_top_pixel,
                 height: info.top,
-                item_type: UIItemType::AboveScrollThumb,
+                item_type: UIItemType::AboveScrollThumb { pane_id },
             });
             self.ui_items.push(UIItem {
                 x: thumb_x,
-                width: padding as usize,
+                width: hit_width,
                 y: abs_thumb_top,
                 height: thumb_size,
-                item_type: UIItemType::ScrollThumb,
+                item_type: UIItemType::ScrollThumb { pane_id },
             });
             self.ui_items.push(UIItem {
                 x: thumb_x,
-                width: padding as usize,
+                width: hit_width,
                 y: abs_thumb_top + thumb_size,
-                height: self
-                    .dimensions
-                    .pixel_height
+                height: (pane_top_pixel + pane_height_pixel)
                     .saturating_sub(abs_thumb_top + thumb_size),
-                item_type: UIItemType::BelowScrollThumb,
+                item_type: UIItemType::BelowScrollThumb { pane_id },
             });
 
-            let thumb_width = padding.min(6.0);
+            // Draw the visible thumb
+            let draw_x = pane_right_pixel as f32 - scrollbar_width;
             self.filled_rectangle(
                 layers,
                 2,
                 euclid::rect(
-                    thumb_x as f32 + padding - thumb_width,
+                    draw_x,
                     abs_thumb_top as f32,
-                    thumb_width,
+                    scrollbar_width,
                     thumb_size as f32,
                 ),
                 color,
             )
-            .context("filled_rectangle")?;
+            .context("per-pane scrollbar")?;
         }
 
         // --- Per-pane font scaling for text rendering ---

@@ -199,6 +199,50 @@
     color: #fff;
     opacity: 1;
   }
+  .card-hide {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 9px;
+    color: var(--text-tertiary);
+    opacity: 0;
+    transition: opacity var(--transition), background var(--transition), color var(--transition);
+    flex-shrink: 0;
+    line-height: 1;
+    border: none;
+    background: none;
+    cursor: pointer;
+    font-family: var(--font-ui);
+    margin-left: 2px;
+  }
+  .card:hover .card-hide { opacity: 0.7; }
+  .card-hide:hover {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    opacity: 1;
+  }
+  .card-unhide {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 10px;
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+    background: none;
+    cursor: pointer;
+    font-family: var(--font-ui);
+    transition: background var(--transition), color var(--transition);
+    margin-left: auto;
+  }
+  .card-unhide:hover {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+  }
 
   .card-meta {
     font-size: 11px;
@@ -824,8 +868,20 @@ function renderTab(tab) {
         tab.panes.forEach(function(pane, idx) {
             const paneLabel = pane.title || pane.cwdShort || 'pane';
             const paneActive = pane.isActive && isActive;
+            const isHidden = pane.isHidden;
 
-            if (pane.claudeInfo) {
+            // Hide button (shown on hover for visible panes)
+            const hideBtn = '<button class="card-hide" title="Hide pane (Ctrl+Shift+H)" onclick="event.stopPropagation();sendAction({type:\'toggle_hidden\',paneId:' + pane.paneId + '})">&#9660;</button>';
+
+            if (isHidden) {
+                // Hidden pane: dimmed card with unhide button
+                html += '<div class="card" style="padding:6px 10px;margin:0;opacity:0.45" onclick="event.stopPropagation();sendAction({type:\'unhide_pane\',paneId:' + pane.paneId + '})">';
+                html += '<div class="card-header">';
+                html += '<span class="card-title card-title-inactive" style="font-style:italic">' + escHtml(paneLabel) + '</span>';
+                html += '<button class="card-unhide" title="Show pane" onclick="event.stopPropagation();sendAction({type:\'unhide_pane\',paneId:' + pane.paneId + '})">&#9650; show</button>';
+                html += '</div>';
+                html += '</div>';
+            } else if (pane.claudeInfo) {
                 // Full Claude card for this pane
                 const paneAccent = claudeAccentClass(pane.claudeInfo);
                 const paneFlash = pane.hasNotification ? ' flashing' : '';
@@ -833,6 +889,7 @@ function renderTab(tab) {
                 html += '<div class="card-accent ' + paneAccent + '"></div>';
                 html += '<div class="card-header">';
                 html += '<span class="card-title card-title-claude">' + escHtml(pane.claudeInfo.model || 'claude') + '</span>';
+                html += hideBtn;
                 html += '<button class="card-close" onclick="event.stopPropagation();sendAction({type:\'close_pane\',paneId:' + pane.paneId + '})">&times;</button>';
                 html += '</div>';
                 html += renderClaudeCard(pane.claudeInfo, pane.cwdShort, null);
@@ -845,6 +902,7 @@ function renderTab(tab) {
                 if (paneAccentNorm) html += '<div class="card-accent ' + paneAccentNorm + '"></div>';
                 html += '<div class="card-header">';
                 html += '<span class="card-title' + (paneActive ? '' : ' card-title-inactive') + '">' + escHtml(paneLabel) + '</span>';
+                html += hideBtn;
                 html += '<button class="card-close" onclick="event.stopPropagation();sendAction({type:\'close_pane\',paneId:' + pane.paneId + '})">&times;</button>';
                 html += '</div>';
                 if (pane.cwdShort) {

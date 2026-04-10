@@ -357,9 +357,18 @@ impl LocalProcessInfo {
     }
 
     pub fn with_root_pid(pid: u32) -> Option<Self> {
+        let start = std::time::Instant::now();
         log::trace!("LocalProcessInfo::with_root_pid({}), getting snapshot", pid);
         let procs = Snapshot::entries();
-        log::trace!("Got snapshot");
+        let snap_elapsed = start.elapsed();
+        if snap_elapsed > std::time::Duration::from_millis(50) {
+            log::warn!(
+                "SLOW CreateToolhelp32Snapshot: {:?} ({} processes)",
+                snap_elapsed,
+                procs.len()
+            );
+        }
+        log::trace!("Got snapshot ({} entries in {:?})", procs.len(), snap_elapsed);
 
         fn build_proc(info: &PROCESSENTRY32W, procs: &[PROCESSENTRY32W]) -> LocalProcessInfo {
             let mut children = HashMap::new();
@@ -376,6 +385,7 @@ impl LocalProcessInfo {
             let mut argv = vec![];
             let mut console = 0;
 
+            let proc_start = std::time::Instant::now();
             if let Some(proc) = ProcHandle::new(info.th32ProcessID) {
                 if let Some(exe) = proc.executable() {
                     executable.replace(exe);
@@ -388,6 +398,14 @@ impl LocalProcessInfo {
                 if let Some(start) = proc.start_time() {
                     start_time = start;
                 }
+            }
+            let proc_elapsed = proc_start.elapsed();
+            if proc_elapsed > std::time::Duration::from_millis(500) {
+                log::warn!(
+                    "SLOW build_proc: pid={} took {:?} (OpenProcess+ReadProcessMemory)",
+                    info.th32ProcessID,
+                    proc_elapsed
+                );
             }
 
             let executable = executable.unwrap_or_else(|| wstr_to_path(&info.szExeFile));

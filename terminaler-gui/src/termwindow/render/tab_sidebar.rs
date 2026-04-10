@@ -94,14 +94,33 @@ impl crate::TermWindow {
                 None => String::new(),
             };
 
+            let git_start = Instant::now();
             let git_branch = cwd_path.as_deref().and_then(find_git_branch);
+            let git_elapsed = git_start.elapsed();
+            if git_elapsed > Duration::from_millis(100) {
+                log::warn!(
+                    "update_sidebar_info: find_git_branch took {:?} for tab {}",
+                    git_elapsed,
+                    tab_id
+                );
+            }
 
             // Detect Claude Code sessions on ALL panes in the tab
             use crate::termwindow::{ClaudeSessionInfo, ClaudeStatus};
             let mut pane_claude_info = std::collections::HashMap::new();
             for pane_pos in tab.iter_panes_ignoring_zoom() {
                 let pane = &pane_pos.pane;
+                let proc_start = Instant::now();
                 let process_name = pane.get_foreground_process_name(CachePolicy::AllowStale);
+                let proc_elapsed = proc_start.elapsed();
+                if proc_elapsed > Duration::from_millis(100) {
+                    log::warn!(
+                        "update_sidebar_info: get_foreground_process_name took {:?} for pane {} in tab {}",
+                        proc_elapsed,
+                        pane.pane_id(),
+                        tab_id
+                    );
+                }
                 let pane_title = pane.get_title();
                 let user_vars = pane.copy_user_vars();
                 // Detect Claude via:
@@ -117,7 +136,17 @@ impl crate::TermWindow {
                 //    remote session. Do NOT key off other claude_* vars (e.g.
                 //    claude_model): they are never cleared and would make the
                 //    card persist after Claude exits (see commit 8d2de52).
+                let tree_start = Instant::now();
                 let tree_names = pane.get_process_names_in_tree(CachePolicy::AllowStale);
+                let tree_elapsed = tree_start.elapsed();
+                if tree_elapsed > Duration::from_millis(100) {
+                    log::warn!(
+                        "update_sidebar_info: get_process_names_in_tree took {:?} for pane {} in tab {}",
+                        tree_elapsed,
+                        pane.pane_id(),
+                        tab_id
+                    );
+                }
                 let has_active_claude_vars = user_vars
                     .get("claude_status")
                     .map_or(false, |v| !v.is_empty());

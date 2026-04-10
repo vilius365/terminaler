@@ -39,9 +39,9 @@ impl super::TermWindow {
                 self.update_title_post_status();
             }
             UIItemType::CloseTab(_)
-            | UIItemType::AboveScrollThumb
-            | UIItemType::BelowScrollThumb
-            | UIItemType::ScrollThumb
+            | UIItemType::AboveScrollThumb { .. }
+            | UIItemType::BelowScrollThumb { .. }
+            | UIItemType::ScrollThumb { .. }
             | UIItemType::Split(_)
             | UIItemType::ProfileDropdownItem(_)
             | UIItemType::TabSidebar(_) => {}
@@ -52,9 +52,9 @@ impl super::TermWindow {
         match item.item_type {
             UIItemType::TabBar(_) => {}
             UIItemType::CloseTab(_)
-            | UIItemType::AboveScrollThumb
-            | UIItemType::BelowScrollThumb
-            | UIItemType::ScrollThumb
+            | UIItemType::AboveScrollThumb { .. }
+            | UIItemType::BelowScrollThumb { .. }
+            | UIItemType::ScrollThumb { .. }
             | UIItemType::Split(_)
             | UIItemType::ProfileDropdownItem(_)
             | UIItemType::TabSidebar(_) => {}
@@ -502,11 +502,12 @@ impl super::TermWindow {
     fn drag_scroll_thumb(
         &mut self,
         item: UIItem,
+        pane_id: usize,
         start_event: MouseEvent,
         event: MouseEvent,
         context: &dyn WindowOps,
     ) {
-        let pane = match self.get_active_pane_or_overlay() {
+        let pane = match mux::Mux::get().get_pane(pane_id) {
             Some(pane) => pane,
             None => return,
         };
@@ -514,26 +515,22 @@ impl super::TermWindow {
         let dims = pane.get_dimensions();
         let current_viewport = self.get_viewport(pane.pane_id());
 
-        let tab_bar_height = if self.show_tab_bar {
-            self.tab_bar_pixel_height().unwrap_or(0.)
-        } else {
-            0.
-        };
-        let (top_bar_height, bottom_bar_height) = if self.config.tab_bar_at_bottom {
-            (0.0, tab_bar_height)
-        } else {
-            (tab_bar_height, 0.0)
-        };
-
-        let border = self.get_os_border();
-        let y_offset = top_bar_height + border.top.get() as f32;
+        // The UIItem's y position is the pane's scrollbar top.
+        // Use the item geometry to compute the available scroll area.
+        let pane_scroll_top = item.y;
 
         let from_top = start_event.coords.y.saturating_sub(item.y as isize);
         let effective_thumb_top = event
             .coords
             .y
-            .saturating_sub(y_offset as isize + from_top)
+            .saturating_sub(pane_scroll_top as isize + from_top)
             .max(0) as usize;
+
+        // The max_thumb_height is the pane's pixel height (stored as the
+        // total height of above + thumb + below scroll regions).
+        // We can derive it from the pane dimensions.
+        let pane_pixel_height = (dims.viewport_rows * self.render_metrics.cell_size.height as usize)
+            .min(item.height + 1);
 
         // Convert thumb top into a row index by reversing the math
         // in ScrollHit::thumb
@@ -541,9 +538,7 @@ impl super::TermWindow {
             effective_thumb_top,
             &*pane,
             current_viewport,
-            self.dimensions.pixel_height.saturating_sub(
-                y_offset as usize + border.bottom.get() + bottom_bar_height as usize,
-            ),
+            pane_pixel_height,
             self.min_scroll_bar_height() as usize,
         );
         self.set_viewport(pane.pane_id(), Some(row), dims);
@@ -564,8 +559,8 @@ impl super::TermWindow {
             UIItemType::Split(split) => {
                 self.drag_split(item, split, start_event, x, y, context);
             }
-            UIItemType::ScrollThumb => {
-                self.drag_scroll_thumb(item, start_event, event, context);
+            UIItemType::ScrollThumb { pane_id } => {
+                self.drag_scroll_thumb(item, pane_id, start_event, event, context);
             }
             UIItemType::TabSidebar(TabSidebarItem::ResizeHandle) => {
                 self.drag_sidebar_resize(item, start_event, event, context);
@@ -589,14 +584,23 @@ impl super::TermWindow {
             UIItemType::TabBar(item) => {
                 self.mouse_event_tab_bar(item, event, context);
             }
-            UIItemType::AboveScrollThumb => {
-                self.mouse_event_above_scroll_thumb(item, pane, event, context);
+            UIItemType::AboveScrollThumb { pane_id } => {
+                let scroll_pane = mux::Mux::get()
+                    .get_pane(pane_id)
+                    .unwrap_or_else(|| pane.clone());
+                self.mouse_event_above_scroll_thumb(item, scroll_pane, event, context);
             }
-            UIItemType::ScrollThumb => {
-                self.mouse_event_scroll_thumb(item, pane, event, context);
+            UIItemType::ScrollThumb { pane_id } => {
+                let scroll_pane = mux::Mux::get()
+                    .get_pane(pane_id)
+                    .unwrap_or_else(|| pane.clone());
+                self.mouse_event_scroll_thumb(item, scroll_pane, event, context);
             }
-            UIItemType::BelowScrollThumb => {
-                self.mouse_event_below_scroll_thumb(item, pane, event, context);
+            UIItemType::BelowScrollThumb { pane_id } => {
+                let scroll_pane = mux::Mux::get()
+                    .get_pane(pane_id)
+                    .unwrap_or_else(|| pane.clone());
+                self.mouse_event_below_scroll_thumb(item, scroll_pane, event, context);
             }
             UIItemType::Split(split) => {
                 self.mouse_event_split(item, split, event, context);

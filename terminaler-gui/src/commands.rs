@@ -1606,6 +1606,14 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             menubar: &["Window"],
             icon: Some("md_fullscreen"),
         },
+        TogglePaneHidden => CommandDef {
+            brief: "Toggle Pane Hidden".into(),
+            doc: "Hides the active pane from the layout. The pane stays alive and appears in the sidebar with an option to unhide.".into(),
+            keys: vec![(Modifiers::CTRL.union(Modifiers::SHIFT), "h".into())],
+            args: &[ArgType::ActivePane],
+            menubar: &["Window"],
+            icon: Some("md_visibility_off"),
+        },
         ActivateLastTab => CommandDef {
             brief: "Activate the last active tab".into(),
             doc: "If there was no prior active tab, has no effect.".into(),
@@ -2175,6 +2183,7 @@ fn compute_default_actions() -> Vec<KeyAssignment> {
         ActivatePaneDirection(PaneDirection::Up),
         ActivatePaneDirection(PaneDirection::Down),
         TogglePaneZoomState,
+        TogglePaneHidden,
         ActivateLastTab,
         ShowLauncher,
         ShowTabNavigator,

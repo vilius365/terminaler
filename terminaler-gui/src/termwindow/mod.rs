@@ -352,9 +352,9 @@ pub enum TabSidebarItem {
 pub enum UIItemType {
     TabBar(TabBarItem),
     CloseTab(usize),
-    AboveScrollThumb,
-    ScrollThumb,
-    BelowScrollThumb,
+    AboveScrollThumb { pane_id: usize },
+    ScrollThumb { pane_id: usize },
+    BelowScrollThumb { pane_id: usize },
     Split(PositionedSplit),
     ProfileDropdownItem(usize),
     TabSidebar(TabSidebarItem),
@@ -3817,6 +3817,28 @@ impl TermWindow {
                 };
                 tab.toggle_zoom();
             }
+            TogglePaneHidden => {
+                let mux = Mux::get();
+                let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
+                    Some(tab) => tab,
+                    None => return Ok(PerformAssignmentResult::Handled),
+                };
+                if let Some(pane) = tab.get_active_pane() {
+                    tab.toggle_pane_hidden(pane.pane_id());
+                    self.invalidate_tab_sidebar();
+                }
+            }
+            UnhidePane(pane_id) => {
+                let mux = Mux::get();
+                let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
+                    Some(tab) => tab,
+                    None => return Ok(PerformAssignmentResult::Handled),
+                };
+                if tab.is_pane_hidden(*pane_id) {
+                    tab.toggle_pane_hidden(*pane_id);
+                    self.invalidate_tab_sidebar();
+                }
+            }
             SetPaneZoomState(zoomed) => {
                 let mux = Mux::get();
                 let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
@@ -4196,6 +4218,34 @@ impl TermWindow {
                 }
                 log::info!("Zoom reset to 100% (via sidebar)");
             }
+            "toggle_hidden" => {
+                if let Some(pane_id) = action["paneId"].as_u64() {
+                    let pane_id = pane_id as PaneId;
+                    let mux = mux::Mux::get();
+                    if let Some(tab) = mux.get_active_tab_for_window(self.mux_window_id) {
+                        tab.toggle_pane_hidden(pane_id);
+                        self.invalidate_tab_sidebar();
+                        if let Some(w) = self.window.as_ref() {
+                            w.invalidate();
+                        }
+                    }
+                }
+            }
+            "unhide_pane" => {
+                if let Some(pane_id) = action["paneId"].as_u64() {
+                    let pane_id = pane_id as PaneId;
+                    let mux = mux::Mux::get();
+                    if let Some(tab) = mux.get_active_tab_for_window(self.mux_window_id) {
+                        if tab.is_pane_hidden(pane_id) {
+                            tab.toggle_pane_hidden(pane_id);
+                            self.invalidate_tab_sidebar();
+                            if let Some(w) = self.window.as_ref() {
+                                w.invalidate();
+                            }
+                        }
+                    }
+                }
+            }
             "refocus" | _ if action_type.is_empty() => {}
             _ => {
                 log::trace!("Unknown sidebar IPC action: {}", msg);
@@ -4230,6 +4280,7 @@ impl TermWindow {
                 let title = tab.get_title();
                 let info = self.tab_sidebar_info.get(&tab_id);
                 let panes = tab.iter_panes_ignoring_zoom();
+                let hidden_ids = tab.hidden_pane_ids();
                 let has_multiple_panes = panes.len() > 1;
 
                 let has_notification = self
@@ -4283,6 +4334,7 @@ impl TermWindow {
                                 "title": pane_title,
                                 "cwdShort": pane_cwd,
                                 "isActive": pp.is_active,
+                                "isHidden": hidden_ids.contains(&pane_id),
                                 "hasNotification": pane_has_notif,
                                 "claudeInfo": pane_claude.map(|c| claude_to_json(c)),
                             })
