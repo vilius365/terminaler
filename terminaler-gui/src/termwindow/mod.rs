@@ -861,7 +861,6 @@ impl TermWindow {
                 None
             }
         };
-
         let myself = Self {
             created: Instant::now(),
             connection_name,

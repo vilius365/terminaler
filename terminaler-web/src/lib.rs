@@ -69,7 +69,7 @@ impl From<&WebAccessConfig> for WebConfig {
 /// 5. Returns a handle for shutdown
 pub fn start_web_server(config: WebConfig) -> anyhow::Result<WebServerHandle> {
     let token = auth::load_or_create_token(config.token.as_deref())?;
-    let url = format!("http://{}/?token={}", config.bind_address, token);
+    let url = format!("http://{}", config.bind_address);
     log::info!("Web access server starting on {}", url);
     write_status("STARTING");
 
@@ -95,6 +95,7 @@ pub fn start_web_server(config: WebConfig) -> anyhow::Result<WebServerHandle> {
         .spawn({
             let bridge = bridge.clone();
             let token = token_arc.clone();
+            let bind_address = bind_address.clone();
             move || {
                 let rt = tokio::runtime::Builder::new_multi_thread()
                     .worker_threads(2)

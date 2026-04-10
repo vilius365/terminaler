@@ -32,7 +32,7 @@ impl Drop for WglWrapper {
 }
 
 impl WglWrapper {
-    fn load() -> anyhow::Result<Self> {
+    fn load(force_swrast: bool) -> anyhow::Result<Self> {
         let class_name = wide_string("terminaler wgl extension probing window");
         let h_inst = unsafe { GetModuleHandleW(null()) };
         let class = WNDCLASSW {
@@ -78,7 +78,7 @@ impl WglWrapper {
             anyhow::bail!("CreateWindowExW: {}", err);
         }
 
-        let mut state = GlState::create_basic(WglWrapper::create()?, hwnd)?;
+        let mut state = GlState::create_basic(WglWrapper::create(force_swrast)?, hwnd)?;
 
         unsafe {
             state.make_current();
@@ -91,8 +91,8 @@ impl WglWrapper {
         Ok(state.into_wrapper())
     }
 
-    fn create() -> anyhow::Result<Self> {
-        if crate::configuration::prefer_swrast() {
+    fn create(force_swrast: bool) -> anyhow::Result<Self> {
+        if force_swrast || crate::configuration::prefer_swrast() {
             let mesa_dir = std::env::current_exe()
                 .unwrap()
                 .parent()
@@ -162,7 +162,15 @@ impl GlState {
     }
 
     pub fn create(window: HWND) -> anyhow::Result<Self> {
-        let wgl = WglWrapper::load()?;
+        Self::create_impl(window, false)
+    }
+
+    pub fn create_with_swrast(window: HWND) -> anyhow::Result<Self> {
+        Self::create_impl(window, true)
+    }
+
+    fn create_impl(window: HWND, force_swrast: bool) -> anyhow::Result<Self> {
+        let wgl = WglWrapper::load(force_swrast)?;
 
         if let Some(ext) = wgl.ext.as_ref() {
             let hdc = unsafe { GetDC(window) };
@@ -190,7 +198,7 @@ impl GlState {
                             ({}), fall back to basic",
                             err
                         );
-                        let wgl = WglWrapper::load()?;
+                        let wgl = WglWrapper::load(force_swrast)?;
                         Self::create_basic(wgl, window)
                     }
                 };

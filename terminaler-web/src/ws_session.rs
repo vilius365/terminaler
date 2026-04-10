@@ -159,10 +159,7 @@ async fn handle_client_message(
             send_refresh(ws_tx, pane_id, last_seqno, last_physical_top, *output_format).await?;
         }
         "input" => {
-            let pane_id = msg
-                .get("pane_id")
-                .and_then(|v| v.as_u64())
-                .ok_or_else(|| anyhow::anyhow!("missing pane_id"))? as PaneId;
+            let pane_id = require_attached_pane(msg.get("pane_id"), *attached_pane_id)?;
             let data = msg
                 .get("data")
                 .and_then(|v| v.as_str())
@@ -171,10 +168,7 @@ async fn handle_client_message(
             send_input_to_pane(pane_id, data.to_string()).await?;
         }
         "paste" => {
-            let pane_id = msg
-                .get("pane_id")
-                .and_then(|v| v.as_u64())
-                .ok_or_else(|| anyhow::anyhow!("missing pane_id"))? as PaneId;
+            let pane_id = require_attached_pane(msg.get("pane_id"), *attached_pane_id)?;
             let data = msg
                 .get("data")
                 .and_then(|v| v.as_str())
@@ -183,10 +177,7 @@ async fn handle_client_message(
             send_paste_to_pane(pane_id, data.to_string()).await?;
         }
         "resize" => {
-            let pane_id = msg
-                .get("pane_id")
-                .and_then(|v| v.as_u64())
-                .ok_or_else(|| anyhow::anyhow!("missing pane_id"))? as PaneId;
+            let pane_id = require_attached_pane(msg.get("pane_id"), *attached_pane_id)?;
             let cols = msg
                 .get("cols")
                 .and_then(|v| v.as_u64())
@@ -211,6 +202,20 @@ async fn handle_client_message(
         }
     }
     Ok(())
+}
+
+fn require_attached_pane(
+    requested_pane_id: Option<&serde_json::Value>,
+    attached_pane_id: Option<PaneId>,
+) -> anyhow::Result<PaneId> {
+    let attached_pane_id = attached_pane_id.ok_or_else(|| anyhow::anyhow!("no pane attached"))?;
+    if let Some(requested_pane_id) = requested_pane_id.and_then(|v| v.as_u64()) {
+        let requested_pane_id = requested_pane_id as PaneId;
+        if requested_pane_id != attached_pane_id {
+            anyhow::bail!("pane_id {} is not attached to this session", requested_pane_id);
+        }
+    }
+    Ok(attached_pane_id)
 }
 
 /// Build the pane list by dispatching to the smol main thread.

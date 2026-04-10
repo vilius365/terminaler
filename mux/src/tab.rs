@@ -293,11 +293,13 @@ fn pane_tree(
 fn convert_tree_to_session_layout(
     tree: &Tree,
     active: Option<&Arc<dyn Pane>>,
+    hidden: &HashSet<PaneId>,
 ) -> PaneLayoutNode {
     match tree {
         Tree::Empty => PaneLayoutNode::Pane {
             cwd: None,
             command: None,
+            hidden: false,
             is_active: false,
         },
         Tree::Leaf(pane) => {
@@ -309,6 +311,7 @@ fn convert_tree_to_session_layout(
             PaneLayoutNode::Pane {
                 cwd,
                 command: None,
+                hidden: hidden.contains(&pane.pane_id()),
                 is_active,
             }
         }
@@ -339,8 +342,8 @@ fn convert_tree_to_session_layout(
             PaneLayoutNode::Split {
                 direction,
                 ratio,
-                first: Box::new(convert_tree_to_session_layout(left, active)),
-                second: Box::new(convert_tree_to_session_layout(right, active)),
+                first: Box::new(convert_tree_to_session_layout(left, active, hidden)),
+                second: Box::new(convert_tree_to_session_layout(right, active, hidden)),
             }
         }
     }
@@ -1121,10 +1124,11 @@ impl TabInner {
     fn session_layout_tree(&mut self) -> PaneLayoutNode {
         let active = self.get_active_pane();
         match self.pane.as_ref() {
-            Some(tree) => convert_tree_to_session_layout(tree, active.as_ref()),
+            Some(tree) => convert_tree_to_session_layout(tree, active.as_ref(), &self.hidden),
             None => PaneLayoutNode::Pane {
                 cwd: None,
                 command: None,
+                hidden: false,
                 is_active: false,
             },
         }

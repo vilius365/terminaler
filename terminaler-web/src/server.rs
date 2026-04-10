@@ -3,6 +3,7 @@ use crate::bridge::MuxBridge;
 use crate::ws_session;
 use axum::extract::ws::WebSocketUpgrade;
 use axum::extract::{Query, State};
+use axum::http::HeaderMap;
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
@@ -36,23 +37,27 @@ pub fn build_router(state: AppState) -> Router {
 /// Serve the main HTML page (requires valid token).
 async fn index_handler(
     State(state): State<AppState>,
+    headers: HeaderMap,
     query: Query<HashMap<String, String>>,
 ) -> Response {
-    if let Err(resp) = auth::check_token(&query, &state.token) {
-        return resp;
+    match auth::authorize_page_request(&headers, &query, &state.token, "/") {
+        Ok(auth::PageAuthResult::Authorized) => Html(INDEX_HTML).into_response(),
+        Ok(auth::PageAuthResult::Redirect(resp)) => resp,
+        Err(resp) => resp,
     }
-    Html(INDEX_HTML).into_response()
 }
 
 /// Serve the custom terminal HTML page (requires valid token).
 async fn terminal_handler(
     State(state): State<AppState>,
+    headers: HeaderMap,
     query: Query<HashMap<String, String>>,
 ) -> Response {
-    if let Err(resp) = auth::check_token(&query, &state.token) {
-        return resp;
+    match auth::authorize_page_request(&headers, &query, &state.token, "/terminal") {
+        Ok(auth::PageAuthResult::Authorized) => Html(TERMINAL_HTML).into_response(),
+        Ok(auth::PageAuthResult::Redirect(resp)) => resp,
+        Err(resp) => resp,
     }
-    Html(TERMINAL_HTML).into_response()
 }
 
 /// Serve xterm.js (no auth needed since it's a static asset and HTML already requires auth).
@@ -74,10 +79,10 @@ async fn xterm_css_handler() -> impl IntoResponse {
 /// WebSocket upgrade handler (requires valid token).
 async fn ws_handler(
     State(state): State<AppState>,
-    query: Query<HashMap<String, String>>,
+    headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Response {
-    if let Err(resp) = auth::check_token(&query, &state.token) {
+    if let Err(resp) = auth::authorize_ws_request(&headers, &state.token) {
         return resp;
     }
     let bridge = state.bridge.clone();
