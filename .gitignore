@@ -8,8 +8,6 @@ credentials/
 /.tag
 /terminaler-gui.exe
 /WebView2Loader.dll
-/.codex
-/AGENTS.md
 /terminaler-gui.exe.WebView2/
 .DS_Store
 dhat-heap.json
