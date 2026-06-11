@@ -62,6 +62,7 @@ impl crate::TermWindow {
             return;
         }
         self.last_sidebar_info_poll = Instant::now();
+        let poll_start = Instant::now();
 
         let mux = Mux::get();
         let mux_window = match mux.get_window(self.mux_window_id) {
@@ -158,6 +159,14 @@ impl crate::TermWindow {
         }
 
         self.tab_sidebar_info = new_info;
+
+        let poll_elapsed = poll_start.elapsed();
+        if poll_elapsed > Duration::from_millis(200) {
+            log::warn!(
+                "update_sidebar_info poll took {:?} on the GUI thread (process enumeration + git lookups)",
+                poll_elapsed
+            );
+        }
     }
 
     fn sidebar_info_changed(&self, new_info: &HashMap<TabId, SidebarTabInfo>) -> bool {
@@ -1334,9 +1343,48 @@ fn shorten_path(path: &str) -> String {
     }
 }
 
+/// How long a memoized git-branch lookup stays fresh. The branch for a given
+/// directory changes rarely, so this keeps the synchronous filesystem walk off
+/// the per-second sidebar poll on the GUI thread.
+const GIT_BRANCH_CACHE_TTL: Duration = Duration::from_secs(5);
+
+#[allow(clippy::type_complexity)]
+static GIT_BRANCH_CACHE: std::sync::OnceLock<
+    parking_lot::Mutex<HashMap<String, (Instant, Option<String>)>>,
+> = std::sync::OnceLock::new();
+
+/// Find the git branch for `path`, memoized per directory with a short TTL so
+/// the blocking filesystem walk runs at most once per directory per
+/// `GIT_BRANCH_CACHE_TTL` instead of on every sidebar poll.
+fn find_git_branch(path: &str) -> Option<String> {
+    let cache = GIT_BRANCH_CACHE.get_or_init(|| parking_lot::Mutex::new(HashMap::new()));
+
+    if let Some((updated, branch)) = cache.lock().get(path) {
+        if updated.elapsed() < GIT_BRANCH_CACHE_TTL {
+            return branch.clone();
+        }
+    }
+
+    let start = Instant::now();
+    let branch = find_git_branch_uncached(path);
+    let elapsed = start.elapsed();
+    if elapsed > Duration::from_millis(100) {
+        log::warn!(
+            "find_git_branch({}) filesystem walk took {:?} on the GUI thread",
+            path,
+            elapsed
+        );
+    }
+
+    cache
+        .lock()
+        .insert(path.to_string(), (Instant::now(), branch.clone()));
+    branch
+}
+
 /// Find the git branch by walking up from the given directory
 /// and reading .git/HEAD.
-fn find_git_branch(path: &str) -> Option<String> {
+fn find_git_branch_uncached(path: &str) -> Option<String> {
     // On Windows/WSL, handle path conversion
     let mut dir = std::path::PathBuf::from(path);
     for _ in 0..20 {
