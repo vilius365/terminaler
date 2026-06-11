@@ -63,6 +63,7 @@ mod webview_sidebar;
 mod uniforms;
 mod update;
 mod utilsprites;
+mod worktree;
 
 #[cfg(feature = "dhat-heap")]
 #[global_allocator]

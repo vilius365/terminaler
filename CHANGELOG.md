@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-06-11
+
+### Added
+- **New Claude Agent** action (`ctrl+shift+a`): overlay prompts for a branch name, creates a git worktree (`<repo-parent>/<repo>-worktrees/<branch>` by default), and spawns a tab from the `claude-code` workspace template with `claude` running in the main pane — GUI-native equivalent of `claude --worktree --tmux`
+- **Claude Agent Dashboard** (`ctrl+shift+j`): fuzzy-searchable overlay listing every Claude pane across all windows and workspaces (status, model, worktree, branch, context %, cost), sorted waiting-input first; Enter jumps to the pane, switching workspaces if needed
+- `claude_agent` config section: `worktree_root`, `claude_command`, `template`
+- Workspace templates are now actually materialized when spawning agent tabs (previously defined but unused)
+- Roadmap document (`ROADMAP.md`) — research-backed goal and prioritized build order (P1–P5)
+
+### Fixed
+- Git branch detection now works inside git worktrees (`.git` file with `gitdir:` pointer was previously treated as a directory and the branch showed blank)
+
 ## 2026-03-24
 
 ### Fixed

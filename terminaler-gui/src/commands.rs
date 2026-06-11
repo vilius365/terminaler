@@ -2051,6 +2051,22 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             menubar: &["View"],
             icon: None,
         },
+        NewClaudeAgent => CommandDef {
+            brief: "New Claude Agent".into(),
+            doc: "Create a git worktree and spawn a Claude Code session in it".into(),
+            keys: vec![(Modifiers::CTRL | Modifiers::SHIFT, "a".into())],
+            args: &[ArgType::ActiveWindow],
+            menubar: &["Shell"],
+            icon: None,
+        },
+        AgentDashboard => CommandDef {
+            brief: "Claude Agent Dashboard".into(),
+            doc: "List all Claude agent sessions and jump to one".into(),
+            keys: vec![(Modifiers::CTRL | Modifiers::SHIFT, "j".into())],
+            args: &[ArgType::ActiveWindow],
+            menubar: &["View"],
+            icon: None,
+        },
         _ => return None,
     })
 }
@@ -2182,6 +2198,9 @@ fn compute_default_actions() -> Vec<KeyAssignment> {
         SnapLayoutPicker,
         WorkspacePicker,
         ToggleTabSidebar,
+        // ----------------- Terminaler Claude Agents
+        NewClaudeAgent,
+        AgentDashboard,
         // ----------------- Help
         OpenUri("https://wezfurlong.org/wezterm/".to_string()),
         OpenUri("https://github.com/wez/wezterm/discussions/".to_string()),

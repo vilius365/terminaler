@@ -97,57 +97,11 @@ impl crate::TermWindow {
             let git_branch = cwd_path.as_deref().and_then(find_git_branch);
 
             // Detect Claude Code sessions on ALL panes in the tab
-            use crate::termwindow::{ClaudeSessionInfo, ClaudeStatus};
             let mut pane_claude_info = std::collections::HashMap::new();
             for pane_pos in tab.iter_panes_ignoring_zoom() {
                 let pane = &pane_pos.pane;
-                let process_name = pane.get_foreground_process_name(CachePolicy::AllowStale);
-                let pane_title = pane.get_title();
-                let user_vars = pane.copy_user_vars();
-                // Detect Claude via:
-                // 1. Foreground process name ("claude" / "claude-code")
-                // 2. Pane title containing "claude"
-                // 3. Any process in the full tree matching Claude
-                // 4. User vars with a non-empty claude_status (needed for WSL and
-                //    SSH where local process inspection only sees wslhost.exe /
-                //    ssh.exe and the real Claude process is on the other side).
-                //    We require a NON-EMPTY value (not just key presence) so the
-                //    SessionEnd hook can clear the card in-band by emitting an
-                //    empty claude_status — process-based clearing can't reach a
-                //    remote session. Do NOT key off other claude_* vars (e.g.
-                //    claude_model): they are never cleared and would make the
-                //    card persist after Claude exits (see commit 8d2de52).
-                let tree_names = pane.get_process_names_in_tree(CachePolicy::AllowStale);
-                let has_active_claude_vars = user_vars
-                    .get("claude_status")
-                    .map_or(false, |v| !v.is_empty());
-                let is_claude = process_name.as_deref().map_or(false, is_claude_process)
-                    || is_claude_title(&pane_title)
-                    || tree_names.iter().any(|n| is_claude_process(n))
-                    || has_active_claude_vars;
-
-                if is_claude {
-                    let status = user_vars.get("claude_status").map(|s| match s.as_str() {
-                        "working" => ClaudeStatus::Working,
-                        "waiting_input" => ClaudeStatus::WaitingInput,
-                        "idle" => ClaudeStatus::Idle,
-                        "error" => ClaudeStatus::Error,
-                        _ => ClaudeStatus::Working,
-                    });
-                    pane_claude_info.insert(
-                        pane.pane_id(),
-                        ClaudeSessionInfo {
-                            model: user_vars.get("claude_model").cloned(),
-                            context_pct: user_vars.get("claude_context_pct").and_then(|v| v.parse().ok()),
-                            cost_usd: user_vars.get("claude_cost").and_then(|v| v.parse().ok()),
-                            duration_ms: user_vars.get("claude_duration_ms").and_then(|v| v.parse().ok()),
-                            lines_added: user_vars.get("claude_lines_added").and_then(|v| v.parse().ok()),
-                            lines_removed: user_vars.get("claude_lines_removed").and_then(|v| v.parse().ok()),
-                            worktree: user_vars.get("claude_worktree").cloned(),
-                            status,
-                            host: user_vars.get("claude_host").cloned(),
-                        },
-                    );
+                if let Some(info) = claude_info_for_pane(pane) {
+                    pane_claude_info.insert(pane.pane_id(), info);
                 }
             }
 
@@ -1365,7 +1319,7 @@ static GIT_BRANCH_CACHE: std::sync::OnceLock<
 /// Find the git branch for `path`, memoized per directory with a short TTL so
 /// the blocking filesystem walk runs at most once per directory per
 /// `GIT_BRANCH_CACHE_TTL` instead of on every sidebar poll.
-fn find_git_branch(path: &str) -> Option<String> {
+pub(crate) fn find_git_branch(path: &str) -> Option<String> {
     let cache = GIT_BRANCH_CACHE.get_or_init(|| parking_lot::Mutex::new(HashMap::new()));
 
     if let Some((updated, branch)) = cache.lock().get(path) {
@@ -1392,12 +1346,25 @@ fn find_git_branch(path: &str) -> Option<String> {
 }
 
 /// Find the git branch by walking up from the given directory
-/// and reading .git/HEAD.
+/// and reading .git/HEAD. Handles worktrees, where `.git` is a file
+/// containing a `gitdir: <path>` pointer to the real git dir.
 fn find_git_branch_uncached(path: &str) -> Option<String> {
     // On Windows/WSL, handle path conversion
     let mut dir = std::path::PathBuf::from(path);
     for _ in 0..20 {
-        let git_head = dir.join(".git").join("HEAD");
+        let dot_git = dir.join(".git");
+        let git_head = if dot_git.is_file() {
+            // Worktree: .git is a file "gitdir: /path/to/repo/.git/worktrees/<name>"
+            match std::fs::read_to_string(&dot_git) {
+                Ok(content) => match content.trim().strip_prefix("gitdir:") {
+                    Some(gitdir) => std::path::PathBuf::from(gitdir.trim()).join("HEAD"),
+                    None => dot_git.join("HEAD"),
+                },
+                Err(_) => dot_git.join("HEAD"),
+            }
+        } else {
+            dot_git.join("HEAD")
+        };
         if let Ok(content) = std::fs::read_to_string(&git_head) {
             let content = content.trim();
             if let Some(branch) = content.strip_prefix("ref: refs/heads/") {
@@ -1421,6 +1388,72 @@ fn truncate_str(s: &str, max_chars: usize) -> String {
         let truncated: String = s.chars().take(max_chars - 1).collect();
         format!("{}\u{2026}", truncated)
     }
+}
+
+/// Build a `ClaudeSessionInfo` for a pane if it hosts a Claude Code session,
+/// otherwise `None`. Shared by the tab sidebar and the agent dashboard so
+/// detection and user-var parsing never diverge.
+///
+/// Detect Claude via:
+/// 1. Foreground process name ("claude" / "claude-code")
+/// 2. Pane title containing "claude"
+/// 3. Any process in the full tree matching Claude
+/// 4. User vars with a non-empty claude_status (needed for WSL and
+///    SSH where local process inspection only sees wslhost.exe /
+///    ssh.exe and the real Claude process is on the other side).
+///    We require a NON-EMPTY value (not just key presence) so the
+///    SessionEnd hook can clear the card in-band by emitting an
+///    empty claude_status — process-based clearing can't reach a
+///    remote session. Do NOT key off other claude_* vars (e.g.
+///    claude_model): they are never cleared and would make the
+///    card persist after Claude exits (see commit 8d2de52).
+pub(crate) fn claude_info_for_pane(
+    pane: &std::sync::Arc<dyn mux::pane::Pane>,
+) -> Option<crate::termwindow::ClaudeSessionInfo> {
+    use crate::termwindow::{ClaudeSessionInfo, ClaudeStatus};
+
+    let process_name = pane.get_foreground_process_name(CachePolicy::AllowStale);
+    let pane_title = pane.get_title();
+    let user_vars = pane.copy_user_vars();
+    let tree_names = pane.get_process_names_in_tree(CachePolicy::AllowStale);
+    let has_active_claude_vars = user_vars
+        .get("claude_status")
+        .map_or(false, |v| !v.is_empty());
+    let is_claude = process_name.as_deref().map_or(false, is_claude_process)
+        || is_claude_title(&pane_title)
+        || tree_names.iter().any(|n| is_claude_process(n))
+        || has_active_claude_vars;
+
+    if !is_claude {
+        return None;
+    }
+
+    let status = user_vars.get("claude_status").map(|s| match s.as_str() {
+        "working" => ClaudeStatus::Working,
+        "waiting_input" => ClaudeStatus::WaitingInput,
+        "idle" => ClaudeStatus::Idle,
+        "error" => ClaudeStatus::Error,
+        _ => ClaudeStatus::Working,
+    });
+    Some(ClaudeSessionInfo {
+        model: user_vars.get("claude_model").cloned(),
+        context_pct: user_vars
+            .get("claude_context_pct")
+            .and_then(|v| v.parse().ok()),
+        cost_usd: user_vars.get("claude_cost").and_then(|v| v.parse().ok()),
+        duration_ms: user_vars
+            .get("claude_duration_ms")
+            .and_then(|v| v.parse().ok()),
+        lines_added: user_vars
+            .get("claude_lines_added")
+            .and_then(|v| v.parse().ok()),
+        lines_removed: user_vars
+            .get("claude_lines_removed")
+            .and_then(|v| v.parse().ok()),
+        worktree: user_vars.get("claude_worktree").cloned(),
+        status,
+        host: user_vars.get("claude_host").cloned(),
+    })
 }
 
 /// Detect Claude Code by foreground process name.

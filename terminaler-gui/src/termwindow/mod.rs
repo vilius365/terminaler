@@ -53,8 +53,10 @@ use mux::{Mux, MuxNotification};
 use crate::scripting::guiwin::MuxPane;
 #[cfg(windows)]
 use chrono::Datelike as _;
+use portable_pty::CommandBuilder;
 use smol::channel::Sender;
 use smol::Timer;
+use std::path::PathBuf;
 use std::cell::{RefCell, RefMut};
 use std::collections::{HashMap, HashSet, LinkedList};
 use std::ops::Add;
@@ -3088,6 +3090,239 @@ impl TermWindow {
         self.show_launcher_impl(args, 0);
     }
 
+    /// Open the New Claude Agent overlay: prompts for a branch name, creates
+    /// a git worktree and spawns a Claude session tab in it.
+    fn show_new_claude_agent(&mut self) {
+        let mux = Mux::get();
+        let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
+            Some(tab) => tab,
+            None => return,
+        };
+        let pane = match self.get_active_pane_or_overlay() {
+            Some(pane) => pane,
+            None => return,
+        };
+
+        // Resolve the pane's cwd to a git repo root up front; the overlay
+        // renders the error if we're not inside a repository.
+        let cwd: Option<PathBuf> = pane
+            .get_current_working_dir(CachePolicy::AllowStale)
+            .map(|url| {
+                url.to_file_path()
+                    .unwrap_or_else(|_| PathBuf::from(url.path()))
+            });
+        let repo_root: anyhow::Result<PathBuf> = match cwd {
+            None => Err(anyhow!("cannot determine the current pane's working directory")),
+            Some(cwd) => crate::worktree::find_git_repo_root(&cwd)
+                .ok_or_else(|| anyhow!("{} is not inside a git repository", cwd.display())),
+        };
+
+        let worktree_root = self
+            .config
+            .claude_agent
+            .as_ref()
+            .and_then(|c| c.worktree_root.clone());
+        let window = self.window.as_ref().unwrap().clone();
+
+        let (overlay, future) = start_overlay(self, &tab, move |_tab_id, term| {
+            crate::overlay::new_agent::show_new_agent_overlay(
+                term,
+                repo_root,
+                worktree_root,
+                window,
+            )
+        });
+        self.assign_overlay(tab.tab_id(), overlay);
+        promise::spawn::spawn(future).detach();
+    }
+
+    /// Spawn a new tab in `cwd` using the configured agent workspace
+    /// template, launching the Claude command in the main pane.
+    pub fn spawn_claude_agent_tab(&mut self, cwd: PathBuf) {
+        let cfg = self.config.claude_agent.clone().unwrap_or_default();
+        let template = match terminaler_layout::builtin_workspaces()
+            .into_iter()
+            .find(|t| t.name == cfg.template)
+        {
+            Some(t) => t,
+            None => {
+                log::error!("claude_agent.template `{}` not found", cfg.template);
+                return;
+            }
+        };
+        let term_config = Arc::new(TermConfig::with_config(self.config.clone()));
+        let size = self.terminal_size;
+        let src_window_id = self.mux_window_id;
+        let claude_argv = cfg.claude_command;
+
+        promise::spawn::spawn(async move {
+            if let Err(err) = Self::spawn_claude_agent_tab_impl(
+                template,
+                claude_argv,
+                cwd,
+                size,
+                src_window_id,
+                term_config,
+            )
+            .await
+            {
+                log::error!("NewClaudeAgent: failed to spawn agent tab: {:#}", err);
+            }
+        })
+        .detach();
+    }
+
+    async fn spawn_claude_agent_tab_impl(
+        template: terminaler_layout::WorkspaceTemplate,
+        claude_argv: Vec<String>,
+        cwd: PathBuf,
+        size: TerminalSize,
+        src_window_id: mux::window::WindowId,
+        term_config: Arc<TermConfig>,
+    ) -> anyhow::Result<()> {
+        let mux = Mux::get();
+        let cwd_str = cwd
+            .to_str()
+            .ok_or_else(|| anyhow!("worktree path {cwd:?} is not valid unicode"))?
+            .to_string();
+
+        let current_pane_id = mux
+            .get_active_tab_for_window(src_window_id)
+            .and_then(|tab| tab.get_active_pane().map(|p| p.pane_id()));
+
+        let mut builder =
+            CommandBuilder::from_argv(claude_argv.iter().map(Into::into).collect());
+        builder.cwd(&cwd);
+
+        let workspace = mux.active_workspace().clone();
+        let (_tab, pane, _window_id) = mux
+            .spawn_tab_or_window(
+                Some(src_window_id),
+                config::keyassignment::SpawnTabDomain::CurrentPaneDomain,
+                Some(builder),
+                Some(cwd_str.clone()),
+                size,
+                current_pane_id,
+                workspace,
+                None,
+            )
+            .await
+            .context("spawn_tab_or_window")?;
+        pane.set_config(term_config.clone());
+
+        // Materialize the template layout by sequential splits, same slot
+        // bookkeeping as apply_snap_layout.
+        let splits = terminaler_layout::collect_splits(&template.layout);
+        let mut pane_ids: Vec<PaneId> = vec![pane.pane_id()];
+
+        for split in &splits {
+            let target_pane_id = *pane_ids.get(split.pane_index).ok_or_else(|| {
+                anyhow!(
+                    "agent template: invalid pane_index {} (have {} panes)",
+                    split.pane_index,
+                    pane_ids.len()
+                )
+            })?;
+
+            let direction = match split.direction {
+                terminaler_layout::SplitDirection::Horizontal => SplitDirection::Horizontal,
+                terminaler_layout::SplitDirection::Vertical => SplitDirection::Vertical,
+            };
+            // ratio is the first child's share; Percent is the size of the
+            // new (second) child, so invert.
+            let percent = ((1.0 - split.ratio) * 100.0) as u8;
+
+            // The new pane occupies the next slot; run that slot's template
+            // command (simple whitespace split) in the worktree.
+            let new_slot = pane_ids.len();
+            let pane_command = template
+                .pane_commands
+                .get(new_slot)
+                .and_then(|p| p.command.clone())
+                .map(|cmd| {
+                    CommandBuilder::from_argv(
+                        cmd.split_whitespace().map(Into::into).collect(),
+                    )
+                });
+
+            let (new_pane, _size) = mux
+                .split_pane(
+                    target_pane_id,
+                    SplitRequest {
+                        direction,
+                        target_is_second: true,
+                        size: MuxSplitSize::Percent(percent),
+                        top_level: false,
+                    },
+                    mux::domain::SplitSource::Spawn {
+                        command: pane_command,
+                        command_dir: Some(cwd_str.clone()),
+                    },
+                    config::keyassignment::SpawnTabDomain::CurrentPaneDomain,
+                )
+                .await
+                .context("agent template split")?;
+            new_pane.set_config(term_config.clone());
+            pane_ids.push(new_pane.pane_id());
+        }
+
+        Ok(())
+    }
+
+    /// Open the agent fleet dashboard: every Claude pane across all
+    /// windows/workspaces, Enter jumps to the selected one.
+    fn show_agent_dashboard(&mut self) {
+        let args = LauncherActionArgs {
+            title: Some("Claude Agents".to_string()),
+            flags: LauncherFlags::CLAUDE_AGENTS | LauncherFlags::FUZZY,
+            help_text: Some(
+                "Select an agent and press Enter=jump  Esc=cancel".to_string(),
+            ),
+            fuzzy_help_text: None,
+            alphabet: None,
+        };
+        self.show_launcher_impl(args, 0);
+    }
+
+    /// Focus a pane by ID, raising its GUI window — switching workspaces
+    /// first if the pane lives in a different one.
+    fn focus_pane_by_id(&mut self, pane_id: PaneId) {
+        promise::spawn::spawn(async move {
+            let mux = Mux::get();
+            if let Err(err) = mux.focus_pane_and_containing_tab(pane_id) {
+                log::error!("FocusPaneById({pane_id}): {err:#}");
+                return;
+            }
+            let window_id = match mux.resolve_pane_id(pane_id) {
+                Some((_domain, window_id, _tab)) => window_id,
+                None => return,
+            };
+            if let Some(guiwin) = front_end().gui_window_for_mux_window(window_id) {
+                guiwin.window.focus();
+                return;
+            }
+            // The mux window lives in another workspace and has no GUI
+            // window yet: switch workspaces, then focus once the frontend
+            // has reconciled (async, hence the bounded retry).
+            let workspace = match mux.get_window(window_id) {
+                Some(w) => w.get_workspace().to_string(),
+                None => return,
+            };
+            front_end().switch_workspace(&workspace);
+            for _ in 0..20 {
+                smol::Timer::after(std::time::Duration::from_millis(50)).await;
+                if let Some(guiwin) = front_end().gui_window_for_mux_window(window_id) {
+                    guiwin.window.focus();
+                    return;
+                }
+            }
+            log::warn!(
+                "FocusPaneById({pane_id}): no GUI window appeared for mux window {window_id} after workspace switch"
+            );
+        })
+        .detach();
+    }
+
     fn toggle_remote_access(&mut self) {
         if let Some(handle) = self.web_server_handle.take() {
             handle.shutdown_nonblocking();
@@ -4009,6 +4244,17 @@ impl TermWindow {
             }
             ToggleRemoteAccess => {
                 self.toggle_remote_access();
+            }
+            NewClaudeAgent => {
+                log::info!("NewClaudeAgent: showing new agent overlay");
+                self.show_new_claude_agent();
+            }
+            AgentDashboard => {
+                log::info!("AgentDashboard: showing agent dashboard");
+                self.show_agent_dashboard();
+            }
+            FocusPaneById(pane_id) => {
+                self.focus_pane_by_id(*pane_id);
             }
             ToggleTabSidebar => {
                 self.show_tab_sidebar = !self.show_tab_sidebar;

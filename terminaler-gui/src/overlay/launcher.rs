@@ -13,7 +13,7 @@ use crate::termwindow::TermWindowNotif;
 use config::configuration;
 use config::keyassignment::{KeyAssignment, SpawnCommand, SpawnTabDomain};
 use mux::domain::{DomainId, DomainState};
-use mux::pane::PaneId;
+use mux::pane::{CachePolicy, PaneId};
 use mux::termwiztermtab::TermWizTerminal;
 use mux::window::WindowId;
 use mux::Mux;
@@ -64,10 +64,18 @@ pub struct LauncherDomainEntry {
     pub label: String,
 }
 
+/// A Claude agent pane shown in the agent dashboard.
+pub struct LauncherAgentEntry {
+    pub pane_id: PaneId,
+    pub label: String,
+    pub sort_key: u8,
+}
+
 pub struct LauncherArgs {
     flags: LauncherFlags,
     domains: Vec<LauncherDomainEntry>,
     tabs: Vec<LauncherTabEntry>,
+    claude_agents: Vec<LauncherAgentEntry>,
     pane_id: PaneId,
     domain_id_of_current_tab: DomainId,
     title: String,
@@ -168,10 +176,82 @@ impl LauncherArgs {
             vec![]
         };
 
+        let claude_agents = if flags.contains(LauncherFlags::CLAUDE_AGENTS) {
+            let mut agents = vec![];
+            for window_id in mux.iter_windows() {
+                let window = match mux.get_window(window_id) {
+                    Some(w) => w,
+                    None => continue,
+                };
+                let workspace = window.get_workspace().to_string();
+                for tab in window.iter() {
+                    for pos in tab.iter_panes_ignoring_zoom() {
+                        let pane = &pos.pane;
+                        let info = match
+                            crate::termwindow::render::tab_sidebar::claude_info_for_pane(pane)
+                        {
+                            Some(info) => info,
+                            None => continue,
+                        };
+
+                        use crate::termwindow::ClaudeStatus;
+                        let (sort_key, status_label) = match info.status {
+                            Some(ClaudeStatus::WaitingInput) => (0, "● waiting"),
+                            Some(ClaudeStatus::Working) => (1, "▶ working"),
+                            Some(ClaudeStatus::Error) => (2, "✗ error  "),
+                            Some(ClaudeStatus::Idle) | None => (3, "✔ idle   "),
+                        };
+
+                        let location = info.worktree.clone().or_else(|| {
+                            pane.get_current_working_dir(CachePolicy::AllowStale)
+                                .map(|url| {
+                                    url.to_file_path()
+                                        .map(|p| p.display().to_string())
+                                        .unwrap_or_else(|_| url.path().to_string())
+                                })
+                        });
+
+                        let mut label = status_label.to_string();
+                        if let Some(model) = &info.model {
+                            label.push_str(&format!("  {model}"));
+                        }
+                        if let Some(location) = &location {
+                            label.push_str(&format!("  {location}"));
+                            if let Some(branch) =
+                                crate::termwindow::render::tab_sidebar::find_git_branch(location)
+                            {
+                                label.push_str(&format!("  [{branch}]"));
+                            }
+                        }
+                        if let Some(pct) = info.context_pct {
+                            label.push_str(&format!("  ctx {pct}%"));
+                        }
+                        if let Some(cost) = info.cost_usd {
+                            label.push_str(&format!("  ${cost:.2}"));
+                        }
+                        if workspace != active_workspace {
+                            label.push_str(&format!("  (workspace {workspace})"));
+                        }
+
+                        agents.push(LauncherAgentEntry {
+                            pane_id: pane.pane_id(),
+                            label,
+                            sort_key,
+                        });
+                    }
+                }
+            }
+            agents.sort_by(|a, b| a.sort_key.cmp(&b.sort_key).then(a.label.cmp(&b.label)));
+            agents
+        } else {
+            vec![]
+        };
+
         Self {
             flags,
             domains,
             tabs,
+            claude_agents,
             pane_id,
             domain_id_of_current_tab,
             title: title.to_string(),
@@ -307,6 +387,21 @@ impl LauncherState {
                     spawn: None,
                 },
             });
+        }
+
+        if args.flags.contains(LauncherFlags::CLAUDE_AGENTS) {
+            if args.claude_agents.is_empty() {
+                self.entries.push(Entry {
+                    label: "No Claude agents running".to_string(),
+                    action: KeyAssignment::Nop,
+                });
+            }
+            for agent in &args.claude_agents {
+                self.entries.push(Entry {
+                    label: agent.label.clone(),
+                    action: KeyAssignment::FocusPaneById(agent.pane_id),
+                });
+            }
         }
 
         if args.flags.contains(LauncherFlags::LAYOUTS) {

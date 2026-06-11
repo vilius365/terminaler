@@ -59,6 +59,13 @@ pub fn default_config_content() -> String {
     // Claude usage budgets (USD) — shown in sidebar stats card
     // "claude_daily_budget_usd": 5.0,
     // "claude_weekly_budget_usd": 25.0
+
+    // Claude agent orchestration (ctrl+shift+a = New Agent, ctrl+shift+j = dashboard)
+    // "claude_agent": {
+    //     "worktree_root": "C:\\dev\\worktrees",   // default: <repo-parent>/<repo>-worktrees/
+    //     "claude_command": ["claude"],
+    //     "template": "claude-code"
+    // }
 }
 "#
     .to_string()

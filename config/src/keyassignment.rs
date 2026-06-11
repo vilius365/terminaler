@@ -34,6 +34,7 @@ bitflags::bitflags! {
         const WORKSPACES = 32;
         const COMMANDS = 64;
         const LAYOUTS = 128;
+        const CLAUDE_AGENTS = 256;
     }
 }
 
@@ -76,6 +77,9 @@ impl ToString for LauncherFlags {
         if self.contains(Self::LAYOUTS) {
             s.push("LAYOUTS");
         }
+        if self.contains(Self::CLAUDE_AGENTS) {
+            s.push("CLAUDE_AGENTS");
+        }
         s.join("|")
     }
 }
@@ -96,6 +100,7 @@ impl TryFrom<String> for LauncherFlags {
                 "WORKSPACES" => flags |= Self::WORKSPACES,
                 "COMMANDS" => flags |= Self::COMMANDS,
                 "LAYOUTS" => flags |= Self::LAYOUTS,
+                "CLAUDE_AGENTS" => flags |= Self::CLAUDE_AGENTS,
                 _ => {
                     return Err(format!("invalid LauncherFlags `{}` in `{}`", ele, s));
                 }
@@ -663,6 +668,14 @@ pub enum KeyAssignment {
     ToggleRemoteAccess,
     /// Toggle the vertical tab sidebar on/off.
     ToggleTabSidebar,
+    /// Open the New Claude Agent overlay: create a git worktree and
+    /// spawn a Claude session in it using the claude-code template.
+    NewClaudeAgent,
+    /// Open the agent fleet dashboard listing all Claude panes.
+    AgentDashboard,
+    /// Focus a specific pane by ID, across windows/workspaces.
+    /// Internal: used by dashboard entries; not shown in the palette.
+    FocusPaneById(usize),
 }
 
 #[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]

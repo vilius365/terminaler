@@ -18,6 +18,7 @@ use crate::keys::{Key, LeaderKey, Mouse};
 // STRIPPED: use crate::tls::{TlsDomainClient, TlsDomainServer};
 use crate::units::Dimension;
 // STRIPPED: use crate::unix::UnixDomain;
+use crate::claude_agent::ClaudeAgentConfig;
 use crate::web::WebAccessConfig;
 use crate::wsl::WslDomain;
 use crate::{
@@ -902,6 +903,10 @@ pub struct Config {
     /// Weekly budget for Claude API usage in USD. When set, the sidebar shows remaining budget.
     #[dynamic(default)]
     pub claude_weekly_budget_usd: Option<f32>,
+
+    /// Claude agent orchestration (NewClaudeAgent / AgentDashboard actions)
+    #[dynamic(default)]
+    pub claude_agent: Option<ClaudeAgentConfig>,
 }
 
 fn default_freetype_load_target() -> FreeTypeLoadTarget {
