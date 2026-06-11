@@ -107,11 +107,19 @@ impl crate::TermWindow {
                 // 1. Foreground process name ("claude" / "claude-code")
                 // 2. Pane title containing "claude"
                 // 3. Any process in the full tree matching Claude
-                // 4. User vars with active claude_status (needed for WSL where
-                //    the Windows process tree only shows wslhost.exe and the
-                //    real Claude process is inside the Linux VM)
+                // 4. User vars with a non-empty claude_status (needed for WSL and
+                //    SSH where local process inspection only sees wslhost.exe /
+                //    ssh.exe and the real Claude process is on the other side).
+                //    We require a NON-EMPTY value (not just key presence) so the
+                //    SessionEnd hook can clear the card in-band by emitting an
+                //    empty claude_status — process-based clearing can't reach a
+                //    remote session. Do NOT key off other claude_* vars (e.g.
+                //    claude_model): they are never cleared and would make the
+                //    card persist after Claude exits (see commit 8d2de52).
                 let tree_names = pane.get_process_names_in_tree(CachePolicy::AllowStale);
-                let has_active_claude_vars = user_vars.contains_key("claude_status");
+                let has_active_claude_vars = user_vars
+                    .get("claude_status")
+                    .map_or(false, |v| !v.is_empty());
                 let is_claude = process_name.as_deref().map_or(false, is_claude_process)
                     || is_claude_title(&pane_title)
                     || tree_names.iter().any(|n| is_claude_process(n))

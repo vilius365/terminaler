@@ -2784,7 +2784,13 @@ impl TermWindow {
                     let basename = basename.strip_suffix(".exe").unwrap_or(&basename);
                     matches!(basename, "claude" | "claude-code")
                 };
-                let has_active_claude_vars = user_vars.contains_key("claude_status");
+                // Require a NON-EMPTY claude_status so the SessionEnd hook can
+                // clear the card in-band (empty value) for remote/WSL sessions
+                // where process-based clearing can't reach the real process.
+                // Keying off other claude_* vars would persist after exit (8d2de52).
+                let has_active_claude_vars = user_vars
+                    .get("claude_status")
+                    .map_or(false, |v| !v.is_empty());
                 let is_claude = process_name.as_deref().map_or(false, &is_claude_proc)
                     || {
                         let lower = pane_title.to_lowercase();
