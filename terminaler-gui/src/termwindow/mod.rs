@@ -200,6 +200,9 @@ pub struct ClaudeSessionInfo {
     pub lines_removed: Option<u32>,
     pub worktree: Option<String>,
     pub status: Option<ClaudeStatus>,
+    /// The machine the Claude session runs on (e.g. "devbox", "mcp", "home"),
+    /// from the claude_host user var. Useful for SSH/remote sessions.
+    pub host: Option<String>,
 }
 
 /// Tracks cumulative Claude API usage costs across sessions.
@@ -325,6 +328,7 @@ fn claude_to_json(c: &ClaudeSessionInfo) -> serde_json::Value {
         "linesAdded": c.lines_added,
         "linesRemoved": c.lines_removed,
         "worktree": c.worktree,
+        "host": c.host,
         "status": c.status.map(|s| match s {
             ClaudeStatus::Working => "working",
             ClaudeStatus::WaitingInput => "waiting_input",
@@ -2842,6 +2846,7 @@ impl TermWindow {
                             .and_then(|v| v.parse().ok()),
                         worktree: user_vars.get("claude_worktree").cloned(),
                         status,
+                        host: user_vars.get("claude_host").cloned(),
                     })
                 } else {
                     None

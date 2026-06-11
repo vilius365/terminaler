@@ -144,6 +144,7 @@ impl crate::TermWindow {
                             lines_removed: user_vars.get("claude_lines_removed").and_then(|v| v.parse().ok()),
                             worktree: user_vars.get("claude_worktree").cloned(),
                             status,
+                            host: user_vars.get("claude_host").cloned(),
                         },
                     );
                 }

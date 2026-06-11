@@ -229,6 +229,27 @@
     opacity: 0.7;
   }
 
+  /* Per-session host/box badge (e.g. devbox, mcp, home) */
+  .card-host {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    flex-shrink: 0;
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 10px;
+    color: var(--text-secondary);
+    background: rgba(255,255,255,0.06);
+  }
+
+  .card-host .host-icon {
+    width: 10px;
+    height: 10px;
+    fill: currentColor;
+    opacity: 0.7;
+  }
+
   /* Status */
   .status-row {
     display: flex;
@@ -494,6 +515,8 @@
 
 <script>
 const GIT_ICON_SVG = '<svg class="git-icon" viewBox="0 0 16 16"><path d="M11.75 2.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5zm-2.25.75a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.5 2.5 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25zM4.25 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5zM3.5 3.25a.75.75 0 1 1 1.5 0 .75.75 0 0 1-1.5 0z"/></svg>';
+// Server/box icon for the per-session host badge.
+const HOST_ICON_SVG = '<svg class="host-icon" viewBox="0 0 16 16"><path d="M2 3.5A1.5 1.5 0 0 1 3.5 2h9A1.5 1.5 0 0 1 14 3.5v2A1.5 1.5 0 0 1 12.5 7h-9A1.5 1.5 0 0 1 2 5.5v-2zm1.5-.5a.5.5 0 0 0-.5.5v2a.5.5 0 0 0 .5.5h9a.5.5 0 0 0 .5-.5v-2a.5.5 0 0 0-.5-.5h-9zM2 10.5A1.5 1.5 0 0 1 3.5 9h9a1.5 1.5 0 0 1 1.5 1.5v2A1.5 1.5 0 0 1 12.5 14h-9A1.5 1.5 0 0 1 2 12.5v-2zm2 .5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5zM4 4a.75.75 0 1 0 0 1.5A.75.75 0 0 0 4 4z"/></svg>';
 
 var _actionDebounce = {};
 function sendAction(action) {
@@ -564,6 +587,9 @@ function renderClaudeCard(claude, cwdShort, gitBranch) {
     html += '<div class="status-row">';
     html += '<span class="status-dot ' + statusDotClass(st) + '"></span>';
     html += '<span style="color:' + statusColor(st) + '">' + statusLabel(st) + '</span>';
+    if (claude.host) {
+        html += '<span class="card-host" title="Host: ' + escHtml(claude.host) + '">' + HOST_ICON_SVG + escHtml(claude.host) + '</span>';
+    }
     html += '</div>';
 
     // CWD + git branch
