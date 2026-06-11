@@ -57,6 +57,36 @@ struct CachedProcInfo {
     root: LocalProcessInfo,
     updated: Instant,
     foreground: LocalProcessInfo,
+    /// True while a background thread is refreshing this entry, so we don't
+    /// spawn more than one refresh at a time per pane.
+    updating: bool,
+}
+
+/// Derive the "foreground" process for a process tree. Windows doesn't have
+/// any job control or session concept, so we infer that the equivalent of the
+/// process group leader is the most recently spawned program running in the
+/// console. Hoisted to a free function so both the synchronous cold path and
+/// the background refresh thread in `divine_process_list` can use it.
+fn compute_foreground(root: &LocalProcessInfo) -> LocalProcessInfo {
+    fn find_youngest<'a>(proc: &'a LocalProcessInfo, youngest: &mut &'a LocalProcessInfo) {
+        if proc.start_time >= youngest.start_time {
+            *youngest = proc;
+        }
+
+        for child in proc.children.values() {
+            #[cfg(windows)]
+            if child.console == 0 {
+                continue;
+            }
+            find_youngest(child, youngest);
+        }
+    }
+
+    let mut youngest = root;
+    find_youngest(root, &mut youngest);
+    let mut foreground = youngest.clone();
+    foreground.children.clear();
+    foreground
 }
 
 /// This is a bit horrible; it can take 700us to tcgetpgrp, so if we have
@@ -130,7 +160,7 @@ pub struct LocalPane {
     writer: Mutex<Box<dyn Write + Send>>,
     domain_id: DomainId,
     // STRIPPED: tmux_domain: Mutex<Option<Arc<TmuxDomainState>>>,
-    proc_list: Mutex<Option<CachedProcInfo>>,
+    proc_list: Arc<Mutex<Option<CachedProcInfo>>>,
     #[cfg(unix)]
     leader: Arc<Mutex<Option<CachedLeaderInfo>>>,
     command_description: String,
@@ -943,7 +973,7 @@ impl LocalPane {
             writer: Mutex::new(writer),
             domain_id,
             // STRIPPED: tmux_domain: Mutex::new(None),
-            proc_list: Mutex::new(None),
+            proc_list: Arc::new(Mutex::new(None)),
             #[cfg(unix)]
             leader: Arc::new(Mutex::new(None)),
             command_description,
@@ -1000,8 +1030,10 @@ impl LocalPane {
         policy: CachePolicy,
     ) -> Option<MappedMutexGuard<'_, CachedProcInfo>> {
         if let ProcessState::Running { pid: Some(pid), .. } = &*self.process.lock() {
+            let pid = *pid;
             let mut proc_list = self.proc_list.lock();
 
+            let present = proc_list.is_some();
             let expired = policy == CachePolicy::FetchImmediate
                 || proc_list
                     .as_ref()
@@ -1009,44 +1041,76 @@ impl LocalPane {
                     .unwrap_or(true);
 
             if expired {
-                log::trace!("CachedProcInfo expired, refresh");
-                let root = LocalProcessInfo::with_root_pid(*pid)?;
-
-                // Windows doesn't have any job control or session concept,
-                // so we infer that the equivalent to the process group
-                // leader is the most recently spawned program running
-                // in the console
-                let mut youngest = &root;
-
-                fn find_youngest<'a>(
-                    proc: &'a LocalProcessInfo,
-                    youngest: &mut &'a LocalProcessInfo,
-                ) {
-                    if proc.start_time >= youngest.start_time {
-                        *youngest = proc;
+                if !present || policy == CachePolicy::FetchImmediate {
+                    // Cold cache or an explicit immediate fetch: there is no
+                    // stale value to serve, so we must compute synchronously on
+                    // the calling thread. The cold path happens once per pane.
+                    log::trace!("CachedProcInfo cold/immediate, refresh");
+                    let start = Instant::now();
+                    let root = LocalProcessInfo::with_root_pid(pid)?;
+                    let elapsed = start.elapsed();
+                    if elapsed > Duration::from_millis(200) {
+                        log::warn!(
+                            "LocalProcessInfo::with_root_pid(pid={}) took {:?} synchronously on the calling thread",
+                            pid,
+                            elapsed
+                        );
                     }
-
-                    for child in proc.children.values() {
-                        #[cfg(windows)]
-                        if child.console == 0 {
-                            continue;
+                    let foreground = compute_foreground(&root);
+                    proc_list.replace(CachedProcInfo {
+                        root,
+                        foreground,
+                        updated: Instant::now(),
+                        updating: false,
+                    });
+                    log::trace!("CachedProcInfo updated (sync)");
+                } else if !proc_list.as_ref().map(|i| i.updating).unwrap_or(false) {
+                    // Stale but present, and no refresh already in flight: serve
+                    // the stale value immediately and refresh in a background
+                    // thread, so the calling (GUI) thread never blocks on the
+                    // expensive process-tree enumeration. This is what makes
+                    // CachePolicy::AllowStale actually non-blocking, mirroring
+                    // the Unix `get_leader` path.
+                    if let Some(info) = proc_list.as_mut() {
+                        info.updating = true;
+                    }
+                    let proc_list_ref = Arc::clone(&self.proc_list);
+                    std::thread::spawn(move || {
+                        // The slow part runs WITHOUT holding the lock.
+                        let start = Instant::now();
+                        let root = match LocalProcessInfo::with_root_pid(pid) {
+                            Some(root) => root,
+                            None => {
+                                // Clear the in-flight flag so a later poll retries.
+                                if let Some(info) = proc_list_ref.lock().as_mut() {
+                                    info.updating = false;
+                                }
+                                return;
+                            }
+                        };
+                        let elapsed = start.elapsed();
+                        if elapsed > Duration::from_millis(200) {
+                            log::warn!(
+                                "background LocalProcessInfo::with_root_pid(pid={}) took {:?}",
+                                pid,
+                                elapsed
+                            );
                         }
-                        find_youngest(child, youngest);
-                    }
+                        let foreground = compute_foreground(&root);
+                        *proc_list_ref.lock() = Some(CachedProcInfo {
+                            root,
+                            foreground,
+                            updated: Instant::now(),
+                            updating: false,
+                        });
+                        log::trace!("CachedProcInfo updated (background)");
+                    });
                 }
-
-                find_youngest(&root, &mut youngest);
-                let mut foreground = youngest.clone();
-                foreground.children.clear();
-
-                proc_list.replace(CachedProcInfo {
-                    root,
-                    foreground,
-                    updated: Instant::now(),
-                });
-                log::trace!("CachedProcInfo updated");
             }
 
+            if proc_list.is_none() {
+                return None;
+            }
             return Some(MutexGuard::map(proc_list, |info| info.as_mut().unwrap()));
         }
         None
