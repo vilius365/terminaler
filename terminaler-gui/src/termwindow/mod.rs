@@ -3111,17 +3111,14 @@ impl TermWindow {
 
         // Resolve the pane's cwd to a git repo root up front; the overlay
         // renders the error if we're not inside a repository.
-        let cwd: Option<PathBuf> = pane
-            .get_current_working_dir(CachePolicy::AllowStale)
-            .map(|url| {
-                url.to_file_path()
-                    .unwrap_or_else(|_| PathBuf::from(url.path()))
-            });
-        let repo_root: anyhow::Result<PathBuf> = match cwd {
-            None => Err(anyhow!("cannot determine the current pane's working directory")),
-            Some(cwd) => crate::worktree::find_git_repo_root(&cwd)
-                .ok_or_else(|| anyhow!("{} is not inside a git repository", cwd.display())),
-        };
+        let repo_root: anyhow::Result<PathBuf> =
+            match pane.get_current_working_dir(CachePolicy::AllowStale) {
+                None => Err(anyhow!("cannot determine the current pane's working directory")),
+                Some(url) => crate::worktree::local_path_from_cwd_url(&url).and_then(|cwd| {
+                    crate::worktree::find_git_repo_root(&cwd)
+                        .ok_or_else(|| anyhow!("{} is not inside a git repository", cwd.display()))
+                }),
+            };
 
         let worktree_root = self
             .config
@@ -3154,17 +3151,14 @@ impl TermWindow {
             None => return,
         };
 
-        let cwd: Option<PathBuf> = pane
-            .get_current_working_dir(CachePolicy::AllowStale)
-            .map(|url| {
-                url.to_file_path()
-                    .unwrap_or_else(|_| PathBuf::from(url.path()))
-            });
-        let repo_root: anyhow::Result<PathBuf> = match cwd {
-            None => Err(anyhow!("cannot determine the current pane's working directory")),
-            Some(cwd) => crate::worktree::find_git_repo_root(&cwd)
-                .ok_or_else(|| anyhow!("{} is not inside a git repository", cwd.display())),
-        };
+        let repo_root: anyhow::Result<PathBuf> =
+            match pane.get_current_working_dir(CachePolicy::AllowStale) {
+                None => Err(anyhow!("cannot determine the current pane's working directory")),
+                Some(url) => crate::worktree::local_path_from_cwd_url(&url).and_then(|cwd| {
+                    crate::worktree::find_git_repo_root(&cwd)
+                        .ok_or_else(|| anyhow!("{} is not inside a git repository", cwd.display()))
+                }),
+            };
 
         let (overlay, future) = start_overlay(self, &tab, move |_tab_id, term| {
             crate::overlay::worktree_manager::show_worktree_manager_overlay(term, repo_root)

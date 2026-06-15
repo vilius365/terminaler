@@ -67,6 +67,24 @@ impl crate::TermWindow {
         self.fancy_tab_bar.take();
     }
 
+    /// Per-agent identity color for a tab, if it hosts a Claude agent — keyed
+    /// by the agent's worktree so it matches that agent's pane border and
+    /// sidebar chip. `active` controls brightness (same accent convention as
+    /// elsewhere). Returns None for non-Claude tabs.
+    fn tab_agent_color(&self, tab_idx: usize, active: bool) -> Option<LinearRgba> {
+        let mux = mux::Mux::get();
+        let window = mux.get_window(self.mux_window_id)?;
+        let tab = window.get_by_idx(tab_idx)?;
+        let seed = tab.iter_panes_ignoring_zoom().into_iter().find_map(|pos| {
+            pos.pane
+                .copy_user_vars()
+                .get("claude_worktree")
+                .filter(|v| !v.is_empty())
+                .cloned()
+        })?;
+        Some(crate::agent_color::agent_accent_color(&seed, active))
+    }
+
     pub fn build_fancy_tab_bar(&self, palette: &ColorPalette) -> anyhow::Result<ComputedElement> {
         let tab_bar_height = self.tab_bar_pixel_height()?;
         let font = self.fonts.title_font()?;
@@ -122,6 +140,12 @@ impl crate::TermWindow {
             let new_tab = colors.new_tab();
             let new_tab_hover = colors.new_tab_hover();
             let active_tab = colors.active_tab();
+
+            // Per-agent identity color for Claude tabs (matches pane border/chip).
+            let agent_color = match item.item {
+                TabBarItem::Tab { tab_idx, active } => self.tab_agent_color(tab_idx, active),
+                _ => None,
+            };
 
             match item.item {
                 TabBarItem::RightStatus | TabBarItem::LeftStatus | TabBarItem::None => element
@@ -244,11 +268,13 @@ impl crate::TermWindow {
                         bottom_right: SizedPoly::none(),
                     }))
                     .colors(ElementColors {
-                        border: BorderColor::new(
+                        // A Claude agent's active tab gets its identity color as
+                        // an outline; otherwise the border matches the tab bg.
+                        border: BorderColor::new(agent_color.unwrap_or_else(|| {
                             bg_color
                                 .unwrap_or_else(|| active_tab.bg_color.into())
-                                .to_linear(),
-                        ),
+                                .to_linear()
+                        })),
                         bg: bg_color
                             .unwrap_or_else(|| active_tab.bg_color.into())
                             .to_linear()
@@ -301,7 +327,10 @@ impl crate::TermWindow {
                         let bg = bg_color
                             .unwrap_or_else(|| inactive_tab.bg_color.into())
                             .to_linear();
-                        let edge = colors.inactive_tab_edge().to_linear();
+                        // A Claude agent's inactive tab tints its edge with the
+                        // agent's (dimmed) identity color instead of the theme edge.
+                        let edge =
+                            agent_color.unwrap_or_else(|| colors.inactive_tab_edge().to_linear());
                         ElementColors {
                             border: BorderColor {
                                 left: bg,

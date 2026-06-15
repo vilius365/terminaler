@@ -7,6 +7,35 @@
 use anyhow::{anyhow, bail, Context};
 use std::path::{Path, PathBuf};
 
+/// Resolve a pane's working-directory URL to a LOCAL filesystem path, or
+/// return a clear error for non-local panes (WSL / SSH / remote).
+///
+/// WSL and remote cwds arrive as `file://` URLs whose authority is the remote
+/// hostname (e.g. `file://Home/home/vilius`). On Windows `Url::to_file_path()`
+/// turns a non-`localhost` authority into a bogus UNC path
+/// (`\\Home\home\vilius`) instead of erroring, so the worktree flow — which
+/// shells out to Windows-host git — would walk the wrong path and report a
+/// misleading "not a git repository". Reject those explicitly with guidance.
+pub fn local_path_from_cwd_url(url: &url::Url) -> anyhow::Result<PathBuf> {
+    if url.scheme() != "file" {
+        bail!(
+            "this pane's working directory isn't local (scheme `{}`) — run this \
+             from a local pane in a Windows git repository",
+            url.scheme()
+        );
+    }
+    match url.host_str() {
+        None | Some("") | Some("localhost") => {}
+        Some(host) => bail!(
+            "this pane runs on `{host}` (WSL or remote); worktree actions currently \
+             support local panes only — run from a local pane in a Windows git \
+             repository (WSL support is coming)"
+        ),
+    }
+    url.to_file_path()
+        .map_err(|_| anyhow!("could not resolve {url} to a local path"))
+}
+
 /// Walk up from `path` to find the root of a git checkout.
 /// Handles both regular checkouts (`.git` directory) and worktrees
 /// (`.git` file containing a `gitdir:` pointer).
@@ -313,6 +342,27 @@ pub fn merge_and_remove(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_local_path_from_cwd_url() {
+        use url::Url;
+        // Local file URL (empty authority) resolves.
+        let local = Url::parse("file:///home/u/proj").unwrap();
+        assert!(local_path_from_cwd_url(&local).is_ok());
+        // localhost authority is also local.
+        let lh = Url::parse("file://localhost/home/u").unwrap();
+        assert!(local_path_from_cwd_url(&lh).is_ok());
+        // WSL/remote authority (hostname) is rejected with guidance.
+        let wsl = Url::parse("file://Home/home/vilius").unwrap();
+        let err = local_path_from_cwd_url(&wsl).unwrap_err().to_string();
+        assert!(
+            err.contains("WSL or remote") || err.contains("local panes only"),
+            "unexpected error: {err}"
+        );
+        // Non-file scheme is rejected.
+        let ssh = Url::parse("ssh://host/path").unwrap();
+        assert!(local_path_from_cwd_url(&ssh).is_err());
+    }
 
     #[test]
     fn test_validate_branch_name() {
