@@ -166,11 +166,150 @@ pub fn create_worktree(
     }
 }
 
+/// Where git runs for a worktree action: on the local host, or inside a WSL
+/// distro. For `Wsl`, all paths are Linux paths and git is invoked through
+/// `wsl.exe --distribution <distro> --exec git …` (so `std::fs` is never used
+/// against the distro's filesystem; repo discovery and directory creation go
+/// through git itself).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GitEnv {
+    Local,
+    Wsl { distro: String },
+}
+
+impl GitEnv {
+    fn base_command(&self) -> std::process::Command {
+        let mut cmd = match self {
+            GitEnv::Local => std::process::Command::new("git"),
+            GitEnv::Wsl { distro } => {
+                let mut c = std::process::Command::new("wsl.exe");
+                c.args(["--distribution", distro, "--exec", "git"]);
+                c
+            }
+        };
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(winapi::um::winbase::CREATE_NO_WINDOW);
+        }
+        cmd
+    }
+
+    fn run(&self, args: &[&str]) -> anyhow::Result<String> {
+        let output = self
+            .base_command()
+            .args(args)
+            .output()
+            .with_context(|| format!("failed to run git {args:?}"))?;
+        if output.status.success() {
+            Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+        } else {
+            bail!(
+                "git {} failed: {}",
+                args.join(" "),
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+    }
+}
+
+/// Directory name for a branch's worktree (slashes flattened to dashes).
+fn branch_dir_slug(branch: &str) -> String {
+    branch.replace('/', "-")
+}
+
+/// Resolve the WSL distro for a pane's domain name, given the configured WSL
+/// domains. Returns None for non-WSL (local) domains. Domains named
+/// `WSL:<distro>` are treated as WSL even when not explicitly configured.
+pub fn wsl_distro_from_domain_name(
+    domain_name: &str,
+    wsl_domains: &[config::WslDomain],
+) -> Option<String> {
+    if let Some(d) = wsl_domains.iter().find(|d| d.name == domain_name) {
+        return Some(
+            d.distribution
+                .clone()
+                .unwrap_or_else(|| domain_name.strip_prefix("WSL:").unwrap_or(domain_name).to_string()),
+        );
+    }
+    domain_name.strip_prefix("WSL:").map(|s| s.to_string())
+}
+
+/// Find the git repo root containing `cwd`, in the given env. Returns a path
+/// string in the env's space (native for Local, Linux for WSL).
+pub fn find_repo_root_in(env: &GitEnv, cwd: &str) -> anyhow::Result<String> {
+    match env {
+        GitEnv::Local => find_git_repo_root(Path::new(cwd))
+            .map(|p| p.to_string_lossy().into_owned())
+            .ok_or_else(|| anyhow!("{cwd} is not inside a git repository")),
+        GitEnv::Wsl { .. } => {
+            let top = env
+                .run(&["-C", cwd, "rev-parse", "--show-toplevel"])
+                .map_err(|_| anyhow!("{cwd} is not inside a git repository"))?;
+            let top = top.trim();
+            if top.is_empty() {
+                bail!("{cwd} is not inside a git repository");
+            }
+            Ok(top.to_string())
+        }
+    }
+}
+
+/// Linux worktree path for a WSL repo: `<repo-parent>/<repo>-worktrees/<slug>`.
+fn wsl_worktree_path(repo_root: &str, branch: &str) -> anyhow::Result<String> {
+    let repo_root = repo_root.trim_end_matches('/');
+    let (parent, name) = repo_root
+        .rsplit_once('/')
+        .ok_or_else(|| anyhow!("cannot derive a worktree path from {repo_root}"))?;
+    Ok(format!(
+        "{parent}/{name}-worktrees/{}",
+        branch_dir_slug(branch)
+    ))
+}
+
+/// Create (or reuse) a worktree, dispatching on env. Returns the worktree path
+/// in the env's space (native string for Local, Linux string for WSL).
+pub fn create_worktree_in(
+    env: &GitEnv,
+    repo_root: &str,
+    branch: &str,
+    worktree_root: Option<&Path>,
+) -> anyhow::Result<String> {
+    match env {
+        GitEnv::Local => create_worktree(Path::new(repo_root), branch, worktree_root)
+            .map(|p| p.to_string_lossy().into_owned()),
+        GitEnv::Wsl { .. } => create_worktree_wsl(env, repo_root, branch),
+    }
+}
+
+fn create_worktree_wsl(env: &GitEnv, repo_root: &str, branch: &str) -> anyhow::Result<String> {
+    validate_branch_name(branch)?;
+    let path = wsl_worktree_path(repo_root, branch)?;
+    // git creates the directory inside the distro. Try a new branch first,
+    // then an existing branch; if a worktree already lives at that path,
+    // treat it as a reuse.
+    match env.run(&["-C", repo_root, "worktree", "add", &path, "-b", branch]) {
+        Ok(_) => Ok(path),
+        Err(first_err) => match env.run(&["-C", repo_root, "worktree", "add", &path, branch]) {
+            Ok(_) => Ok(path),
+            Err(_) => {
+                if env.run(&["-C", &path, "rev-parse", "--git-dir"]).is_ok() {
+                    Ok(path)
+                } else {
+                    Err(first_err)
+                }
+            }
+        },
+    }
+}
+
 /// A worktree belonging to a repository, as reported by
-/// `git worktree list --porcelain`.
+/// `git worktree list --porcelain`. Paths are strings in the env's space
+/// (native for Local, Linux for WSL) — never `PathBuf`, so WSL Linux paths
+/// aren't mangled by `\`-separator handling on a Windows host.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorktreeInfo {
-    pub path: PathBuf,
+    pub path: String,
     /// Short branch name (e.g. "agent/foo"), or None for a detached HEAD.
     pub branch: Option<String>,
     /// The primary checkout (first entry); cannot be removed.
@@ -184,30 +323,20 @@ pub struct WorktreeInfo {
 /// Whether a worktree's working tree has uncommitted changes. Returns false
 /// if git can't be queried — only suitable for non-destructive display (the
 /// list). Destructive callers must use `ensure_clean`, which fails closed.
-pub fn is_dirty(worktree_path: &Path) -> bool {
-    git_command(worktree_path)
-        .args(["status", "--porcelain"])
-        .output()
-        .map(|o| o.status.success() && !o.stdout.is_empty())
+pub fn is_dirty(env: &GitEnv, worktree_path: &str) -> bool {
+    env.run(&["-C", worktree_path, "status", "--porcelain"])
+        .map(|out| !out.trim().is_empty())
         .unwrap_or(false)
 }
 
 /// Verify a worktree is clean, failing closed: an error here means git could
 /// not be queried, so the state is unknown and a destructive action must NOT
 /// proceed (unlike `is_dirty`, which treats unknown as clean for display).
-fn ensure_clean(worktree_path: &Path) -> anyhow::Result<()> {
-    let output = git_command(worktree_path)
-        .args(["status", "--porcelain"])
-        .output()
-        .with_context(|| format!("git status in {worktree_path:?}"))?;
-    if !output.status.success() {
-        bail!(
-            "could not determine worktree state: git status failed in {}: {}",
-            worktree_path.display(),
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
-    }
-    if !output.stdout.is_empty() {
+fn ensure_clean(env: &GitEnv, worktree_path: &str) -> anyhow::Result<()> {
+    let out = env
+        .run(&["-C", worktree_path, "status", "--porcelain"])
+        .map_err(|e| anyhow!("could not determine worktree state: {e:#}"))?;
+    if !out.trim().is_empty() {
         bail!("worktree has uncommitted changes; commit or discard them before merging");
     }
     Ok(())
@@ -216,8 +345,8 @@ fn ensure_clean(worktree_path: &Path) -> anyhow::Result<()> {
 /// List all worktrees of the repository, with dirty state computed for each.
 /// Works when invoked from any worktree of the repo. The first entry is the
 /// main worktree.
-pub fn list_worktrees(repo_root: &Path) -> anyhow::Result<Vec<WorktreeInfo>> {
-    let out = run_git(repo_root, &["worktree", "list", "--porcelain"])?;
+pub fn list_worktrees(env: &GitEnv, repo_root: &str) -> anyhow::Result<Vec<WorktreeInfo>> {
+    let out = env.run(&["-C", repo_root, "worktree", "list", "--porcelain"])?;
     let mut result = Vec::new();
 
     for block in out.split("\n\n") {
@@ -225,12 +354,12 @@ pub fn list_worktrees(repo_root: &Path) -> anyhow::Result<Vec<WorktreeInfo>> {
         if block.is_empty() {
             continue;
         }
-        let mut path: Option<PathBuf> = None;
+        let mut path: Option<String> = None;
         let mut branch: Option<String> = None;
         let mut is_bare = false;
         for line in block.lines() {
             if let Some(p) = line.strip_prefix("worktree ") {
-                path = Some(PathBuf::from(p));
+                path = Some(p.to_string());
             } else if let Some(b) = line.strip_prefix("branch ") {
                 branch = Some(b.strip_prefix("refs/heads/").unwrap_or(b).to_string());
             } else if line == "bare" {
@@ -254,41 +383,48 @@ pub fn list_worktrees(repo_root: &Path) -> anyhow::Result<Vec<WorktreeInfo>> {
     }
     for wt in &mut result {
         if !wt.is_bare {
-            wt.dirty = is_dirty(&wt.path);
+            wt.dirty = is_dirty(env, &wt.path);
         }
     }
     Ok(result)
 }
 
 /// Remove a worktree. `force` is required when the worktree is dirty or locked.
-pub fn remove_worktree(repo_root: &Path, worktree_path: &Path, force: bool) -> anyhow::Result<()> {
-    let path_str = worktree_path
-        .to_str()
-        .ok_or_else(|| anyhow!("worktree path {worktree_path:?} is not valid unicode"))?;
-    let mut args = vec!["worktree", "remove"];
+pub fn remove_worktree(
+    env: &GitEnv,
+    repo_root: &str,
+    worktree_path: &str,
+    force: bool,
+) -> anyhow::Result<()> {
+    let mut args = vec!["-C", repo_root, "worktree", "remove"];
     if force {
         args.push("--force");
     }
-    args.push(path_str);
-    run_git(repo_root, &args)?;
+    args.push(worktree_path);
+    env.run(&args)?;
     Ok(())
 }
 
 /// Delete a branch. `force` uses `-D` (delete even if unmerged) instead of `-d`.
-pub fn delete_branch(repo_root: &Path, branch: &str, force: bool) -> anyhow::Result<()> {
+pub fn delete_branch(
+    env: &GitEnv,
+    repo_root: &str,
+    branch: &str,
+    force: bool,
+) -> anyhow::Result<()> {
     let flag = if force { "-D" } else { "-d" };
-    run_git(repo_root, &["branch", flag, branch])?;
+    env.run(&["-C", repo_root, "branch", flag, branch])?;
     Ok(())
 }
 
 /// Merge `branch` into whatever the main worktree currently has checked out,
 /// running the merge in `main_worktree`. On failure the merge is aborted so the
 /// main checkout is never left mid-merge.
-pub fn merge_branch(main_worktree: &Path, branch: &str) -> anyhow::Result<()> {
-    match run_git(main_worktree, &["merge", "--no-ff", branch]) {
+pub fn merge_branch(env: &GitEnv, main_worktree: &str, branch: &str) -> anyhow::Result<()> {
+    match env.run(&["-C", main_worktree, "merge", "--no-ff", branch]) {
         Ok(_) => Ok(()),
         Err(err) => {
-            let _ = run_git(main_worktree, &["merge", "--abort"]);
+            let _ = env.run(&["-C", main_worktree, "merge", "--abort"]);
             Err(err)
         }
     }
@@ -296,14 +432,18 @@ pub fn merge_branch(main_worktree: &Path, branch: &str) -> anyhow::Result<()> {
 
 /// Force-remove a worktree and force-delete its branch — discards the work.
 /// Returns a human-readable summary of what happened.
-pub fn discard_worktree(repo_root: &Path, wt: &WorktreeInfo) -> anyhow::Result<String> {
+pub fn discard_worktree(
+    env: &GitEnv,
+    repo_root: &str,
+    wt: &WorktreeInfo,
+) -> anyhow::Result<String> {
     if wt.is_main {
         bail!("cannot remove the main worktree");
     }
-    remove_worktree(repo_root, &wt.path, true)?;
-    let mut msg = format!("Removed worktree {}", wt.path.display());
+    remove_worktree(env, repo_root, &wt.path, true)?;
+    let mut msg = format!("Removed worktree {}", wt.path);
     if let Some(branch) = &wt.branch {
-        match delete_branch(repo_root, branch, true) {
+        match delete_branch(env, repo_root, branch, true) {
             Ok(_) => msg.push_str(&format!(", deleted branch `{branch}`")),
             Err(e) => {
                 msg.push_str(&format!(", but branch `{branch}` was not deleted: {e:#}"))
@@ -317,8 +457,9 @@ pub fn discard_worktree(repo_root: &Path, wt: &WorktreeInfo) -> anyhow::Result<S
 /// worktree and delete the (now-merged) branch. Refuses if the worktree is
 /// dirty. Returns a human-readable summary.
 pub fn merge_and_remove(
-    repo_root: &Path,
-    main_worktree: &Path,
+    env: &GitEnv,
+    repo_root: &str,
+    main_worktree: &str,
     wt: &WorktreeInfo,
 ) -> anyhow::Result<String> {
     if wt.is_main {
@@ -328,20 +469,53 @@ pub fn merge_and_remove(
         .branch
         .as_deref()
         .ok_or_else(|| anyhow!("worktree has a detached HEAD; nothing to merge"))?;
-    ensure_clean(&wt.path)?;
+    ensure_clean(env, &wt.path)?;
 
-    merge_branch(main_worktree, branch)?;
-    remove_worktree(repo_root, &wt.path, false)?;
-    delete_branch(repo_root, branch, false)?;
+    merge_branch(env, main_worktree, branch)?;
+    remove_worktree(env, repo_root, &wt.path, false)?;
+    delete_branch(env, repo_root, branch, false)?;
     Ok(format!(
         "Merged `{branch}` into the main worktree, removed {} and deleted the branch",
-        wt.path.display()
+        wt.path
     ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_wsl_worktree_path() {
+        assert_eq!(
+            wsl_worktree_path("/home/v/projects/repo", "agent/foo").unwrap(),
+            "/home/v/projects/repo-worktrees/agent-foo"
+        );
+        assert_eq!(
+            wsl_worktree_path("/home/v/projects/repo/", "fix").unwrap(),
+            "/home/v/projects/repo-worktrees/fix"
+        );
+    }
+
+    #[test]
+    fn test_wsl_distro_from_domain_name() {
+        // "WSL:<distro>" fallback with no config.
+        assert_eq!(
+            wsl_distro_from_domain_name("WSL:Ubuntu", &[]).as_deref(),
+            Some("Ubuntu")
+        );
+        // Non-WSL domain.
+        assert_eq!(wsl_distro_from_domain_name("local", &[]), None);
+        // Config entry takes its explicit distribution.
+        let domains = vec![config::WslDomain {
+            name: "WSL:dev".to_string(),
+            distribution: Some("Ubuntu-22.04".to_string()),
+            ..Default::default()
+        }];
+        assert_eq!(
+            wsl_distro_from_domain_name("WSL:dev", &domains).as_deref(),
+            Some("Ubuntu-22.04")
+        );
+    }
 
     #[test]
     fn test_local_path_from_cwd_url() {
@@ -471,12 +645,12 @@ mod tests {
         // Make the worktree dirty.
         std::fs::write(wt.join("dirty.txt"), "x").unwrap();
 
-        let list = list_worktrees(&repo).unwrap();
+        let list = list_worktrees(&GitEnv::Local, repo.to_str().unwrap()).unwrap();
         assert_eq!(list.len(), 2);
         assert!(list[0].is_main, "first entry is the main worktree");
         assert_eq!(list[0].branch.as_deref(), Some("main"));
 
-        let foo = list.iter().find(|w| w.path == wt).unwrap();
+        let foo = list.iter().find(|w| w.path == wt.to_str().unwrap()).unwrap();
         assert_eq!(foo.branch.as_deref(), Some("agent/foo"));
         assert!(!foo.is_main);
         assert!(foo.dirty, "untracked file makes it dirty");
@@ -492,17 +666,18 @@ mod tests {
         git_in(&wt, &["add", "."]);
         git_in(&wt, &["commit", "-m", "add feature"]);
 
-        let list = list_worktrees(&repo).unwrap();
+        let repo_str = repo.to_str().unwrap();
+        let list = list_worktrees(&GitEnv::Local, repo_str).unwrap();
         let main_path = list.iter().find(|w| w.is_main).unwrap().path.clone();
-        let feat = list.iter().find(|w| w.path == wt).unwrap().clone();
+        let feat = list.iter().find(|w| w.path == wt.to_str().unwrap()).unwrap().clone();
 
-        let msg = merge_and_remove(&repo, &main_path, &feat).unwrap();
+        let msg = merge_and_remove(&GitEnv::Local, repo_str, &main_path, &feat).unwrap();
         assert!(msg.contains("agent/feat"), "summary mentions the branch");
 
         // The feature file is now in the main worktree.
-        assert!(main_path.join("feature.txt").exists());
+        assert!(Path::new(&main_path).join("feature.txt").exists());
         // Worktree directory is gone and no longer listed.
-        let after = list_worktrees(&repo).unwrap();
+        let after = list_worktrees(&GitEnv::Local, repo_str).unwrap();
         assert_eq!(after.len(), 1);
         assert!(after[0].is_main);
 
@@ -515,11 +690,12 @@ mod tests {
         let wt = create_worktree(&repo, "agent/dirty", None).unwrap();
         std::fs::write(wt.join("uncommitted.txt"), "wip").unwrap();
 
-        let list = list_worktrees(&repo).unwrap();
+        let repo_str = repo.to_str().unwrap();
+        let list = list_worktrees(&GitEnv::Local, repo_str).unwrap();
         let main_path = list.iter().find(|w| w.is_main).unwrap().path.clone();
-        let dirty = list.iter().find(|w| w.path == wt).unwrap().clone();
+        let dirty = list.iter().find(|w| w.path == wt.to_str().unwrap()).unwrap().clone();
 
-        let err = merge_and_remove(&repo, &main_path, &dirty).unwrap_err();
+        let err = merge_and_remove(&GitEnv::Local, repo_str, &main_path, &dirty).unwrap_err();
         assert!(err.to_string().contains("uncommitted"));
         // Worktree is untouched.
         assert!(wt.exists());
@@ -534,16 +710,19 @@ mod tests {
         // Dirty, uncommitted — discard must force through it.
         std::fs::write(wt.join("scratch.txt"), "garbage").unwrap();
 
-        let list = list_worktrees(&repo).unwrap();
-        let junk = list.iter().find(|w| w.path == wt).unwrap().clone();
+        let repo_str = repo.to_str().unwrap();
+        let list = list_worktrees(&GitEnv::Local, repo_str).unwrap();
+        let junk = list.iter().find(|w| w.path == wt.to_str().unwrap()).unwrap().clone();
 
-        discard_worktree(&repo, &junk).unwrap();
+        discard_worktree(&GitEnv::Local, repo_str, &junk).unwrap();
         assert!(!wt.exists(), "worktree directory removed");
 
-        let after = list_worktrees(&repo).unwrap();
+        let after = list_worktrees(&GitEnv::Local, repo_str).unwrap();
         assert_eq!(after.len(), 1);
         // Branch is gone too.
-        let branches = run_git(&repo, &["branch", "--list", "agent/junk"]).unwrap();
+        let branches = GitEnv::Local
+            .run(&["-C", repo_str, "branch", "--list", "agent/junk"])
+            .unwrap();
         assert!(branches.trim().is_empty(), "branch deleted");
 
         std::fs::remove_dir_all(&tmp).ok();
@@ -552,9 +731,9 @@ mod tests {
     #[test]
     fn test_discard_refuses_main() {
         let (tmp, repo) = init_repo();
-        let list = list_worktrees(&repo).unwrap();
+        let list = list_worktrees(&GitEnv::Local, repo.to_str().unwrap()).unwrap();
         let main = list[0].clone();
-        assert!(discard_worktree(&repo, &main).is_err());
+        assert!(discard_worktree(&GitEnv::Local, repo.to_str().unwrap(), &main).is_err());
         std::fs::remove_dir_all(&tmp).ok();
     }
 }

@@ -58,7 +58,8 @@ fn wait_for_key(term: &mut TermWizTerminal) {
 
 pub fn show_new_agent_overlay(
     mut term: TermWizTerminal,
-    repo_root: anyhow::Result<PathBuf>,
+    env: worktree::GitEnv,
+    repo_root: anyhow::Result<String>,
     worktree_root: Option<PathBuf>,
     window: ::window::Window,
 ) -> anyhow::Result<()> {
@@ -77,10 +78,9 @@ pub fn show_new_agent_overlay(
         }
     };
 
-    render_line(&mut term, &format!("Repo: {}", repo_root.display()))?;
-    let default_root = worktree::worktree_path_for(&repo_root, "<branch>", worktree_root.as_deref());
-    if let Ok(root) = &default_root {
-        render_line(&mut term, &format!("Worktree: {}", root.display()))?;
+    render_line(&mut term, &format!("Repo: {}", repo_root))?;
+    if let worktree::GitEnv::Wsl { distro } = &env {
+        render_line(&mut term, &format!("WSL distro: {}", distro))?;
     }
     render_line(&mut term, "")?;
 
@@ -107,11 +107,12 @@ pub fn show_new_agent_overlay(
     render_line(&mut term, "")?;
     render_line(&mut term, &format!("Creating worktree for `{}`...", branch))?;
 
-    match worktree::create_worktree(&repo_root, &branch, worktree_root.as_deref()) {
+    match worktree::create_worktree_in(&env, &repo_root, &branch, worktree_root.as_deref()) {
         Ok(path) => {
-            render_line(&mut term, &format!("Worktree ready: {}", path.display()))?;
+            render_line(&mut term, &format!("Worktree ready: {}", path))?;
+            let path = PathBuf::from(path);
             window.notify(TermWindowNotif::Apply(Box::new(move |term_window| {
-                term_window.spawn_claude_agent_tab(path);
+                term_window.spawn_claude_agent_tab(env, path);
             })));
         }
         Err(err) => {

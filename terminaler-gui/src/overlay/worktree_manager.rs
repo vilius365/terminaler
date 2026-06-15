@@ -6,9 +6,8 @@
 //! Runs on a dedicated overlay thread (see `start_overlay`), so the blocking
 //! `git` calls here never stall the GUI thread.
 
-use crate::worktree::{self, WorktreeInfo};
+use crate::worktree::{self, GitEnv, WorktreeInfo};
 use mux::termwiztermtab::TermWizTerminal;
-use std::path::PathBuf;
 use termwiz::cell::{AttributeChange, CellAttributes};
 use termwiz::color::ColorAttribute;
 use termwiz::input::{InputEvent, KeyCode, KeyEvent};
@@ -16,7 +15,8 @@ use termwiz::surface::{Change, Position};
 use termwiz::terminal::Terminal;
 
 struct ManagerState {
-    repo_root: PathBuf,
+    env: GitEnv,
+    repo_root: String,
     repo_name: String,
     worktrees: Vec<WorktreeInfo>,
     selected: usize,
@@ -24,7 +24,7 @@ struct ManagerState {
 
 impl ManagerState {
     fn refresh(&mut self) -> anyhow::Result<()> {
-        self.worktrees = worktree::list_worktrees(&self.repo_root)?;
+        self.worktrees = worktree::list_worktrees(&self.env, &self.repo_root)?;
         if self.selected >= self.worktrees.len() {
             self.selected = self.worktrees.len().saturating_sub(1);
         }
@@ -69,7 +69,7 @@ impl ManagerState {
             };
             changes.push(Change::Text(format!(
                 "{marker} {branch}{tag}\r\n    {}\r\n    {status}\r\n",
-                wt.path.display()
+                wt.path
             )));
 
             if selected {
@@ -137,7 +137,7 @@ fn do_discard(term: &mut TermWizTerminal, state: &ManagerState, wt: &WorktreeInf
     let branch = wt.branch.as_deref().unwrap_or("(detached)");
     let mut prompt = vec![
         format!("Discard worktree `{branch}`?"),
-        format!("  path: {}", wt.path.display()),
+        format!("  path: {}", wt.path),
         "  Force-removes the worktree and deletes the branch (irreversible).".to_string(),
     ];
     if wt.dirty {
@@ -146,7 +146,7 @@ fn do_discard(term: &mut TermWizTerminal, state: &ManagerState, wt: &WorktreeInf
     if !confirm(term, &prompt)? {
         return Ok(());
     }
-    match worktree::discard_worktree(&state.repo_root, wt) {
+    match worktree::discard_worktree(&state.env, &state.repo_root, wt) {
         Ok(msg) => show_result(term, &msg),
         Err(e) => show_result(term, &format!("Discard failed: {e:#}")),
     }
@@ -176,12 +176,12 @@ fn do_merge(term: &mut TermWizTerminal, state: &ManagerState, wt: &WorktreeInfo)
         .unwrap_or_else(|| "the main worktree".to_string());
     let prompt = vec![
         format!("Merge `{branch}` into `{base}` and remove the worktree + branch?"),
-        format!("  path: {}", wt.path.display()),
+        format!("  path: {}", wt.path),
     ];
     if !confirm(term, &prompt)? {
         return Ok(());
     }
-    match worktree::merge_and_remove(&state.repo_root, &main_path, wt) {
+    match worktree::merge_and_remove(&state.env, &state.repo_root, &main_path, wt) {
         Ok(msg) => show_result(term, &msg),
         Err(e) => show_result(term, &format!("Merge & remove failed: {e:#}")),
     }
@@ -189,7 +189,8 @@ fn do_merge(term: &mut TermWizTerminal, state: &ManagerState, wt: &WorktreeInfo)
 
 pub fn show_worktree_manager_overlay(
     mut term: TermWizTerminal,
-    repo_root: anyhow::Result<PathBuf>,
+    env: GitEnv,
+    repo_root: anyhow::Result<String>,
 ) -> anyhow::Result<()> {
     term.set_raw_mode()?;
     term.render(&[Change::Title("Worktree Manager".to_string())])?;
@@ -209,12 +210,15 @@ pub fn show_worktree_manager_overlay(
     };
 
     let repo_name = repo_root
-        .file_name()
-        .and_then(|n| n.to_str())
+        .trim_end_matches(|c| c == '/' || c == '\\')
+        .rsplit(|c| c == '/' || c == '\\')
+        .next()
+        .filter(|s| !s.is_empty())
         .unwrap_or("repo")
         .to_string();
 
     let mut state = ManagerState {
+        env,
         repo_root,
         repo_name,
         worktrees: vec![],

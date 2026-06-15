@@ -3096,6 +3096,52 @@ impl TermWindow {
         self.show_launcher_impl(args, 0);
     }
 
+    /// Resolve a pane's git environment (local vs WSL distro) and its repo
+    /// root in that environment's path space. Shared by the New Agent and
+    /// Worktree Manager overlays.
+    fn resolve_pane_git_env_and_repo(
+        &self,
+        pane: &Arc<dyn Pane>,
+    ) -> (crate::worktree::GitEnv, anyhow::Result<String>) {
+        let mux = Mux::get();
+        let env = {
+            let domain_name = mux
+                .get_domain(pane.domain_id())
+                .map(|d| d.domain_name().to_string());
+            match domain_name.and_then(|name| {
+                crate::worktree::wsl_distro_from_domain_name(
+                    &name,
+                    &config::configuration().wsl_domains(),
+                )
+            }) {
+                Some(distro) => crate::worktree::GitEnv::Wsl { distro },
+                None => crate::worktree::GitEnv::Local,
+            }
+        };
+
+        // WSL panes report a Linux path in the URL path component; local panes
+        // are validated/resolved via the file URL (rejecting remote authorities).
+        let repo_root: anyhow::Result<String> =
+            match pane.get_current_working_dir(CachePolicy::AllowStale) {
+                None => Err(anyhow!("cannot determine the current pane's working directory")),
+                Some(url) => match &env {
+                    crate::worktree::GitEnv::Wsl { .. } => {
+                        crate::worktree::find_repo_root_in(&env, url.path())
+                    }
+                    crate::worktree::GitEnv::Local => {
+                        crate::worktree::local_path_from_cwd_url(&url).and_then(|cwd| {
+                            let cwd = cwd
+                                .to_str()
+                                .ok_or_else(|| anyhow!("non-unicode working directory"))?
+                                .to_string();
+                            crate::worktree::find_repo_root_in(&env, &cwd)
+                        })
+                    }
+                },
+            };
+        (env, repo_root)
+    }
+
     /// Open the New Claude Agent overlay: prompts for a branch name, creates
     /// a git worktree and spawns a Claude session tab in it.
     fn show_new_claude_agent(&mut self) {
@@ -3109,16 +3155,9 @@ impl TermWindow {
             None => return,
         };
 
-        // Resolve the pane's cwd to a git repo root up front; the overlay
-        // renders the error if we're not inside a repository.
-        let repo_root: anyhow::Result<PathBuf> =
-            match pane.get_current_working_dir(CachePolicy::AllowStale) {
-                None => Err(anyhow!("cannot determine the current pane's working directory")),
-                Some(url) => crate::worktree::local_path_from_cwd_url(&url).and_then(|cwd| {
-                    crate::worktree::find_git_repo_root(&cwd)
-                        .ok_or_else(|| anyhow!("{} is not inside a git repository", cwd.display()))
-                }),
-            };
+        // Resolve the pane's git environment (local vs WSL) and repo root; the
+        // overlay renders the error if we're not inside a repository.
+        let (env, repo_root) = self.resolve_pane_git_env_and_repo(&pane);
 
         let worktree_root = self
             .config
@@ -3130,6 +3169,7 @@ impl TermWindow {
         let (overlay, future) = start_overlay(self, &tab, move |_tab_id, term| {
             crate::overlay::new_agent::show_new_agent_overlay(
                 term,
+                env,
                 repo_root,
                 worktree_root,
                 window,
@@ -3151,25 +3191,20 @@ impl TermWindow {
             None => return,
         };
 
-        let repo_root: anyhow::Result<PathBuf> =
-            match pane.get_current_working_dir(CachePolicy::AllowStale) {
-                None => Err(anyhow!("cannot determine the current pane's working directory")),
-                Some(url) => crate::worktree::local_path_from_cwd_url(&url).and_then(|cwd| {
-                    crate::worktree::find_git_repo_root(&cwd)
-                        .ok_or_else(|| anyhow!("{} is not inside a git repository", cwd.display()))
-                }),
-            };
+        let (env, repo_root) = self.resolve_pane_git_env_and_repo(&pane);
 
         let (overlay, future) = start_overlay(self, &tab, move |_tab_id, term| {
-            crate::overlay::worktree_manager::show_worktree_manager_overlay(term, repo_root)
+            crate::overlay::worktree_manager::show_worktree_manager_overlay(term, env, repo_root)
         });
         self.assign_overlay(tab.tab_id(), overlay);
         promise::spawn::spawn(future).detach();
     }
 
     /// Spawn a new tab in `cwd` using the configured agent workspace
-    /// template, launching the Claude command in the main pane.
-    pub fn spawn_claude_agent_tab(&mut self, cwd: PathBuf) {
+    /// template, launching the Claude command in the main pane. The tab is
+    /// spawned in the current pane's domain, so for a WSL pane it lands in the
+    /// distro; the claude command is chosen to suit that domain.
+    pub fn spawn_claude_agent_tab(&mut self, env: crate::worktree::GitEnv, cwd: PathBuf) {
         let cfg = self.config.claude_agent.clone().unwrap_or_default();
         let template = match terminaler_layout::builtin_workspaces()
             .into_iter()
@@ -3184,7 +3219,14 @@ impl TermWindow {
         let term_config = Arc::new(TermConfig::with_config(self.config.clone()));
         let size = self.terminal_size;
         let src_window_id = self.mux_window_id;
-        let claude_argv = cfg.claude_command;
+        // For a WSL pane the tab spawns inside the distro and the WSL domain
+        // wraps the program via wsl.exe, so the command is bare `claude` (a
+        // Linux binary). The Windows `cmd /c claude` shim only applies to local
+        // panes.
+        let claude_argv = match env {
+            crate::worktree::GitEnv::Wsl { .. } => vec!["claude".to_string()],
+            crate::worktree::GitEnv::Local => cfg.claude_command,
+        };
 
         promise::spawn::spawn(async move {
             if let Err(err) = Self::spawn_claude_agent_tab_impl(
