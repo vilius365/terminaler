@@ -1,0 +1,2 @@
+# Transient runtime lock — recreated each session, must not be versioned
+scheduled_tasks.lock
