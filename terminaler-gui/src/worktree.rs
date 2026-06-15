@@ -137,6 +137,158 @@ pub fn create_worktree(
     }
 }
 
+/// A worktree belonging to a repository, as reported by
+/// `git worktree list --porcelain`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorktreeInfo {
+    pub path: PathBuf,
+    /// Short branch name (e.g. "agent/foo"), or None for a detached HEAD.
+    pub branch: Option<String>,
+    /// The primary checkout (first entry); cannot be removed.
+    pub is_main: bool,
+    /// A bare repository entry (has no working tree).
+    pub is_bare: bool,
+    /// Whether the working tree has uncommitted changes.
+    pub dirty: bool,
+}
+
+/// Whether a worktree's working tree has uncommitted changes.
+pub fn is_dirty(worktree_path: &Path) -> bool {
+    git_command(worktree_path)
+        .args(["status", "--porcelain"])
+        .output()
+        .map(|o| o.status.success() && !o.stdout.is_empty())
+        .unwrap_or(false)
+}
+
+/// List all worktrees of the repository, with dirty state computed for each.
+/// Works when invoked from any worktree of the repo. The first entry is the
+/// main worktree.
+pub fn list_worktrees(repo_root: &Path) -> anyhow::Result<Vec<WorktreeInfo>> {
+    let out = run_git(repo_root, &["worktree", "list", "--porcelain"])?;
+    let mut result = Vec::new();
+
+    for block in out.split("\n\n") {
+        let block = block.trim();
+        if block.is_empty() {
+            continue;
+        }
+        let mut path: Option<PathBuf> = None;
+        let mut branch: Option<String> = None;
+        let mut is_bare = false;
+        for line in block.lines() {
+            if let Some(p) = line.strip_prefix("worktree ") {
+                path = Some(PathBuf::from(p));
+            } else if let Some(b) = line.strip_prefix("branch ") {
+                branch = Some(b.strip_prefix("refs/heads/").unwrap_or(b).to_string());
+            } else if line == "bare" {
+                is_bare = true;
+            }
+            // "HEAD <sha>", "detached", "locked", "prunable" are ignored.
+        }
+        if let Some(path) = path {
+            result.push(WorktreeInfo {
+                path,
+                branch,
+                is_main: false,
+                is_bare,
+                dirty: false,
+            });
+        }
+    }
+
+    if let Some(first) = result.first_mut() {
+        first.is_main = true;
+    }
+    for wt in &mut result {
+        if !wt.is_bare {
+            wt.dirty = is_dirty(&wt.path);
+        }
+    }
+    Ok(result)
+}
+
+/// Remove a worktree. `force` is required when the worktree is dirty or locked.
+pub fn remove_worktree(repo_root: &Path, worktree_path: &Path, force: bool) -> anyhow::Result<()> {
+    let path_str = worktree_path
+        .to_str()
+        .ok_or_else(|| anyhow!("worktree path {worktree_path:?} is not valid unicode"))?;
+    let mut args = vec!["worktree", "remove"];
+    if force {
+        args.push("--force");
+    }
+    args.push(path_str);
+    run_git(repo_root, &args)?;
+    Ok(())
+}
+
+/// Delete a branch. `force` uses `-D` (delete even if unmerged) instead of `-d`.
+pub fn delete_branch(repo_root: &Path, branch: &str, force: bool) -> anyhow::Result<()> {
+    let flag = if force { "-D" } else { "-d" };
+    run_git(repo_root, &["branch", flag, branch])?;
+    Ok(())
+}
+
+/// Merge `branch` into whatever the main worktree currently has checked out,
+/// running the merge in `main_worktree`. On failure the merge is aborted so the
+/// main checkout is never left mid-merge.
+pub fn merge_branch(main_worktree: &Path, branch: &str) -> anyhow::Result<()> {
+    match run_git(main_worktree, &["merge", "--no-ff", branch]) {
+        Ok(_) => Ok(()),
+        Err(err) => {
+            let _ = run_git(main_worktree, &["merge", "--abort"]);
+            Err(err)
+        }
+    }
+}
+
+/// Force-remove a worktree and force-delete its branch — discards the work.
+/// Returns a human-readable summary of what happened.
+pub fn discard_worktree(repo_root: &Path, wt: &WorktreeInfo) -> anyhow::Result<String> {
+    if wt.is_main {
+        bail!("cannot remove the main worktree");
+    }
+    remove_worktree(repo_root, &wt.path, true)?;
+    let mut msg = format!("Removed worktree {}", wt.path.display());
+    if let Some(branch) = &wt.branch {
+        match delete_branch(repo_root, branch, true) {
+            Ok(_) => msg.push_str(&format!(", deleted branch `{branch}`")),
+            Err(e) => {
+                msg.push_str(&format!(", but branch `{branch}` was not deleted: {e:#}"))
+            }
+        }
+    }
+    Ok(msg)
+}
+
+/// Merge the worktree's branch into the main worktree, then remove the
+/// worktree and delete the (now-merged) branch. Refuses if the worktree is
+/// dirty. Returns a human-readable summary.
+pub fn merge_and_remove(
+    repo_root: &Path,
+    main_worktree: &Path,
+    wt: &WorktreeInfo,
+) -> anyhow::Result<String> {
+    if wt.is_main {
+        bail!("cannot merge/remove the main worktree");
+    }
+    let branch = wt
+        .branch
+        .as_deref()
+        .ok_or_else(|| anyhow!("worktree has a detached HEAD; nothing to merge"))?;
+    if is_dirty(&wt.path) {
+        bail!("worktree has uncommitted changes; commit or discard them before merging");
+    }
+
+    merge_branch(main_worktree, branch)?;
+    remove_worktree(repo_root, &wt.path, false)?;
+    delete_branch(repo_root, branch, false)?;
+    Ok(format!(
+        "Merged `{branch}` into the main worktree, removed {} and deleted the branch",
+        wt.path.display()
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -203,6 +355,135 @@ mod tests {
         let wt2 = create_worktree(&repo, "agent/test", None).unwrap();
         assert_eq!(wt, wt2);
 
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// Run git in `dir`, asserting success.
+    fn git_in(dir: &Path, args: &[&str]) {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git -C {dir:?} {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    fn init_repo() -> (PathBuf, PathBuf) {
+        let tmp = std::env::temp_dir().join(format!(
+            "terminaler-wt-lifecycle-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let repo = tmp.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        git_in(&repo, &["init", "-b", "main"]);
+        git_in(&repo, &["config", "user.email", "t@t"]);
+        git_in(&repo, &["config", "user.name", "t"]);
+        std::fs::write(repo.join("base.txt"), "base").unwrap();
+        git_in(&repo, &["add", "."]);
+        git_in(&repo, &["commit", "-m", "init"]);
+        (tmp, repo)
+    }
+
+    #[test]
+    fn test_list_worktrees() {
+        let (tmp, repo) = init_repo();
+        let wt = create_worktree(&repo, "agent/foo", None).unwrap();
+        // Make the worktree dirty.
+        std::fs::write(wt.join("dirty.txt"), "x").unwrap();
+
+        let list = list_worktrees(&repo).unwrap();
+        assert_eq!(list.len(), 2);
+        assert!(list[0].is_main, "first entry is the main worktree");
+        assert_eq!(list[0].branch.as_deref(), Some("main"));
+
+        let foo = list.iter().find(|w| w.path == wt).unwrap();
+        assert_eq!(foo.branch.as_deref(), Some("agent/foo"));
+        assert!(!foo.is_main);
+        assert!(foo.dirty, "untracked file makes it dirty");
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn test_merge_and_remove() {
+        let (tmp, repo) = init_repo();
+        let wt = create_worktree(&repo, "agent/feat", None).unwrap();
+        std::fs::write(wt.join("feature.txt"), "new feature").unwrap();
+        git_in(&wt, &["add", "."]);
+        git_in(&wt, &["commit", "-m", "add feature"]);
+
+        let list = list_worktrees(&repo).unwrap();
+        let main_path = list.iter().find(|w| w.is_main).unwrap().path.clone();
+        let feat = list.iter().find(|w| w.path == wt).unwrap().clone();
+
+        let msg = merge_and_remove(&repo, &main_path, &feat).unwrap();
+        assert!(msg.contains("agent/feat"), "summary mentions the branch");
+
+        // The feature file is now in the main worktree.
+        assert!(main_path.join("feature.txt").exists());
+        // Worktree directory is gone and no longer listed.
+        let after = list_worktrees(&repo).unwrap();
+        assert_eq!(after.len(), 1);
+        assert!(after[0].is_main);
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn test_merge_and_remove_refuses_dirty() {
+        let (tmp, repo) = init_repo();
+        let wt = create_worktree(&repo, "agent/dirty", None).unwrap();
+        std::fs::write(wt.join("uncommitted.txt"), "wip").unwrap();
+
+        let list = list_worktrees(&repo).unwrap();
+        let main_path = list.iter().find(|w| w.is_main).unwrap().path.clone();
+        let dirty = list.iter().find(|w| w.path == wt).unwrap().clone();
+
+        let err = merge_and_remove(&repo, &main_path, &dirty).unwrap_err();
+        assert!(err.to_string().contains("uncommitted"));
+        // Worktree is untouched.
+        assert!(wt.exists());
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn test_discard_worktree() {
+        let (tmp, repo) = init_repo();
+        let wt = create_worktree(&repo, "agent/junk", None).unwrap();
+        // Dirty, uncommitted — discard must force through it.
+        std::fs::write(wt.join("scratch.txt"), "garbage").unwrap();
+
+        let list = list_worktrees(&repo).unwrap();
+        let junk = list.iter().find(|w| w.path == wt).unwrap().clone();
+
+        discard_worktree(&repo, &junk).unwrap();
+        assert!(!wt.exists(), "worktree directory removed");
+
+        let after = list_worktrees(&repo).unwrap();
+        assert_eq!(after.len(), 1);
+        // Branch is gone too.
+        let branches = run_git(&repo, &["branch", "--list", "agent/junk"]).unwrap();
+        assert!(branches.trim().is_empty(), "branch deleted");
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn test_discard_refuses_main() {
+        let (tmp, repo) = init_repo();
+        let list = list_worktrees(&repo).unwrap();
+        let main = list[0].clone();
+        assert!(discard_worktree(&repo, &main).is_err());
         std::fs::remove_dir_all(&tmp).ok();
     }
 }

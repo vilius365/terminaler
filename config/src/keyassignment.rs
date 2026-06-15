@@ -676,6 +676,9 @@ pub enum KeyAssignment {
     /// Focus a specific pane by ID, across windows/workspaces.
     /// Internal: used by dashboard entries; not shown in the palette.
     FocusPaneById(usize),
+    /// Open the worktree manager overlay: list the current repo's git
+    /// worktrees and merge & remove / discard them.
+    ManageWorktrees,
 }
 
 #[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]

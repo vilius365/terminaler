@@ -33,18 +33,16 @@ an at-a-glance fleet dashboard, click-to-jump alerting, and live session persist
 The single most-demanded workflow: 3–5 parallel Claude sessions, one per git worktree
 (vendor-endorsed; workmux ~1.6k stars exists solely for this in tmux).
 
-- **"New Agent" action**: one keystroke/palette entry → create git worktree (or reuse) →
-  spawn pane/tab from the `claude-code` template → launch `claude` (optionally
-  `claude --worktree`) in it. Surfaces: `SnapLayoutPicker`-style overlay listing
-  repo + branch name.
-- **Agent fleet dashboard**: a cross-window/workspace overlay (palette-style) listing every
+- **"New Agent" action** ✅ (`ctrl+shift+a`): create git worktree (or reuse) →
+  spawn tab from the `claude-code` template → launch `claude` in it.
+- **Agent fleet dashboard** ✅ (`ctrl+shift+j`): cross-window/workspace overlay listing every
   Claude pane with status, worktree/branch, context %, cost — Enter jumps to it.
-  Data already exists in the sidebar polling layer (`tab_sidebar.rs`); this is a new
-  presentation over the same `claude_*` user vars.
-- **Worktree lifecycle**: card affordances for "merge & remove worktree" / "discard"
-  (shell out to git; show dirty state).
+- **Worktree lifecycle** ✅ (`ctrl+shift+w`): worktree manager overlay listing the repo's
+  worktrees with dirty state, offering "merge & remove" and "discard" with confirmation.
 - Crates: `terminaler-layout` (template spawn already supports per-pane cwd/command),
   `config/src/keyassignment.rs` (new actions), `terminaler-gui` overlay.
+
+  **P1 code-complete on Linux; all three actions pending Windows functional validation.**
 
 ### P2 — Per-session differentiation + click-to-jump alerting
 Extends what exists; the bottleneck at 3+ agents is "which one wants me?".

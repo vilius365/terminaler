@@ -15,6 +15,7 @@ pub mod new_agent;
 pub mod prompt;
 pub mod quickselect;
 pub mod selector;
+pub mod worktree_manager;
 
 pub use confirm_close_pane::{
     confirm_close_pane, confirm_close_tab, confirm_close_window, confirm_quit_program,

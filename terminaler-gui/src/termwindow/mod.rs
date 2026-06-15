@@ -3136,6 +3136,37 @@ impl TermWindow {
         promise::spawn::spawn(future).detach();
     }
 
+    /// Open the worktree manager overlay for the current pane's repo.
+    fn show_worktree_manager(&mut self) {
+        let mux = Mux::get();
+        let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
+            Some(tab) => tab,
+            None => return,
+        };
+        let pane = match self.get_active_pane_or_overlay() {
+            Some(pane) => pane,
+            None => return,
+        };
+
+        let cwd: Option<PathBuf> = pane
+            .get_current_working_dir(CachePolicy::AllowStale)
+            .map(|url| {
+                url.to_file_path()
+                    .unwrap_or_else(|_| PathBuf::from(url.path()))
+            });
+        let repo_root: anyhow::Result<PathBuf> = match cwd {
+            None => Err(anyhow!("cannot determine the current pane's working directory")),
+            Some(cwd) => crate::worktree::find_git_repo_root(&cwd)
+                .ok_or_else(|| anyhow!("{} is not inside a git repository", cwd.display())),
+        };
+
+        let (overlay, future) = start_overlay(self, &tab, move |_tab_id, term| {
+            crate::overlay::worktree_manager::show_worktree_manager_overlay(term, repo_root)
+        });
+        self.assign_overlay(tab.tab_id(), overlay);
+        promise::spawn::spawn(future).detach();
+    }
+
     /// Spawn a new tab in `cwd` using the configured agent workspace
     /// template, launching the Claude command in the main pane.
     pub fn spawn_claude_agent_tab(&mut self, cwd: PathBuf) {
@@ -4255,6 +4286,10 @@ impl TermWindow {
             }
             FocusPaneById(pane_id) => {
                 self.focus_pane_by_id(*pane_id);
+            }
+            ManageWorktrees => {
+                log::info!("ManageWorktrees: showing worktree manager");
+                self.show_worktree_manager();
             }
             ToggleTabSidebar => {
                 self.show_tab_sidebar = !self.show_tab_sidebar;

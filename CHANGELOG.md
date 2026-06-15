@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-06-15
+
+### Added
+- **Manage Worktrees** action (`ctrl+shift+w`): overlay listing the current repo's git worktrees with dirty/clean state, offering two lifecycle actions per worktree — **merge & remove** (`m`: merges the branch into the main worktree, then removes the worktree and deletes the now-merged branch; refuses if the worktree is dirty) and **discard** (`d`: force-removes the worktree and deletes its branch). Both require explicit `y` confirmation and surface dirty state first; the main worktree cannot be removed. Completes the P1 worktree-orchestration lifecycle.
+
 ## 2026-06-11
 
 ### Added
