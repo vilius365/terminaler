@@ -314,49 +314,27 @@ impl crate::TermWindow {
             });
         }
 
-        // Notification ring: colored border for panes with unread notifications
-        if !pos.is_active {
-            let has_notif = {
-                let per_pane = self.pane_state(pane_id);
-                per_pane.notification_start.is_some()
-            };
-            if has_notif {
-                let notif_color = LinearRgba::with_components(1.0, 0.4, 0.2, 0.8);
-                let ring_width = 3.0f32;
-                let br = background_rect;
-                // Top edge
-                self.filled_rectangle(
-                    layers,
-                    2,
-                    euclid::rect(br.min_x(), br.min_y(), br.width(), ring_width),
-                    notif_color,
-                )
-                .context("filled_rectangle notification top")?;
-                // Bottom edge
-                self.filled_rectangle(
-                    layers,
-                    2,
-                    euclid::rect(br.min_x(), br.max_y() - ring_width, br.width(), ring_width),
-                    notif_color,
-                )
-                .context("filled_rectangle notification bottom")?;
-                // Left edge
-                self.filled_rectangle(
-                    layers,
-                    2,
-                    euclid::rect(br.min_x(), br.min_y(), ring_width, br.height()),
-                    notif_color,
-                )
-                .context("filled_rectangle notification left")?;
-                // Right edge
-                self.filled_rectangle(
-                    layers,
-                    2,
-                    euclid::rect(br.max_x() - ring_width, br.min_y(), ring_width, br.height()),
-                    notif_color,
-                )
-                .context("filled_rectangle notification right")?;
-            }
+        // Pane border ring. The notification ring (orange) is the highest
+        // priority signal and is shown on inactive panes with unread
+        // notifications. Otherwise, Claude agent panes get a stable
+        // per-worktree identity color so tiled agents are distinguishable.
+        let has_notif = !pos.is_active && {
+            let per_pane = self.pane_state(pane_id);
+            per_pane.notification_start.is_some()
+        };
+        if has_notif {
+            let notif_color = LinearRgba::with_components(1.0, 0.4, 0.2, 0.8);
+            self.draw_border_ring(layers, 2, background_rect, 3.0, notif_color)
+                .context("notification ring")?;
+        } else if let Some(seed) = pos
+            .pane
+            .copy_user_vars()
+            .get("claude_worktree")
+            .filter(|v| !v.is_empty())
+        {
+            let color = crate::agent_color::agent_accent_color(seed, pos.is_active);
+            self.draw_border_ring(layers, 2, background_rect, 2.0, color)
+                .context("agent identity ring")?;
         }
 
         {

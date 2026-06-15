@@ -152,13 +152,36 @@ pub struct WorktreeInfo {
     pub dirty: bool,
 }
 
-/// Whether a worktree's working tree has uncommitted changes.
+/// Whether a worktree's working tree has uncommitted changes. Returns false
+/// if git can't be queried — only suitable for non-destructive display (the
+/// list). Destructive callers must use `ensure_clean`, which fails closed.
 pub fn is_dirty(worktree_path: &Path) -> bool {
     git_command(worktree_path)
         .args(["status", "--porcelain"])
         .output()
         .map(|o| o.status.success() && !o.stdout.is_empty())
         .unwrap_or(false)
+}
+
+/// Verify a worktree is clean, failing closed: an error here means git could
+/// not be queried, so the state is unknown and a destructive action must NOT
+/// proceed (unlike `is_dirty`, which treats unknown as clean for display).
+fn ensure_clean(worktree_path: &Path) -> anyhow::Result<()> {
+    let output = git_command(worktree_path)
+        .args(["status", "--porcelain"])
+        .output()
+        .with_context(|| format!("git status in {worktree_path:?}"))?;
+    if !output.status.success() {
+        bail!(
+            "could not determine worktree state: git status failed in {}: {}",
+            worktree_path.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    if !output.stdout.is_empty() {
+        bail!("worktree has uncommitted changes; commit or discard them before merging");
+    }
+    Ok(())
 }
 
 /// List all worktrees of the repository, with dirty state computed for each.
@@ -276,9 +299,7 @@ pub fn merge_and_remove(
         .branch
         .as_deref()
         .ok_or_else(|| anyhow!("worktree has a detached HEAD; nothing to merge"))?;
-    if is_dirty(&wt.path) {
-        bail!("worktree has uncommitted changes; commit or discard them before merging");
-    }
+    ensure_clean(&wt.path)?;
 
     merge_branch(main_worktree, branch)?;
     remove_worktree(repo_root, &wt.path, false)?;

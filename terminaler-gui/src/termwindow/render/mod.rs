@@ -263,6 +263,47 @@ impl crate::TermWindow {
         None
     }
 
+    /// Draw a rectangular border (ring) of the given pixel `width`, inset
+    /// along the inner edge of `rect`, on `layer_num`, in `color`.
+    pub fn draw_border_ring(
+        &self,
+        layers: &mut TripleLayerQuadAllocator,
+        layer_num: usize,
+        rect: RectF,
+        width: f32,
+        color: LinearRgba,
+    ) -> anyhow::Result<()> {
+        // Top
+        self.filled_rectangle(
+            layers,
+            layer_num,
+            euclid::rect(rect.min_x(), rect.min_y(), rect.width(), width),
+            color,
+        )?;
+        // Bottom
+        self.filled_rectangle(
+            layers,
+            layer_num,
+            euclid::rect(rect.min_x(), rect.max_y() - width, rect.width(), width),
+            color,
+        )?;
+        // Left
+        self.filled_rectangle(
+            layers,
+            layer_num,
+            euclid::rect(rect.min_x(), rect.min_y(), width, rect.height()),
+            color,
+        )?;
+        // Right
+        self.filled_rectangle(
+            layers,
+            layer_num,
+            euclid::rect(rect.max_x() - width, rect.min_y(), width, rect.height()),
+            color,
+        )?;
+        Ok(())
+    }
+
     pub fn filled_rectangle<'a>(
         &self,
         layers: &'a mut TripleLayerQuadAllocator,

@@ -56,6 +56,33 @@ impl crate::TermWindow {
         self.tab_sidebar.take();
     }
 
+    /// Count Claude agent panes in `waiting_input` across all windows,
+    /// throttled to once per second. Cheap: reads cached user vars only (no
+    /// process enumeration). Invalidates the tab bar when the count changes so
+    /// the "N waiting" badge repaints.
+    pub fn update_agents_waiting(&mut self) {
+        if self.last_agents_poll.elapsed() < Duration::from_secs(1) {
+            return;
+        }
+        self.last_agents_poll = Instant::now();
+
+        let mux = Mux::get();
+        let waiting = mux
+            .iter_panes()
+            .iter()
+            .filter(|pane| {
+                pane.copy_user_vars()
+                    .get("claude_status")
+                    .map_or(false, |s| s.as_str() == "waiting_input")
+            })
+            .count();
+
+        if waiting != self.agents_waiting {
+            self.agents_waiting = waiting;
+            self.invalidate_fancy_tab_bar();
+        }
+    }
+
     /// Poll CWD and git branch info for each tab, throttled to every 2 seconds.
     pub fn update_sidebar_info(&mut self) {
         if self.last_sidebar_info_poll.elapsed() < Duration::from_secs(1) {
@@ -1044,15 +1071,35 @@ fn build_claude_card_children(
         } else {
             truncate_str(project, 38)
         };
-        children.push(
+        // Prefix a per-agent identity chip when the session has a worktree.
+        // Same seed as the pane border (claude.worktree), so the sidebar chip
+        // and the pane's border share the agent's color.
+        let mut line_children = vec![];
+        if let Some(seed) = claude.worktree.as_deref().filter(|s| !s.is_empty()) {
+            let chip = crate::agent_color::agent_accent_color(seed, true);
+            line_children.push(
+                Element::new(detail_font, ElementContent::Text("\u{25cf} ".to_string()))
+                    .display(DisplayType::Inline)
+                    .colors(ElementColors {
+                        border: BorderColor::default(),
+                        bg: InheritableColor::Inherited,
+                        text: chip.into(),
+                    }),
+            );
+        }
+        line_children.push(
             Element::new(detail_font, ElementContent::Text(project_line))
-                .display(DisplayType::Block)
-                .line_height(Some(0.9))
+                .display(DisplayType::Inline)
                 .colors(ElementColors {
                     border: BorderColor::default(),
                     bg: InheritableColor::Inherited,
                     text: dimmed_color.into(),
                 }),
+        );
+        children.push(
+            Element::new(detail_font, ElementContent::Children(line_children))
+                .display(DisplayType::Block)
+                .line_height(Some(0.9)),
         );
     }
 

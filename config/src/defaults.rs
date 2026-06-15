@@ -63,7 +63,9 @@ pub fn default_config_content() -> String {
     // Claude agent orchestration (ctrl+shift+a = New Agent, ctrl+shift+j = dashboard)
     // "claude_agent": {
     //     "worktree_root": "C:\\dev\\worktrees",   // default: <repo-parent>/<repo>-worktrees/
-    //     "claude_command": ["claude"],
+    //     // Windows default is ["cmd", "/c", "claude"] (claude is a .cmd shim,
+    //     // not a .exe); non-Windows default is ["claude"]. Override if needed.
+    //     "claude_command": ["cmd", "/c", "claude"],
     //     "template": "claude-code"
     // }
 }

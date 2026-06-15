@@ -484,6 +484,35 @@ impl crate::TermWindow {
             }
         }
 
+        // Aggregate "N agents waiting" badge — a session-wide signal that some
+        // Claude agent needs attention. Placed at the front of the right
+        // cluster so it sits left of the window buttons.
+        if self.agents_waiting > 0 {
+            let n = self.agents_waiting;
+            let label = if n == 1 {
+                "\u{25cf} 1 agent waiting".to_string()
+            } else {
+                format!("\u{25cf} {n} agents waiting")
+            };
+            let waiting_color = LinearRgba::with_components(0.824, 0.600, 0.133, 1.0);
+            right_eles.insert(
+                0,
+                Element::new(&font, ElementContent::Text(label))
+                    .vertical_align(VerticalAlign::Bottom)
+                    .colors(ElementColors {
+                        border: BorderColor::default(),
+                        bg: InheritableColor::Inherited,
+                        text: waiting_color.into(),
+                    })
+                    .padding(BoxDimension {
+                        left: Dimension::Cells(0.5),
+                        right: Dimension::Cells(0.5),
+                        top: Dimension::Cells(0.),
+                        bottom: Dimension::Cells(0.),
+                    }),
+            );
+        }
+
         let mut children = vec![];
 
         if !left_status.is_empty() {

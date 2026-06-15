@@ -32,7 +32,17 @@ impl Default for ClaudeAgentConfig {
 }
 
 fn default_claude_command() -> Vec<String> {
-    vec!["claude".to_string()]
+    // On Windows, `claude` is typically a `claude.cmd`/`.ps1`/extensionless
+    // npm shim — there is no `claude.exe`. portable-pty resolves the exact
+    // name before PATHEXT and hands the non-PE script straight to
+    // CreateProcessW, which can't execute it (and can't run a .cmd directly
+    // either). Launch via `cmd /c` so cmd performs PATHEXT resolution and
+    // finds `claude.cmd`. (Verified on a standard nvm-for-Windows install.)
+    if cfg!(windows) {
+        vec!["cmd".to_string(), "/c".to_string(), "claude".to_string()]
+    } else {
+        vec!["claude".to_string()]
+    }
 }
 
 fn default_template() -> String {

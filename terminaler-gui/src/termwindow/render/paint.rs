@@ -285,6 +285,11 @@ impl crate::TermWindow {
                 .context("paint_toast_toolbar")?;
         }
 
+        // Aggregate Claude-agent waiting count for the tab-bar badge. Runs
+        // regardless of sidebar visibility (the badge lives on the tab bar),
+        // and is throttled internally to once per second.
+        self.update_agents_waiting();
+
         if self.show_tab_sidebar {
             #[cfg(windows)]
             let use_webview = self.webview_sidebar.is_some();

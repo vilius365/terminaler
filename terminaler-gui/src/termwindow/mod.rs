@@ -525,6 +525,10 @@ pub struct TermWindow {
     tab_sidebar: Option<box_model::ComputedElement>,
     tab_sidebar_info: HashMap<TabId, SidebarTabInfo>,
     last_sidebar_info_poll: Instant,
+    /// Number of Claude agent panes in `waiting_input` across all windows,
+    /// shown as a tab-bar badge. Refreshed on a throttled poll.
+    agents_waiting: usize,
+    last_agents_poll: Instant,
     /// WebView2-based sidebar (Windows only). None = use GPU fallback.
     #[cfg(windows)]
     webview_sidebar: Option<crate::webview_sidebar::WebViewSidebar>,
@@ -905,6 +909,8 @@ impl TermWindow {
             tab_sidebar: None,
             tab_sidebar_info: HashMap::new(),
             last_sidebar_info_poll: Instant::now(),
+            agents_waiting: 0,
+            last_agents_poll: Instant::now(),
             #[cfg(windows)]
             webview_sidebar: None,
             pane_last_output: HashMap::new(),
