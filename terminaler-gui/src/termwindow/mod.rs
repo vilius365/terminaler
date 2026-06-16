@@ -3096,6 +3096,31 @@ impl TermWindow {
         self.show_launcher_impl(args, 0);
     }
 
+    /// Heuristic: is this pane sitting in an interactive SSH session? Checks
+    /// the foreground process and the process tree for an `ssh` binary. For
+    /// WSL panes the foreground (Windows-side) is often `wslhost.exe`, so the
+    /// process-tree check is what catches a WSL-pane `ssh host`.
+    fn pane_is_ssh_session(pane: &Arc<dyn Pane>) -> bool {
+        fn is_ssh(name: &str) -> bool {
+            let base = std::path::Path::new(name)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(name);
+            let base = base.strip_suffix(".exe").unwrap_or(base);
+            base.eq_ignore_ascii_case("ssh")
+        }
+        if pane
+            .get_foreground_process_name(CachePolicy::AllowStale)
+            .as_deref()
+            .map_or(false, is_ssh)
+        {
+            return true;
+        }
+        pane.get_process_names_in_tree(CachePolicy::AllowStale)
+            .iter()
+            .any(|n| is_ssh(n))
+    }
+
     /// Resolve a pane's git environment (local vs WSL distro) and its repo
     /// root in that environment's path space. Shared by the New Agent and
     /// Worktree Manager overlays.
@@ -3118,6 +3143,23 @@ impl TermWindow {
                 None => crate::worktree::GitEnv::Local,
             }
         };
+
+        // Refuse inside an SSH session: a bare `ssh host` runs INSIDE the pane,
+        // so the domain is still local/WSL and we'd silently create the
+        // worktree on the WRONG machine (the local fs at a stale path) rather
+        // than the remote. Detection is heuristic (ssh in the foreground /
+        // process tree) and biased toward refusing — a false refusal is safe,
+        // a silent wrong-location worktree is not.
+        if Self::pane_is_ssh_session(pane) {
+            return (
+                env,
+                Err(anyhow!(
+                    "this looks like an SSH session; agent worktree actions aren't \
+                     supported over SSH — run them in a local or WSL pane on the \
+                     machine that holds the repository"
+                )),
+            );
+        }
 
         // WSL panes report a Linux path in the URL path component; local panes
         // are validated/resolved via the file URL (rejecting remote authorities).

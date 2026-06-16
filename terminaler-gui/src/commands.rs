@@ -2070,7 +2070,11 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
         ManageWorktrees => CommandDef {
             brief: "Manage Worktrees".into(),
             doc: "List the current repo's git worktrees and merge & remove or discard them".into(),
-            keys: vec![(Modifiers::CTRL | Modifiers::SHIFT, "w".into())],
+            // NOT ctrl+shift+w: permute_keys synthesizes a CTRL+SHIFT twin for
+            // every SUPER binding, so CloseCurrentTab (SUPER+w) already claims
+            // ctrl+shift+w and wins via first-insert — our binding would be
+            // shadowed and pressing it would close the tab.
+            keys: vec![(Modifiers::CTRL | Modifiers::SHIFT, "e".into())],
             args: &[ArgType::ActivePane],
             menubar: &["Shell"],
             icon: None,
