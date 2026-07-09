@@ -1868,18 +1868,6 @@ impl TermWindow {
                 configuration()
             }
         };
-
-        // If the effective config is byte-identical to what we already have
-        // (e.g. the file watcher firing right after apply_palette_change wrote
-        // the config), skip the expensive font/glyph rebuild and resize below.
-        {
-            use terminaler_dynamic::ToDynamic;
-            if self.config.to_dynamic() == config.to_dynamic() {
-                self.config = config;
-                return;
-            }
-        }
-
         self.config = config.clone();
         self.palette.take();
 

@@ -23,6 +23,19 @@ pub fn persist_color_scheme(name: &str) -> anyhow::Result<()> {
 
     let updated = set_top_level_string(&content, "color_scheme", name);
 
+    // Never write a config we can't parse back — a corrupt config would break
+    // the next startup. If the surgical edit produced invalid JSONC, bail
+    // rather than clobbering the user's file.
+    let stripped = crate::jsonc::strip_jsonc_comments(&updated);
+    if let Err(err) = serde_json::from_str::<serde_json::Value>(&stripped) {
+        anyhow::bail!(
+            "refusing to persist color_scheme: edited config would not parse ({}). \
+             Left {} unchanged.",
+            err,
+            path.display()
+        );
+    }
+
     std::fs::write(&path, updated)
         .with_context(|| format!("writing config file {}", path.display()))?;
 
@@ -162,6 +175,27 @@ mod tests {
         let twice = set_top_level_string(&once, "color_scheme", "Nord (Gogh)");
         assert_eq!(once, twice);
         assert_eq!(parsed_value(&twice, "color_scheme").as_deref(), Some("Nord (Gogh)"));
+    }
+
+    #[test]
+    fn real_default_config_survives_repeated_applies() {
+        // Exercise the actual generated default config (which contains commented
+        // example lines that END WITH '{', e.g. `// "web_access": {`) through a
+        // sequence of theme applies — every intermediate state must stay valid.
+        let mut content = crate::defaults::default_config_content();
+        for name in [
+            "Gruvbox Dark (Gogh)",
+            "Tokyo Night",
+            "Gruvbox dark, medium (base16)",
+            "Solarized Dark (Gogh)",
+        ] {
+            content = set_top_level_string(&content, "color_scheme", name);
+            assert_eq!(
+                parsed_value(&content, "color_scheme").as_deref(),
+                Some(name),
+                "config invalid or wrong value after applying {name}:\n{content}"
+            );
+        }
     }
 
     #[test]
