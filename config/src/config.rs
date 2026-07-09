@@ -186,7 +186,7 @@ pub struct Config {
     #[dynamic(default)]
     pub tab_bar_style: TabBarStyle,
 
-    #[dynamic(default)]
+    #[dynamic(default = "default_resolved_palette")]
     pub resolved_palette: Palette,
 
     /// Use a named color scheme rather than the palette specified
@@ -1589,6 +1589,21 @@ fn default_check_for_updates() -> bool {
     cfg!(not(feature = "distro-defaults"))
 }
 
+/// Default rendering palette.
+///
+/// The terminal core's built-in default is grey-70 text on **pure black**
+/// (`#000000`), which maximizes halation and is a well-known eye-strain
+/// culprit. We instead default to a warm, low-contrast dark scheme
+/// (Gruvbox Dark: `#ebdbb2` on `#282828`), which lifts the background off
+/// pure black and reduces blue-heavy glare. Users still override this
+/// entirely via `color_scheme` or partially via `colors`.
+fn default_resolved_palette() -> Palette {
+    crate::COLOR_SCHEMES
+        .get("Gruvbox Dark (Gogh)")
+        .cloned()
+        .unwrap_or_default()
+}
+
 fn default_pane_select_fg_color() -> RgbaColor {
     SrgbaTuple(0.878, 0.878, 0.878, 1.0).into()
 }
@@ -2227,4 +2242,41 @@ fn default_macos_forward_mods() -> Modifiers {
 
 fn default_colr_rasterizer() -> FontRasterizerSelection {
     FontRasterizerSelection::Harfbuzz
+}
+
+#[cfg(test)]
+mod default_palette_tests {
+    use super::*;
+
+    /// The default rendering palette must not be the eye-straining pure-black
+    /// terminal-core default; it should resolve to the warm Gruvbox scheme.
+    #[test]
+    fn default_palette_is_warm_not_pure_black() {
+        let cfg = Config::default_config();
+        let bg = cfg
+            .resolved_palette
+            .background
+            .expect("default background should be set");
+        let pure_black: RgbaColor = (0u8, 0u8, 0u8).into();
+        assert_ne!(bg, pure_black, "default background must not be pure black");
+
+        let gruvbox = crate::COLOR_SCHEMES
+            .get("Gruvbox Dark (Gogh)")
+            .expect("bundled Gruvbox scheme should be present");
+        assert_eq!(cfg.resolved_palette.background, gruvbox.background);
+        assert_eq!(cfg.resolved_palette.foreground, gruvbox.foreground);
+    }
+
+    /// A user-specified `color_scheme` must still fully override the default.
+    #[test]
+    fn user_color_scheme_overrides_default() {
+        let mut cfg = Config::default();
+        cfg.color_scheme = Some("Tokyo Night".to_string());
+        let cfg = cfg.compute_extra_defaults(None);
+
+        let tokyo = crate::COLOR_SCHEMES
+            .get("Tokyo Night")
+            .expect("bundled Tokyo Night scheme should be present");
+        assert_eq!(cfg.resolved_palette.background, tokyo.background);
+    }
 }

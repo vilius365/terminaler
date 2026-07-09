@@ -27,9 +27,11 @@ pub fn default_config_content() -> String {
     // Background opacity: 0.0 (fully transparent) to 1.0 (opaque). Default: 0.85
     // "window_background_opacity": 0.85,
 
-    // Color scheme: use built-in "dark" or "light" themes
-    // or define custom colors below
-    // "color_scheme": "dark",
+    // Color scheme. The default is "Gruvbox Dark (Gogh)" — a warm, low-strain
+    // dark palette (cream text on a soft dark grey, not pure black). Set any of
+    // the ~700 bundled schemes here, e.g. "Tokyo Night", "Solarized Dark (Gogh)",
+    // "Catppuccin Mocha", or a light scheme like "Catppuccin Latte".
+    // "color_scheme": "Gruvbox Dark (Gogh)",
 
     // Scrollback buffer size (number of lines)
     // "scrollback_lines": 10000,
