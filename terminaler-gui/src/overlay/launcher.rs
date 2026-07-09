@@ -417,6 +417,27 @@ impl LauncherState {
             }
         }
 
+        if args.flags.contains(LauncherFlags::COLORSCHEMES) {
+            // User-defined schemes take precedence, then the bundled set.
+            let mut user_names: Vec<String> = config.color_schemes.keys().cloned().collect();
+            user_names.sort_by_key(|n| n.to_lowercase());
+            let current = config.color_scheme.clone();
+            let mut seen = std::collections::HashSet::new();
+            for name in user_names.into_iter().chain(config::color_scheme_names()) {
+                if !seen.insert(name.clone()) {
+                    continue;
+                }
+                // Preselect the active scheme so Enter re-applies the current one.
+                if current.as_deref() == Some(name.as_str()) {
+                    self.active_idx = self.entries.len();
+                }
+                self.entries.push(Entry {
+                    label: format!("Theme: {}", name),
+                    action: KeyAssignment::ApplyColorScheme(name),
+                });
+            }
+        }
+
         for tab in &args.tabs {
             self.entries.push(Entry {
                 label: match tab.pane_count {

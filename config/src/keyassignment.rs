@@ -35,6 +35,7 @@ bitflags::bitflags! {
         const COMMANDS = 64;
         const LAYOUTS = 128;
         const CLAUDE_AGENTS = 256;
+        const COLORSCHEMES = 512;
     }
 }
 
@@ -80,6 +81,9 @@ impl ToString for LauncherFlags {
         if self.contains(Self::CLAUDE_AGENTS) {
             s.push("CLAUDE_AGENTS");
         }
+        if self.contains(Self::COLORSCHEMES) {
+            s.push("COLORSCHEMES");
+        }
         s.join("|")
     }
 }
@@ -101,6 +105,7 @@ impl TryFrom<String> for LauncherFlags {
                 "COMMANDS" => flags |= Self::COMMANDS,
                 "LAYOUTS" => flags |= Self::LAYOUTS,
                 "CLAUDE_AGENTS" => flags |= Self::CLAUDE_AGENTS,
+                "COLORSCHEMES" => flags |= Self::COLORSCHEMES,
                 _ => {
                     return Err(format!("invalid LauncherFlags `{}` in `{}`", ele, s));
                 }
@@ -679,6 +684,10 @@ pub enum KeyAssignment {
     /// Open the worktree manager overlay: list the current repo's git
     /// worktrees and merge & remove / discard them.
     ManageWorktrees,
+    /// Open the color scheme (theme) picker overlay.
+    ColorSchemePicker,
+    /// Apply a named color scheme and persist it to the config file.
+    ApplyColorScheme(String),
 }
 
 #[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]

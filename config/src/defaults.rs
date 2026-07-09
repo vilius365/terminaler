@@ -29,8 +29,10 @@ pub fn default_config_content() -> String {
 
     // Color scheme. The default is "Gruvbox Dark (Gogh)" — a warm, low-strain
     // dark palette (cream text on a soft dark grey, not pure black). Set any of
-    // the ~700 bundled schemes here, e.g. "Tokyo Night", "Solarized Dark (Gogh)",
+    // the ~1000 bundled schemes here, e.g. "Tokyo Night", "Solarized Dark (Gogh)",
     // "Catppuccin Mocha", or a light scheme like "Catppuccin Latte".
+    // Tip: press ctrl+shift+k (or "Theme Picker" in the command palette / View
+    // menu) to browse and apply a theme live — your choice is written back here.
     // "color_scheme": "Gruvbox Dark (Gogh)",
 
     // Scrollback buffer size (number of lines)

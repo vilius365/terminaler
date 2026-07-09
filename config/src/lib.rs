@@ -31,6 +31,7 @@ pub mod jsonc;
 pub mod keyassignment;
 mod keys;
 pub mod meta;
+mod persist;
 mod scheme_data;
 // STRIPPED: mod serial;
 // STRIPPED: mod ssh;
@@ -45,6 +46,7 @@ pub mod window;
 mod wsl;
 
 pub use crate::config::*;
+pub use crate::persist::persist_color_scheme;
 pub use background::*;
 pub use bell::*;
 pub use cell::*;
@@ -171,6 +173,17 @@ fn json_to_dynamic(value: &serde_json::Value) -> Value {
                 .into(),
         ),
     }
+}
+
+/// Returns the primary names of all bundled color schemes (aliases excluded),
+/// sorted case-insensitively. Used to populate the theme picker.
+pub fn color_scheme_names() -> Vec<String> {
+    let mut names: Vec<String> = scheme_data::SCHEMES
+        .iter()
+        .map(|(name, _)| name.to_string())
+        .collect();
+    names.sort_by_key(|n| n.to_lowercase());
+    names
 }
 
 pub fn build_default_schemes() -> HashMap<String, Palette> {

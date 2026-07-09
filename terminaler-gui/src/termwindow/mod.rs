@@ -3096,6 +3096,49 @@ impl TermWindow {
         self.show_launcher_impl(args, 0);
     }
 
+    fn show_color_scheme_picker(&mut self) {
+        let args = LauncherActionArgs {
+            title: Some("Theme".to_string()),
+            flags: LauncherFlags::COLORSCHEMES | LauncherFlags::FUZZY,
+            help_text: None,
+            fuzzy_help_text: None,
+            alphabet: None,
+        };
+        self.show_launcher_impl(args, 0);
+    }
+
+    /// Apply a named color scheme: persist it to the config file (which the
+    /// reload below picks up and applies live to every window). If the file
+    /// can't be written, fall back to a window-local override so the change is
+    /// still visible this session.
+    fn apply_color_scheme(&mut self, name: &str) {
+        match config::persist_color_scheme(name) {
+            Ok(()) => {
+                log::info!("Applied color scheme: {}", name);
+                config::reload();
+            }
+            Err(err) => {
+                log::error!("Failed to persist color scheme {:?}: {:#}", name, err);
+                self.apply_color_scheme_override(name);
+            }
+        }
+    }
+
+    /// Set `color_scheme` as a window-local config override and re-apply.
+    fn apply_color_scheme_override(&mut self, name: &str) {
+        use terminaler_dynamic::Value;
+        let mut obj = match self.config_overrides.clone() {
+            Value::Object(o) => o,
+            _ => Default::default(),
+        };
+        obj.insert(
+            Value::String("color_scheme".to_string()),
+            Value::String(name.to_string()),
+        );
+        self.config_overrides = Value::Object(obj);
+        self.config_was_reloaded();
+    }
+
     /// Heuristic: is this pane sitting in an interactive SSH session? Checks
     /// the foreground process and the process tree for an `ssh` binary. For
     /// WSL panes the foreground (Windows-side) is often `wslhost.exe`, so the
@@ -4374,6 +4417,14 @@ impl TermWindow {
             ManageWorktrees => {
                 log::info!("ManageWorktrees: showing worktree manager");
                 self.show_worktree_manager();
+            }
+            ColorSchemePicker => {
+                log::info!("ColorSchemePicker: showing theme picker");
+                self.show_color_scheme_picker();
+            }
+            ApplyColorScheme(name) => {
+                log::info!("ApplyColorScheme: {}", name);
+                self.apply_color_scheme(name);
             }
             ToggleTabSidebar => {
                 self.show_tab_sidebar = !self.show_tab_sidebar;

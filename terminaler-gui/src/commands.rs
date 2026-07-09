@@ -2079,6 +2079,14 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             menubar: &["Shell"],
             icon: None,
         },
+        ColorSchemePicker => CommandDef {
+            brief: "Theme Picker".into(),
+            doc: "Opens the color scheme (theme) picker".into(),
+            keys: vec![(Modifiers::CTRL | Modifiers::SHIFT, "k".into())],
+            args: &[ArgType::ActiveWindow],
+            menubar: &["View"],
+            icon: Some("md_palette"),
+        },
         _ => return None,
     })
 }
@@ -2209,6 +2217,7 @@ fn compute_default_actions() -> Vec<KeyAssignment> {
         // ----------------- Terminaler Snap Layouts
         SnapLayoutPicker,
         WorkspacePicker,
+        ColorSchemePicker,
         ToggleTabSidebar,
         // ----------------- Terminaler Claude Agents
         NewClaudeAgent,
