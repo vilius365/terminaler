@@ -6,6 +6,9 @@ credentials/
 *.key
 
 /.tag
+/terminaler-gui.exe
+/WebView2Loader.dll
+/terminaler-gui.exe.WebView2/
 .DS_Store
 dhat-heap.json
 /docs/_site

@@ -9,7 +9,7 @@ use config::keyassignment::PaneDirection;
 use parking_lot::Mutex;
 use rangeset::intersects_range;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
 use std::sync::Arc;
 use url::Url;
@@ -47,6 +47,10 @@ struct TabInner {
     zoomed: Option<Arc<dyn Pane>>,
     title: String,
     recency: Recency,
+    /// Set of pane IDs that are hidden from the layout.
+    /// Hidden panes remain alive but don't take up visual space;
+    /// their sibling expands to fill the parent allocation.
+    hidden: HashSet<PaneId>,
 }
 
 /// A Tab is a container of Panes
@@ -289,11 +293,13 @@ fn pane_tree(
 fn convert_tree_to_session_layout(
     tree: &Tree,
     active: Option<&Arc<dyn Pane>>,
+    hidden: &HashSet<PaneId>,
 ) -> PaneLayoutNode {
     match tree {
         Tree::Empty => PaneLayoutNode::Pane {
             cwd: None,
             command: None,
+            hidden: false,
             is_active: false,
         },
         Tree::Leaf(pane) => {
@@ -305,6 +311,7 @@ fn convert_tree_to_session_layout(
             PaneLayoutNode::Pane {
                 cwd,
                 command: None,
+                hidden: hidden.contains(&pane.pane_id()),
                 is_active,
             }
         }
@@ -335,8 +342,8 @@ fn convert_tree_to_session_layout(
             PaneLayoutNode::Split {
                 direction,
                 ratio,
-                first: Box::new(convert_tree_to_session_layout(left, active)),
-                second: Box::new(convert_tree_to_session_layout(right, active)),
+                first: Box::new(convert_tree_to_session_layout(left, active, hidden)),
+                second: Box::new(convert_tree_to_session_layout(right, active, hidden)),
             }
         }
     }
@@ -538,6 +545,17 @@ fn adjust_y_size(tree: &mut Tree, mut y_adjust: isize, cell_dimensions: &Termina
 }
 
 fn apply_sizes_from_splits(tree: &Tree, size: &TerminalSize) {
+    apply_sizes_from_splits_with_hidden(tree, size, &HashSet::new())
+}
+
+/// Apply sizes from the split tree, accounting for hidden panes.
+/// When one side of a split is entirely hidden, the visible side
+/// gets the full parent allocation.
+fn apply_sizes_from_splits_with_hidden(
+    tree: &Tree,
+    size: &TerminalSize,
+    hidden: &HashSet<PaneId>,
+) {
     match tree {
         Tree::Empty => return,
         Tree::Node { data: None, .. } => return,
@@ -546,11 +564,172 @@ fn apply_sizes_from_splits(tree: &Tree, size: &TerminalSize) {
             right,
             data: Some(data),
         } => {
-            apply_sizes_from_splits(&*left, &data.first);
-            apply_sizes_from_splits(&*right, &data.second);
+            let left_hidden = is_subtree_hidden(left, hidden);
+            let right_hidden = is_subtree_hidden(right, hidden);
+
+            if left_hidden && !right_hidden {
+                // Left is hidden: right gets full parent size
+                apply_sizes_from_splits_with_hidden(right, size, hidden);
+            } else if right_hidden && !left_hidden {
+                // Right is hidden: left gets full parent size
+                apply_sizes_from_splits_with_hidden(left, size, hidden);
+            } else {
+                // Both visible (or both hidden) — use normal split sizes
+                apply_sizes_from_splits_with_hidden(left, &data.first, hidden);
+                apply_sizes_from_splits_with_hidden(right, &data.second, hidden);
+            }
         }
         Tree::Leaf(pane) => {
-            pane.resize(*size).ok();
+            if !hidden.contains(&pane.pane_id()) {
+                pane.resize(*size).ok();
+            }
+        }
+    }
+}
+
+/// Recursively collect visible (non-hidden) panes with correct positions,
+/// giving hidden panes' space to their siblings.
+fn collect_visible_panes(
+    tree: &Tree,
+    size: &TerminalSize,
+    left: usize,
+    top: usize,
+    active_idx: usize,
+    zoomed_id: Option<PaneId>,
+    hidden: &HashSet<PaneId>,
+    panes: &mut Vec<PositionedPane>,
+) {
+    match tree {
+        Tree::Empty => {}
+        Tree::Leaf(pane) => {
+            if !hidden.contains(&pane.pane_id()) {
+                let index = panes.len();
+                panes.push(PositionedPane {
+                    index,
+                    is_active: index == active_idx,
+                    is_zoomed: zoomed_id == Some(pane.pane_id()),
+                    left,
+                    top,
+                    width: size.cols as _,
+                    height: size.rows as _,
+                    pixel_width: size.pixel_width as _,
+                    pixel_height: size.pixel_height as _,
+                    pane: Arc::clone(pane),
+                });
+            }
+        }
+        Tree::Node {
+            left: left_tree,
+            right: right_tree,
+            data: Some(data),
+        } => {
+            let left_hidden = is_subtree_hidden(left_tree, hidden);
+            let right_hidden = is_subtree_hidden(right_tree, hidden);
+
+            if left_hidden && right_hidden {
+                // Both sides hidden — nothing to render
+            } else if left_hidden {
+                // Left hidden: right gets full parent size at parent position
+                collect_visible_panes(
+                    right_tree, size, left, top,
+                    active_idx, zoomed_id, hidden, panes,
+                );
+            } else if right_hidden {
+                // Right hidden: left gets full parent size at parent position
+                collect_visible_panes(
+                    left_tree, size, left, top,
+                    active_idx, zoomed_id, hidden, panes,
+                );
+            } else {
+                // Both visible — use normal split sizes
+                collect_visible_panes(
+                    left_tree, &data.first, left, top,
+                    active_idx, zoomed_id, hidden, panes,
+                );
+                let (right_left, right_top) = match data.direction {
+                    SplitDirection::Horizontal => (left + data.first.cols as usize, top),
+                    SplitDirection::Vertical => (left, top + data.first.rows as usize),
+                };
+                collect_visible_panes(
+                    right_tree, &data.second, right_left, right_top,
+                    active_idx, zoomed_id, hidden, panes,
+                );
+            }
+        }
+        Tree::Node { data: None, .. } => {}
+    }
+}
+
+/// Recursively collect visible splits, skipping splits where either side is entirely hidden.
+fn collect_visible_splits(
+    tree: &Tree,
+    left: usize,
+    top: usize,
+    hidden: &HashSet<PaneId>,
+    dividers: &mut Vec<PositionedSplit>,
+    index: &mut usize,
+) {
+    match tree {
+        Tree::Empty | Tree::Leaf(_) => {}
+        Tree::Node {
+            left: left_tree,
+            right: right_tree,
+            data: Some(data),
+        } => {
+            let left_hidden = is_subtree_hidden(left_tree, hidden);
+            let right_hidden = is_subtree_hidden(right_tree, hidden);
+
+            if left_hidden && right_hidden {
+                // Both hidden — no splits to show
+            } else if left_hidden {
+                // Left hidden — skip this split, recurse into right with parent position
+                collect_visible_splits(right_tree, left, top, hidden, dividers, index);
+            } else if right_hidden {
+                // Right hidden — skip this split, recurse into left with parent position
+                collect_visible_splits(left_tree, left, top, hidden, dividers, index);
+            } else {
+                // Both visible — emit split divider and recurse normally
+                let split_left = left + match data.direction {
+                    SplitDirection::Horizontal => data.first.cols as usize,
+                    SplitDirection::Vertical => 0,
+                };
+                let split_top = top + match data.direction {
+                    SplitDirection::Horizontal => 0,
+                    SplitDirection::Vertical => data.first.rows as usize,
+                };
+
+                dividers.push(PositionedSplit {
+                    index: *index,
+                    direction: data.direction,
+                    left: split_left,
+                    top: split_top,
+                    size: if data.direction == SplitDirection::Horizontal {
+                        data.height() as usize
+                    } else {
+                        data.width() as usize
+                    },
+                });
+                *index += 1;
+
+                collect_visible_splits(left_tree, left, top, hidden, dividers, index);
+                let (right_left, right_top) = match data.direction {
+                    SplitDirection::Horizontal => (left + data.first.cols as usize, top),
+                    SplitDirection::Vertical => (left, top + data.first.rows as usize),
+                };
+                collect_visible_splits(right_tree, right_left, right_top, hidden, dividers, index);
+            }
+        }
+        Tree::Node { data: None, .. } => {}
+    }
+}
+
+/// Returns true if every leaf pane in the subtree is hidden.
+fn is_subtree_hidden(tree: &Tree, hidden: &HashSet<PaneId>) -> bool {
+    match tree {
+        Tree::Empty => true,
+        Tree::Leaf(pane) => hidden.contains(&pane.pane_id()),
+        Tree::Node { left, right, .. } => {
+            is_subtree_hidden(left, hidden) && is_subtree_hidden(right, hidden)
         }
     }
 }
@@ -633,6 +812,23 @@ impl Tab {
 
     pub fn toggle_zoom(&self) {
         self.inner.lock().toggle_zoom()
+    }
+
+    /// Toggle the hidden state of a pane.
+    /// Hidden panes remain alive but are removed from the visual layout;
+    /// their sibling expands to fill the space.
+    pub fn toggle_pane_hidden(&self, pane_id: PaneId) {
+        self.inner.lock().toggle_pane_hidden(pane_id)
+    }
+
+    /// Returns true if the given pane is hidden.
+    pub fn is_pane_hidden(&self, pane_id: PaneId) -> bool {
+        self.inner.lock().hidden.contains(&pane_id)
+    }
+
+    /// Returns the set of currently hidden pane IDs.
+    pub fn hidden_pane_ids(&self) -> HashSet<PaneId> {
+        self.inner.lock().hidden.clone()
     }
 
     pub fn contains_pane(&self, pane: PaneId) -> bool {
@@ -830,6 +1026,7 @@ impl TabInner {
             zoomed: None,
             title: String::new(),
             recency: Recency::default(),
+            hidden: HashSet::new(),
         }
     }
 
@@ -927,10 +1124,11 @@ impl TabInner {
     fn session_layout_tree(&mut self) -> PaneLayoutNode {
         let active = self.get_active_pane();
         match self.pane.as_ref() {
-            Some(tree) => convert_tree_to_session_layout(tree, active.as_ref()),
+            Some(tree) => convert_tree_to_session_layout(tree, active.as_ref(), &self.hidden),
             None => PaneLayoutNode::Pane {
                 cwd: None,
                 command: None,
+                hidden: false,
                 is_active: false,
             },
         }
@@ -989,6 +1187,47 @@ impl TabInner {
         Mux::try_get().map(|mux| mux.notify(MuxNotification::TabResized(self.id)));
     }
 
+    fn toggle_pane_hidden(&mut self, pane_id: PaneId) {
+        if self.hidden.contains(&pane_id) {
+            // Unhide
+            self.hidden.remove(&pane_id);
+        } else {
+            // Don't allow hiding if it would leave zero visible panes
+            let all_panes = self.iter_panes_ignoring_zoom();
+            let visible_count = all_panes
+                .iter()
+                .filter(|p| !self.hidden.contains(&p.pane.pane_id()) && p.pane.pane_id() != pane_id)
+                .count();
+            if visible_count == 0 {
+                log::warn!("Cannot hide pane {} — it is the last visible pane", pane_id);
+                return;
+            }
+
+            // If hiding the active pane, switch to the next visible pane first
+            let active_pane_id = self.get_active_pane().map(|p| p.pane_id());
+            if active_pane_id == Some(pane_id) {
+                // Find next visible pane
+                if let Some(next) = all_panes.iter().find(|p| {
+                    p.pane.pane_id() != pane_id && !self.hidden.contains(&p.pane.pane_id())
+                }) {
+                    self.active = next.index;
+                }
+            }
+
+            // If hiding the zoomed pane, un-zoom first
+            if self.zoomed.as_ref().map(|p| p.pane_id()) == Some(pane_id) {
+                self.toggle_zoom();
+            }
+
+            self.hidden.insert(pane_id);
+        }
+
+        // Re-apply sizes so the visible panes fill the available space
+        let size = self.size;
+        self.resize(size);
+        Mux::try_get().map(|mux| mux.notify(MuxNotification::TabResized(self.id)));
+    }
+
     fn contains_pane(&self, pane: PaneId) -> bool {
         fn contains(tree: &Tree, pane: PaneId) -> bool {
             match tree {
@@ -1005,12 +1244,16 @@ impl TabInner {
 
     /// Walks the pane tree to produce the topologically ordered flattened
     /// list of PositionedPane instances along with their positioning information.
+    /// Hidden panes are excluded; their siblings expand to fill the space.
     fn iter_panes(&mut self) -> Vec<PositionedPane> {
+        if !self.hidden.is_empty() {
+            return self.iter_panes_with_hidden(true);
+        }
         self.iter_panes_impl(true)
     }
 
     /// Like iter_panes, except that it will include all panes, regardless of
-    /// whether one of them is currently zoomed.
+    /// whether one of them is currently zoomed or hidden.
     fn iter_panes_ignoring_zoom(&mut self) -> Vec<PositionedPane> {
         self.iter_panes_impl(false)
     }
@@ -1156,9 +1399,63 @@ impl TabInner {
         panes
     }
 
+    /// Walk the pane tree, skipping hidden panes and giving their space to siblings.
+    /// Uses a recursive approach rather than cursor to correctly reallocate sizes.
+    fn iter_panes_with_hidden(&mut self, respect_zoom_state: bool) -> Vec<PositionedPane> {
+        let mut panes = vec![];
+
+        if respect_zoom_state {
+            if let Some(zoomed) = self.zoomed.as_ref() {
+                let size = self.size;
+                panes.push(PositionedPane {
+                    index: 0,
+                    is_active: true,
+                    is_zoomed: true,
+                    left: 0,
+                    top: 0,
+                    width: size.cols.into(),
+                    pixel_width: size.pixel_width.into(),
+                    height: size.rows.into(),
+                    pixel_height: size.pixel_height.into(),
+                    pane: Arc::clone(zoomed),
+                });
+                return panes;
+            }
+        }
+
+        let active_idx = self.active;
+        let zoomed_id = self.zoomed.as_ref().map(|p| p.pane_id());
+        let root_size = self.size;
+        let hidden = &self.hidden;
+
+        if let Some(tree) = &self.pane {
+            collect_visible_panes(
+                tree,
+                &root_size,
+                0,     // left
+                0,     // top
+                active_idx,
+                zoomed_id,
+                hidden,
+                &mut panes,
+            );
+        }
+
+        panes
+    }
+
     fn iter_splits(&mut self) -> Vec<PositionedSplit> {
         let mut dividers = vec![];
         if self.zoomed.is_some() {
+            return dividers;
+        }
+
+        if !self.hidden.is_empty() {
+            // Use recursive approach to skip splits where one side is entirely hidden
+            if let Some(tree) = &self.pane {
+                let mut index = 0;
+                collect_visible_splits(tree, 0, 0, &self.hidden, &mut dividers, &mut index);
+            }
             return dividers;
         }
 
@@ -1254,7 +1551,7 @@ impl TabInner {
             self.size = size;
 
             // And then resize the individual panes to match
-            apply_sizes_from_splits(self.pane.as_mut().unwrap(), &size);
+            apply_sizes_from_splits_with_hidden(self.pane.as_mut().unwrap(), &size, &self.hidden);
         }
 
         Mux::try_get().map(|mux| mux.notify(MuxNotification::TabResized(self.id)));

@@ -18,6 +18,9 @@ pub struct SessionState {
 pub struct WindowState {
     /// Window title.
     pub title: String,
+    /// Window workspace name.
+    #[serde(default)]
+    pub workspace: Option<String>,
     /// Tabs in this window.
     pub tabs: Vec<TabState>,
     /// Index of the active tab.
@@ -51,6 +54,9 @@ pub enum PaneLayoutNode {
         /// The command that was running (for display/restart).
         #[serde(default)]
         command: Option<String>,
+        /// Whether this pane was hidden.
+        #[serde(default)]
+        hidden: bool,
         /// Whether this pane was the active pane.
         #[serde(default)]
         is_active: bool,
@@ -162,6 +168,7 @@ mod tests {
                         layout: PaneLayoutNode::Pane {
                             cwd: Some(PathBuf::from("/home/user")),
                             command: Some("bash".into()),
+                            hidden: false,
                             is_active: true,
                         },
                     },
@@ -173,16 +180,19 @@ mod tests {
                             first: Box::new(PaneLayoutNode::Pane {
                                 cwd: Some(PathBuf::from("/home/user/project")),
                                 command: None,
+                                hidden: false,
                                 is_active: true,
                             }),
                             second: Box::new(PaneLayoutNode::Pane {
                                 cwd: Some(PathBuf::from("/home/user/project")),
                                 command: None,
+                                hidden: false,
                                 is_active: false,
                             }),
                         },
                     },
                 ],
+                workspace: Some("default".into()),
                 active_tab_index: 0,
                 position: Some((100, 200)),
                 size: Some((1920, 1080)),

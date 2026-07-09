@@ -112,6 +112,13 @@ impl crate::TermWindow {
 
         self.call_draw(frame).ok();
         self.last_frame_duration = start.elapsed();
+        if self.last_frame_duration > Duration::from_millis(500) {
+            log::error!(
+                "SLOW FRAME: paint_impl took {:?} (fps={})",
+                self.last_frame_duration,
+                self.fps
+            );
+        }
         log::debug!(
             "paint_impl elapsed={:?}, fps={}",
             self.last_frame_duration,
@@ -299,8 +306,19 @@ impl crate::TermWindow {
             if use_webview {
                 #[cfg(windows)]
                 {
+                    let wv_start = Instant::now();
                     self.update_sidebar_info();
+                    let info_elapsed = wv_start.elapsed();
                     self.push_webview_sidebar_state();
+                    let push_elapsed = wv_start.elapsed() - info_elapsed;
+                    if wv_start.elapsed() > Duration::from_millis(200) {
+                        log::warn!(
+                            "SLOW sidebar: update_sidebar_info={:?}, push_webview_state={:?}, total={:?}",
+                            info_elapsed,
+                            push_elapsed,
+                            wv_start.elapsed()
+                        );
+                    }
                     self.paint_sidebar_background(&mut layers)
                         .context("webview sidebar background")?;
                     self.register_sidebar_resize_handle();

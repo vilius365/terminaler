@@ -611,6 +611,8 @@ pub enum KeyAssignment {
     ActivatePaneByIndex(usize),
     TogglePaneZoomState,
     SetPaneZoomState(bool),
+    TogglePaneHidden,
+    UnhidePane(usize),
     CloseCurrentPane {
         confirm: bool,
     },

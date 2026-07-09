@@ -248,13 +248,21 @@ impl WindowInner {
         })
         .or_else(|err| {
             log::trace!("EGL init failed {:?}, fall back to WGL", err);
-            super::wgl::GlState::create(self.hwnd.0).and_then(|state| unsafe {
-                Ok(glium::backend::Context::new(
-                    Rc::new(state),
-                    true,
-                    callback_behavior(),
-                )?)
-            })
+            super::wgl::GlState::create(self.hwnd.0)
+                .or_else(|wgl_err| {
+                    log::warn!(
+                        "WGL init failed ({}), retrying with bundled software OpenGL",
+                        wgl_err
+                    );
+                    super::wgl::GlState::create_with_swrast(self.hwnd.0)
+                })
+                .and_then(|state| unsafe {
+                    Ok(glium::backend::Context::new(
+                        Rc::new(state),
+                        true,
+                        callback_behavior(),
+                    )?)
+                })
         })?;
 
         self.gl_state.replace(gl_state.clone());

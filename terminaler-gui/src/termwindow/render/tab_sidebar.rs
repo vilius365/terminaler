@@ -121,7 +121,16 @@ impl crate::TermWindow {
                 None => String::new(),
             };
 
+            let git_start = Instant::now();
             let git_branch = cwd_path.as_deref().and_then(find_git_branch);
+            let git_elapsed = git_start.elapsed();
+            if git_elapsed > Duration::from_millis(100) {
+                log::warn!(
+                    "update_sidebar_info: find_git_branch took {:?} for tab {}",
+                    git_elapsed,
+                    tab_id
+                );
+            }
 
             // Detect Claude Code sessions on ALL panes in the tab
             let mut pane_claude_info = std::collections::HashMap::new();
@@ -1459,10 +1468,30 @@ pub(crate) fn claude_info_for_pane(
 ) -> Option<crate::termwindow::ClaudeSessionInfo> {
     use crate::termwindow::{ClaudeSessionInfo, ClaudeStatus};
 
+    // Freeze diagnostics: warn if process enumeration is slow (from origin's
+    // freeze-diagnostics work, preserved through the refactor into this helper).
+    let proc_start = Instant::now();
     let process_name = pane.get_foreground_process_name(CachePolicy::AllowStale);
+    let proc_elapsed = proc_start.elapsed();
+    if proc_elapsed > Duration::from_millis(100) {
+        log::warn!(
+            "claude_info_for_pane: get_foreground_process_name took {:?} for pane {}",
+            proc_elapsed,
+            pane.pane_id()
+        );
+    }
     let pane_title = pane.get_title();
     let user_vars = pane.copy_user_vars();
+    let tree_start = Instant::now();
     let tree_names = pane.get_process_names_in_tree(CachePolicy::AllowStale);
+    let tree_elapsed = tree_start.elapsed();
+    if tree_elapsed > Duration::from_millis(100) {
+        log::warn!(
+            "claude_info_for_pane: get_process_names_in_tree took {:?} for pane {}",
+            tree_elapsed,
+            pane.pane_id()
+        );
+    }
     let has_active_claude_vars = user_vars
         .get("claude_status")
         .map_or(false, |v| !v.is_empty());

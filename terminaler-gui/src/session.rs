@@ -26,16 +26,14 @@ pub fn capture_session() -> SessionState {
         let mut tabs = Vec::new();
 
         for tab in mux_window.iter() {
-            let title = tab
-                .get_active_pane()
-                .map(|p| p.get_title())
-                .unwrap_or_default();
+            let title = tab.get_title();
             let layout = tab.session_layout_tree();
             tabs.push(TabState { title, layout });
         }
 
         windows.push(WindowState {
             title: mux_window.get_title().to_string(),
+            workspace: Some(mux_window.get_workspace().to_string()),
             tabs,
             active_tab_index: active_tab_idx,
             position: None,
@@ -77,11 +75,16 @@ pub async fn restore_session(
     let mux = Mux::get();
 
     for win_state in &session.windows {
-        let window_id = *mux.new_empty_window(session.active_workspace.clone(), None);
+        let workspace = win_state
+            .workspace
+            .clone()
+            .or_else(|| session.active_workspace.clone());
+        let window_id = *mux.new_empty_window(workspace, None);
 
         for (tab_idx, tab_state) in win_state.tabs.iter().enumerate() {
             // Spawn the first pane from the leftmost/topmost leaf
             let first_cwd = first_leaf_cwd(&tab_state.layout);
+            let mut hidden_panes = Vec::new();
 
             if tab_idx == 0 {
                 // First tab: spawn into the window that was just created
@@ -97,14 +100,25 @@ pub async fn restore_session(
                     domain,
                     tab.tab_id(),
                     root_pane_id,
+                    &mut hidden_panes,
                 )
                 .await?;
+
+                if !tab_state.title.is_empty() {
+                    tab.set_title(&tab_state.title);
+                }
 
                 // Set active pane
                 if let Some(active_idx) = active_pane_index(&tab_state.layout) {
                     let panes = tab.iter_panes();
                     if active_idx < panes.len() {
                         tab.set_active_idx(active_idx);
+                    }
+                }
+
+                for pane_id in hidden_panes {
+                    if !tab.is_pane_hidden(pane_id) {
+                        tab.toggle_pane_hidden(pane_id);
                     }
                 }
             } else {
@@ -120,8 +134,13 @@ pub async fn restore_session(
                     domain,
                     tab.tab_id(),
                     root_pane_id,
+                    &mut hidden_panes,
                 )
                 .await?;
+
+                if !tab_state.title.is_empty() {
+                    tab.set_title(&tab_state.title);
+                }
 
                 if let Some(active_idx) = active_pane_index(&tab_state.layout) {
                     let panes = tab.iter_panes();
@@ -129,13 +148,26 @@ pub async fn restore_session(
                         tab.set_active_idx(active_idx);
                     }
                 }
+
+                for pane_id in hidden_panes {
+                    if !tab.is_pane_hidden(pane_id) {
+                        tab.toggle_pane_hidden(pane_id);
+                    }
+                }
             }
         }
 
         // Set active tab
         if let Some(mut mux_win) = mux.get_window_mut(window_id) {
+            if !win_state.title.is_empty() {
+                mux_win.set_title(&win_state.title);
+            }
             mux_win.set_active_without_saving(win_state.active_tab_index);
         }
+    }
+
+    if let Some(active_workspace) = &session.active_workspace {
+        mux.set_active_workspace(active_workspace);
     }
 
     // Delete session file after successful restore
@@ -153,10 +185,14 @@ async fn restore_subtree(
     domain: &Arc<dyn Domain>,
     tab_id: TabId,
     pane_id: mux::pane::PaneId,
+    hidden_panes: &mut Vec<mux::pane::PaneId>,
 ) -> anyhow::Result<()> {
     match node {
-        PaneLayoutNode::Pane { .. } => {
+        PaneLayoutNode::Pane { hidden, .. } => {
             // Leaf node — the pane already exists (spawned by domain.spawn or a prior split).
+            if *hidden {
+                hidden_panes.push(pane_id);
+            }
             Ok(())
         }
         PaneLayoutNode::Split {
@@ -195,9 +231,9 @@ async fn restore_subtree(
             let new_pane_id = new_pane.pane_id();
 
             // Recurse into first child (using the original pane_id)
-            Box::pin(restore_subtree(first, domain, tab_id, pane_id)).await?;
+            Box::pin(restore_subtree(first, domain, tab_id, pane_id, hidden_panes)).await?;
             // Recurse into second child (using the newly created pane)
-            Box::pin(restore_subtree(second, domain, tab_id, new_pane_id)).await?;
+            Box::pin(restore_subtree(second, domain, tab_id, new_pane_id, hidden_panes)).await?;
 
             Ok(())
         }

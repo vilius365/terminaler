@@ -199,9 +199,6 @@
         'use strict';
 
         // --- Configuration ---
-        var params = new URLSearchParams(window.location.search);
-        var token = params.get('token') || '';
-
         // --- State ---
         var ws = null;
         var attachedPaneId = null;
@@ -489,7 +486,7 @@
         // --- WebSocket ---
         function connect() {
             var proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            var wsUrl = proto + '//' + window.location.host + '/ws?token=' + encodeURIComponent(token);
+            var wsUrl = proto + '//' + window.location.host + '/ws';
             ws = new WebSocket(wsUrl);
 
             ws.onopen = function() {

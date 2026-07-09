@@ -20,13 +20,14 @@ fn main() {
         };
         let windows_dir = repo_dir.join("assets").join("windows");
 
-        // Copy companion DLLs next to the exe (only when building natively on Windows)
-        if !cross_compiling {
+        // Copy companion runtime files next to the exe for both native
+        // Windows builds and cross-compiled Windows builds from WSL/Linux.
+        {
             let conhost_dir = windows_dir.join("conhost");
             for name in &["conpty.dll", "OpenConsole.exe"] {
                 let dest_name = exe_output_dir.join(name);
                 let src_name = conhost_dir.join(name);
-                if !dest_name.exists() {
+                if src_name.exists() && !dest_name.exists() {
                     let _ = std::fs::copy(&src_name, &dest_name);
                 }
             }
@@ -35,16 +36,16 @@ fn main() {
             for name in &["libEGL.dll", "libGLESv2.dll"] {
                 let dest_name = exe_output_dir.join(name);
                 let src_name = angle_dir.join(name);
-                if !dest_name.exists() {
+                if src_name.exists() && !dest_name.exists() {
                     let _ = std::fs::copy(&src_name, &dest_name);
                 }
             }
 
             let dest_mesa = exe_output_dir.join("mesa");
-            let _ = std::fs::create_dir(&dest_mesa);
+            let _ = std::fs::create_dir_all(&dest_mesa);
             let dest_name = dest_mesa.join("opengl32.dll");
             let src_name = windows_dir.join("mesa").join("opengl32.dll");
-            if !dest_name.exists() {
+            if src_name.exists() && !dest_name.exists() {
                 let _ = std::fs::copy(&src_name, &dest_name);
             }
         }

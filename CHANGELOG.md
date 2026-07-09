@@ -41,6 +41,21 @@
 
 ### Fixed
 - Git branch detection now works inside git worktrees (`.git` file with `gitdir:` pointer was previously treated as a directory and the branch showed blank)
+## 2026-04-10
+
+### Added
+- Cookie-based authentication for web access — token is set via HttpOnly cookie on first visit, no longer exposed in URL or WebSocket params
+- Session restore now preserves hidden panes, per-window workspace, and tab titles
+- Software OpenGL (mesa) fallback when WGL initialization fails
+- Error dialog with troubleshooting hint when GUI window creation fails
+- Build.rs copies companion DLLs (conpty, ANGLE, mesa) during cross-compile from WSL
+
+### Fixed
+- GUI window failing to appear when web access port is already in use — web server startup was blocking the main thread
+
+### Changed
+- Web access token removed from URL query string (pages and WebSocket)
+- WebSocket session validates pane ownership via `require_attached_pane` helper
 
 ## 2026-03-24
 

@@ -446,6 +446,11 @@ impl GuiFrontEnd {
                 log::trace!("Creating TermWindow for mux_window_id={}", mux_window_id);
                 if let Err(err) = TermWindow::new_window(mux_window_id).await {
                     log::error!("Failed to create window: {:#}", err);
+                    mux::connui::show_configuration_error_message(&format!(
+                        "Terminaler failed to create a GUI window.\n\n{err:#}\n\n\
+                         Run `terminaler-gui.exe --attach-parent-console` from \
+                         Command Prompt or PowerShell to capture startup logs."
+                    ));
                     let mux = Mux::get();
                     mux.kill_window(mux_window_id);
                     front_end()
