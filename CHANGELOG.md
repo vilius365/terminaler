@@ -1,5 +1,20 @@
 # Changelog
 
+## 2026-07-09
+
+### Added
+- **Eye-friendly default color scheme**: the out-of-the-box palette is now warm Gruvbox Dark (cream `#ebdbb2` on soft dark grey `#282828`) instead of the terminal core's grey-on-**pure-black** default. Pure-black backgrounds maximize halation and eye strain; the previous `dark_theme()`/`ThemeName` machinery in `themes.rs` was dead code and never applied. `resolved_palette` now defaults to the bundled Gruvbox scheme; user `color_scheme`/`colors` still override it.
+- **Runtime theme selector** (`ctrl+shift+k`, also "Theme Picker" in the command palette and View menu): a fuzzy picker over all ~1000 bundled color schemes plus any custom ones, built on the existing launcher infrastructure. Selecting a theme applies it live and persists it to `terminaler.json` (comment-preserving surgical edit), so it survives restarts.
+- **Theme selector in the WebView2 sidebar**: a "🎨 Theme" button expands a scrollable, click-to-apply list of all schemes (active one highlighted and scrolled into view), plus a "Search all… (`ctrl+shift+k`)" row that opens the full fuzzy picker. Click-driven by necessity — the sidebar blurs focus to keep the terminal focused, so a native `<select>`/search input can't work there.
+
+### Fixed
+- **Theme apply was slow** (took "ages"): applying a color scheme ran the full config-reload pipeline twice (an explicit reload plus the file-watcher reacting to the persisted write), and each `config_was_reloaded()` re-resolved every font, rebuilt the font-dir DB, cleared all glyph/shape caches, and recomputed window size — none of which a color change needs. A theme change now applies the palette live via a lightweight path (`apply_palette_change` — palette + colored render caches + per-pane config + repaint only), skipping font re-resolution and resize.
+- **Silent Windows startup failure**: a `to_dynamic()` equality guard briefly added to `config_was_reloaded()` (to make the watcher reload a no-op) could run near startup via the initial `AppearanceChanged` event and broke launch. Removed — the lightweight apply path already delivers the speed win without it.
+- **Config writer hardened**: `persist_color_scheme` now validates that the surgically-edited config still parses before writing, and refuses to write otherwise — a theme apply can never corrupt `terminaler.json` and break the next startup.
+
+### Changed
+- Corrected the architecture doc: the daemon binary is `terminaler-mux-server`, not the non-existent `terminaler-daemon` (`CLAUDE.md`).
+
 ## 2026-06-15
 
 ### Added
