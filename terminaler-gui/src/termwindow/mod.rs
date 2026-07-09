@@ -1868,6 +1868,18 @@ impl TermWindow {
                 configuration()
             }
         };
+
+        // If the effective config is byte-identical to what we already have
+        // (e.g. the file watcher firing right after apply_palette_change wrote
+        // the config), skip the expensive font/glyph rebuild and resize below.
+        {
+            use terminaler_dynamic::ToDynamic;
+            if self.config.to_dynamic() == config.to_dynamic() {
+                self.config = config;
+                return;
+            }
+        }
+
         self.config = config.clone();
         self.palette.take();
 
@@ -3112,21 +3124,9 @@ impl TermWindow {
     /// can't be written, fall back to a window-local override so the change is
     /// still visible this session.
     fn apply_color_scheme(&mut self, name: &str) {
-        match config::persist_color_scheme(name) {
-            Ok(()) => {
-                log::info!("Applied color scheme: {}", name);
-                config::reload();
-            }
-            Err(err) => {
-                log::error!("Failed to persist color scheme {:?}: {:#}", name, err);
-                self.apply_color_scheme_override(name);
-            }
-        }
-    }
-
-    /// Set `color_scheme` as a window-local config override and re-apply.
-    fn apply_color_scheme_override(&mut self, name: &str) {
         use terminaler_dynamic::Value;
+        // Set `color_scheme` as a window override so the palette resolves to the
+        // chosen scheme immediately.
         let mut obj = match self.config_overrides.clone() {
             Value::Object(o) => o,
             _ => Default::default(),
@@ -3136,7 +3136,83 @@ impl TermWindow {
             Value::String(name.to_string()),
         );
         self.config_overrides = Value::Object(obj);
-        self.config_was_reloaded();
+
+        // Apply just the palette to the live window — a color change doesn't
+        // need the font re-resolution / glyph re-raster / resize that a full
+        // config reload performs, which is what made this feel sluggish.
+        self.apply_palette_change();
+        log::info!("Applied color scheme: {}", name);
+
+        // Persist for next launch. The config-file write trips the file watcher,
+        // but the resulting reload is a no-op: config_was_reloaded() early-returns
+        // when the effective config is unchanged (which it now is).
+        if let Err(err) = config::persist_color_scheme(name) {
+            log::error!("Failed to persist color scheme {:?}: {:#}", name, err);
+        }
+    }
+
+    /// Re-apply the current overrides' palette to the live window without the
+    /// expensive font re-resolution and window resize that a full config reload
+    /// performs. A color-scheme change only affects drawing colors — glyph
+    /// shapes and bitmaps are unaffected — so fonts are deliberately left alone.
+    fn apply_palette_change(&mut self) {
+        let config = match config::overridden_config(&self.config_overrides) {
+            Ok(config) => config,
+            Err(err) => {
+                log::error!(
+                    "apply_palette_change: failed to apply overrides: {:#}: {:?}",
+                    err,
+                    self.config_overrides
+                );
+                return;
+            }
+        };
+        self.config = config.clone();
+        self.palette.take();
+
+        // Invalidate the colored render caches so cells redraw with the new
+        // palette (font/glyph caches are intentionally left intact).
+        self.shape_generation += 1;
+        {
+            let mut shape_cache = self.shape_cache.borrow_mut();
+            shape_cache.update_config(&config);
+            shape_cache.clear();
+        }
+        self.line_state_cache.borrow_mut().update_config(&config);
+        self.line_quad_cache.borrow_mut().update_config(&config);
+        self.line_to_ele_shape_cache
+            .borrow_mut()
+            .update_config(&config);
+        self.render_state.as_mut().map(|rs| rs.config_changed());
+
+        // Push the new palette to every pane and overlay.
+        if let Some(window) = Mux::get().get_window(self.mux_window_id) {
+            let term_config: Arc<dyn TerminalConfiguration> =
+                Arc::new(TermConfig::with_config(config.clone()));
+            for tab in window.iter() {
+                for pane in tab.iter_panes_ignoring_zoom() {
+                    pane.pane.set_config(Arc::clone(&term_config));
+                }
+            }
+            for state in self.pane_state.borrow().values() {
+                if let Some(overlay) = &state.overlay {
+                    overlay.pane.set_config(Arc::clone(&term_config));
+                }
+            }
+            for state in self.tab_state.borrow().values() {
+                if let Some(overlay) = &state.overlay {
+                    overlay.pane.set_config(Arc::clone(&term_config));
+                }
+            }
+        }
+
+        self.fancy_tab_bar.take();
+        self.invalidate_fancy_tab_bar();
+        self.invalidate_tab_sidebar();
+        self.invalidate_modal();
+        if let Some(window) = self.window.as_ref().map(|w| w.clone()) {
+            window.invalidate();
+        }
     }
 
     /// Heuristic: is this pane sitting in an interactive SSH session? Checks
