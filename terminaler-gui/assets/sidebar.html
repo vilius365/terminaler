@@ -97,6 +97,61 @@
     background: rgba(255,255,255,0.02);
   }
 
+  /* ── Theme picker ── */
+  .theme-picker { margin-bottom: 6px; }
+  .btn-theme {
+    width: 100%;
+    height: 32px;
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    background: var(--bg-elevated);
+    color: var(--text-secondary);
+    font-family: var(--font-ui);
+    font-size: 12px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    padding: 0 10px;
+    transition: border-color var(--transition), color var(--transition);
+  }
+  .btn-theme:hover { border-color: var(--text-secondary); color: var(--text-primary); }
+  .btn-theme-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .btn-theme-caret { color: var(--text-tertiary); flex: 0 0 auto; }
+  .theme-panel {
+    margin-top: 4px;
+    max-height: 45vh;
+    overflow-y: auto;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    background: var(--bg-surface);
+  }
+  .theme-panel::-webkit-scrollbar { width: 4px; }
+  .theme-panel::-webkit-scrollbar-track { background: transparent; }
+  .theme-panel::-webkit-scrollbar-thumb { background: var(--border-default); border-radius: 2px; }
+  .theme-row {
+    padding: 6px 10px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .theme-row:hover { background: var(--bg-elevated); color: var(--text-primary); }
+  .theme-row.active { color: var(--accent-orange); font-weight: 600; }
+  .theme-row.active::before { content: '● '; }
+  .theme-row-search {
+    color: var(--accent-blue);
+    position: sticky;
+    top: 0;
+    background: var(--bg-surface);
+    border-bottom: 1px solid var(--border-default);
+  }
+  .theme-row-search:hover { background: var(--bg-elevated); color: var(--accent-blue); }
+
   /* ── Cards ── */
   .card {
     border: 1px solid var(--border-subtle);
@@ -507,6 +562,13 @@
   <div class="sidebar-scroll" id="tab-list"></div>
   <div class="sidebar-bottom">
     <div id="claude-stats-container" style="display:none"></div>
+    <div class="theme-picker">
+      <button class="btn-theme" onclick="toggleThemePanel()">
+        <span class="btn-theme-label" id="btn-theme-label">🎨 Theme</span>
+        <span class="btn-theme-caret">▾</span>
+      </button>
+      <div class="theme-panel" id="theme-panel" style="display:none"></div>
+    </div>
     <button class="btn-new-tab" onclick="sendAction({type:'new_tab'})">+ New Tab</button>
   </div>
 </div>
@@ -517,6 +579,80 @@
 const GIT_ICON_SVG = '<svg class="git-icon" viewBox="0 0 16 16"><path d="M11.75 2.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5zm-2.25.75a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.5 2.5 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25zM4.25 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5zM3.5 3.25a.75.75 0 1 1 1.5 0 .75.75 0 0 1-1.5 0z"/></svg>';
 // Server/box icon for the per-session host badge.
 const HOST_ICON_SVG = '<svg class="host-icon" viewBox="0 0 16 16"><path d="M2 3.5A1.5 1.5 0 0 1 3.5 2h9A1.5 1.5 0 0 1 14 3.5v2A1.5 1.5 0 0 1 12.5 7h-9A1.5 1.5 0 0 1 2 5.5v-2zm1.5-.5a.5.5 0 0 0-.5.5v2a.5.5 0 0 0 .5.5h9a.5.5 0 0 0 .5-.5v-2a.5.5 0 0 0-.5-.5h-9zM2 10.5A1.5 1.5 0 0 1 3.5 9h9a1.5 1.5 0 0 1 1.5 1.5v2A1.5 1.5 0 0 1 12.5 14h-9A1.5 1.5 0 0 1 2 12.5v-2zm2 .5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5zM4 4a.75.75 0 1 0 0 1.5A.75.75 0 0 0 4 4z"/></svg>';
+
+// Populated at build time by the Rust side (WebViewSidebar::new), which
+// replaces the "[]" with the JSON array of available color-scheme names.
+var ALL_SCHEMES = [];
+var _currentScheme = null;
+var _themePanelBuilt = false;
+
+function updateThemeButton() {
+    var label = document.getElementById('btn-theme-label');
+    if (label) label.textContent = '🎨 ' + (_currentScheme || 'Theme');
+}
+
+function updateActiveThemeRow() {
+    if (!_themePanelBuilt) return;
+    var panel = document.getElementById('theme-panel');
+    if (!panel) return;
+    panel.querySelectorAll('.theme-row[data-name]').forEach(function(r) {
+        if (r.getAttribute('data-name') === _currentScheme) r.classList.add('active');
+        else r.classList.remove('active');
+    });
+}
+
+function buildThemePanel() {
+    var panel = document.getElementById('theme-panel');
+    if (!panel) return;
+    var html = '<div class="theme-row theme-row-search" data-action="search">🔍 Search all… (Ctrl+Shift+K)</div>';
+    for (var i = 0; i < ALL_SCHEMES.length; i++) {
+        var name = ALL_SCHEMES[i];
+        var cls = (name === _currentScheme) ? 'theme-row active' : 'theme-row';
+        html += '<div class="' + cls + '" data-name="' + escHtml(name) + '">' + escHtml(name) + '</div>';
+    }
+    panel.innerHTML = html;
+    // Event delegation: one listener handles all rows (works with the sidebar's
+    // click-based focus model — no element needs to hold keyboard focus).
+    panel.addEventListener('click', function(e) {
+        var row = e.target.closest('.theme-row');
+        if (!row) return;
+        if (row.getAttribute('data-action') === 'search') {
+            sendAction({ type: 'color_scheme_picker' });
+            closeThemePanel();
+            return;
+        }
+        var name = row.getAttribute('data-name');
+        if (name) applyTheme(name);
+    });
+    _themePanelBuilt = true;
+}
+
+function applyTheme(name) {
+    sendAction({ type: 'apply_color_scheme', name: name });
+    _currentScheme = name;
+    updateThemeButton();
+    updateActiveThemeRow();
+    closeThemePanel();
+}
+
+function toggleThemePanel() {
+    var panel = document.getElementById('theme-panel');
+    if (!panel) return;
+    if (panel.style.display === 'none') {
+        if (!_themePanelBuilt) buildThemePanel();
+        else updateActiveThemeRow();
+        panel.style.display = '';
+        var active = panel.querySelector('.theme-row.active');
+        if (active) active.scrollIntoView({ block: 'center' });
+    } else {
+        panel.style.display = 'none';
+    }
+}
+
+function closeThemePanel() {
+    var panel = document.getElementById('theme-panel');
+    if (panel) panel.style.display = 'none';
+}
 
 var _actionDebounce = {};
 function sendAction(action) {
@@ -897,6 +1033,13 @@ function renderSidebar(state) {
     const handle = document.getElementById('resize-handle');
     if (handle && state.sidebarPosition) {
         handle.className = 'resize-handle ' + state.sidebarPosition;
+    }
+
+    // Reflect the active color scheme on the theme button + panel highlight
+    if (typeof state.activeColorScheme !== 'undefined') {
+        _currentScheme = state.activeColorScheme; // string, or null when unset
+        updateThemeButton();
+        updateActiveThemeRow();
     }
 }
 

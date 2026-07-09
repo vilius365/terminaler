@@ -79,6 +79,17 @@ mod inner {
 
             log::info!("WebViewSidebar: building WebView...");
 
+            // Inject the list of available color schemes into the page once at
+            // build time (the list is static, so this avoids re-sending ~1000
+            // names on every per-frame state push).
+            let schemes_json = serde_json::to_string(&config::color_scheme_names())
+                .unwrap_or_else(|_| "[]".to_string());
+            let html = SIDEBAR_HTML.replacen(
+                "var ALL_SCHEMES = [];",
+                &format!("var ALL_SCHEMES = {};", schemes_json),
+                1,
+            );
+
             let webview = WebViewBuilder::new()
                 .with_bounds(bounds)
                 .with_transparent(false)
@@ -89,7 +100,7 @@ mod inner {
                         q.push(msg.body().to_string());
                     }
                 })
-                .with_html(SIDEBAR_HTML)
+                .with_html(html)
                 .build_as_child(&parent)
                 .context("creating WebView2 sidebar")?;
 

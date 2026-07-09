@@ -4612,6 +4612,15 @@ impl TermWindow {
                 }
                 log::info!("Zoom reset to 100% (via sidebar)");
             }
+            "apply_color_scheme" => {
+                if let Some(name) = action["name"].as_str() {
+                    log::info!("Applying color scheme via sidebar: {}", name);
+                    self.apply_color_scheme(name);
+                }
+            }
+            "color_scheme_picker" => {
+                self.show_color_scheme_picker();
+            }
             "refocus" | _ if action_type.is_empty() => {}
             _ => {
                 log::trace!("Unknown sidebar IPC action: {}", msg);
@@ -4858,6 +4867,7 @@ impl TermWindow {
             "tabs": tabs,
             "sidebarPosition": position,
             "claudeStats": claude_stats,
+            "activeColorScheme": self.config.color_scheme,
         })
         .to_string()
     }
