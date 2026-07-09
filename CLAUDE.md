@@ -23,7 +23,7 @@ cargo build --target x86_64-pc-windows-gnu
 ## Architecture Overview
 
 ```
-[terminaler-gui.exe]          [terminaler-daemon.exe]
+[terminaler-gui.exe]       [terminaler-mux-server.exe]
   (GPU client)          <--->    (background process)
        |         Named Pipe         |
   Renders panes              Holds PTY sessions
@@ -98,7 +98,7 @@ Two-process model: GUI client renders and handles input, daemon holds PTY sessio
 
 ### Naming
 - Crate names: `terminaler-*` (kebab-case)
-- Binary names: `terminaler-gui`, `terminaler-daemon`
+- Binary names: `terminaler-gui` (GUI), `terminaler-mux-server` (daemon), `terminaler` (CLI)
 - Config keys: camelCase in JSON
 - Rust identifiers: standard conventions (snake_case for functions/variables, PascalCase for types)
 
