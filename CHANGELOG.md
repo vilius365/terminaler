@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-08-05
+
+### Added
+- **Native tmux control-mode integration restored**: running `tmux -CC attach` in a pane (locally, over `ssh -t`, or via `wsl.exe`) now turns the tmux session's windows into real Terminaler tabs/panes, instead of leaving the pane hung. The `TmuxDomain`/`tmux_commands`/`tmux_pty` machinery stripped in the Phase 0 fork commit (`8b63091`) is resurrected from upstream WezTerm (~1800 lines, near-verbatim) and rewired into `localpane.rs`; the control-mode lexer half had survived the strip and needed no changes. Hardened over upstream: `TmuxChild::try_wait` no longer panics (`todo!()` → real answer from the active lock), and the per-attach mux-notification subscriber now unsubscribes when its domain detaches instead of leaking. Inherited upstream limitations apply (scrollback captured once at attach, no mouse reporting inside tmux panes, origin pane frozen behind a "press q to detach" banner). **Windows ConPTY passthrough of the DCS 1000p handshake is unvalidated** — needs a live check on a Windows host.
+- **Multibox tmux session discovery** (`tmux` config section): a background poller runs `tmux list-sessions` on every configured box — over `ssh` (BatchMode, ConnectTimeout, riding your ssh config/keys), `wsl.exe -e`, or a custom argv prefix (e.g. `tailscale ssh`) — on a configurable interval (default 30s), with parallel per-box probes, hard timeouts, and per-box failure isolation (one box down never affects the others; last-known sessions are kept and marked stale). Config: `boxes: [{ name, connection: { Ssh { target } | Wsl { distribution } | Command { argv_prefix } }, tmux_command }]`.
+- **Tmux Session Picker** (`ctrl+shift+s`, also in the command palette and Shell menu): fuzzy picker listing `box:session (N windows, attached)` across all boxes, with unreachable boxes shown inline; Enter spawns the control-mode attach in a new tab (explicitly in the `local` domain — the default domain prefers WSL, which would wrap the ssh/wsl argv in another `wsl.exe --exec`).
+- **Tmux sessions section in the WebView2 sidebar**: sessions grouped by box with status dot (green ok / red unreachable / grey pending), stale dimming, per-box error line, window count + attached marker per session, a ⟳ refresh button, and click-to-attach. Hidden entirely when the `tmux` config section is absent or disabled.
+
 ## 2026-07-09
 
 ### Added

@@ -83,6 +83,9 @@ Two-process model: GUI client renders and handles input, daemon holds PTY sessio
 | `mux/src/tab.rs` | Tab with bintree::Tree pane layout |
 | `mux/src/session_state.rs` | Session state serialization (save/restore) |
 | `mux/src/domain.rs` | Domain trait (shell spawning) — Local + WSL |
+| `mux/src/tmux.rs` | TmuxDomain — tmux -CC control mode; windows become tabs (restored from upstream) |
+| `config/src/tmux.rs` | TmuxConfig/TmuxBox — multibox tmux discovery config + attach argv builders |
+| `terminaler-gui/src/tmux_discovery.rs` | Background tmux session poller (ssh/wsl probes, cached snapshots) |
 | `bintree/src/lib.rs` | Binary tree (Tree<L,N> enum, cursors) |
 | `terminaler-web/src/lib.rs` | Web server public API |
 | `terminaler-web/src/ws_session.rs` | WebSocket session management |
