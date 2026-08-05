@@ -469,6 +469,7 @@ impl LauncherState {
                         action: KeyAssignment::AttachTmuxSession {
                             box_name: snap.box_name.clone(),
                             session: session.session.clone(),
+                            mode: Default::default(),
                         },
                     });
                 }

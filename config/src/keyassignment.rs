@@ -698,9 +698,15 @@ pub enum KeyAssignment {
     /// Open the tmux session picker overlay listing sessions across
     /// all configured boxes.
     TmuxSessionPicker,
-    /// Attach a tmux session on a configured box in a new local tab
-    /// (tmux control mode). Internal: emitted by picker/sidebar entries.
-    AttachTmuxSession { box_name: String, session: String },
+    /// Attach a tmux session on a configured box. Default mode is a plain
+    /// attach in a new split; ControlTab turns tmux windows into native
+    /// tabs. Internal: emitted by picker/sidebar entries.
+    AttachTmuxSession {
+        box_name: String,
+        session: String,
+        #[dynamic(default)]
+        mode: crate::tmux::TmuxAttachMode,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]

@@ -119,8 +119,19 @@ impl TmuxBox {
 
     /// Argv for attaching to a session in tmux control mode (`-CC`).
     /// The resulting command is meant to run in a local pane; the control-mode
-    /// handshake then takes over the pane.
+    /// handshake then turns tmux windows into native tabs.
     pub fn attach_argv(&self, session: &str) -> Vec<String> {
+        self.attach_argv_impl(session, true)
+    }
+
+    /// Argv for a plain attach: the classic full-screen tmux UI contained in
+    /// the pane. tmux sees real keystrokes, so `bind -n` bindings work.
+    pub fn attach_plain_argv(&self, session: &str) -> Vec<String> {
+        self.attach_argv_impl(session, false)
+    }
+
+    fn attach_argv_impl(&self, session: &str, control_mode: bool) -> Vec<String> {
+        let cc = if control_mode { "-CC " } else { "" };
         match &self.connection {
             TmuxConnection::Ssh { target, extra_args } => {
                 let mut argv = vec!["ssh".to_string(), "-t".to_string()];
@@ -130,17 +141,20 @@ impl TmuxBox {
                 // The remote command crosses the remote user's shell, so the
                 // session name must be shell-quoted.
                 argv.push(format!(
-                    "{} -CC attach-session -t {}",
+                    "{} {}attach-session -t {}",
                     self.tmux_command,
+                    cc,
                     shell_quote(session)
                 ));
                 argv
             }
             TmuxConnection::Wsl { distribution } => {
                 let mut argv = wsl_prefix(distribution);
+                argv.push(self.tmux_command.clone());
+                if control_mode {
+                    argv.push("-CC".to_string());
+                }
                 argv.extend([
-                    self.tmux_command.clone(),
-                    "-CC".to_string(),
                     "attach-session".to_string(),
                     "-t".to_string(),
                     session.to_string(),
@@ -149,9 +163,11 @@ impl TmuxBox {
             }
             TmuxConnection::Command { argv_prefix } => {
                 let mut argv = argv_prefix.clone();
+                argv.push(self.tmux_command.clone());
+                if control_mode {
+                    argv.push("-CC".to_string());
+                }
                 argv.extend([
-                    self.tmux_command.clone(),
-                    "-CC".to_string(),
                     "attach-session".to_string(),
                     "-t".to_string(),
                     session.to_string(),
@@ -159,6 +175,24 @@ impl TmuxBox {
                 argv
             }
         }
+    }
+}
+
+/// How AttachTmuxSession opens the session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, FromDynamic, ToDynamic)]
+pub enum TmuxAttachMode {
+    /// Plain `tmux attach` in a new split next to the active pane: the
+    /// classic tmux UI contained in that pane; layout untouched, tmux
+    /// key bindings (bind -n) work.
+    SplitPlain,
+    /// `tmux -CC attach` in a new tab: control mode turns the session's
+    /// windows into native Terminaler tabs (takes focus).
+    ControlTab,
+}
+
+impl Default for TmuxAttachMode {
+    fn default() -> Self {
+        Self::SplitPlain
     }
 }
 
@@ -288,6 +322,24 @@ mod tests {
         assert_eq!(
             argv.last().unwrap(),
             r"tmux -CC attach-session -t 'my session'\''s'"
+        );
+    }
+
+    #[test]
+    fn plain_attach_has_no_control_flag() {
+        assert_eq!(
+            ssh_box().attach_plain_argv("main").last().unwrap(),
+            "tmux attach-session -t 'main'"
+        );
+        let b = TmuxBox {
+            name: "wsl".to_string(),
+            connection: TmuxConnection::Wsl { distribution: None },
+            tmux_command: default_tmux_command(),
+            enabled: true,
+        };
+        assert_eq!(
+            b.attach_plain_argv("main"),
+            vec!["wsl.exe", "-e", "tmux", "attach-session", "-t", "main"]
         );
     }
 

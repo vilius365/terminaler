@@ -640,14 +640,34 @@
     align-items: center;
     justify-content: space-between;
     gap: 6px;
-    padding: 2px 4px 2px 12px;
+    margin: 2px 0 2px 10px;
+    padding: 4px 6px;
     font-size: 11px;
     color: var(--text-primary);
-    border-radius: 4px;
+    background: var(--bg-hover);
+    border: 1px solid var(--border-subtle);
+    border-radius: 5px;
     cursor: pointer;
   }
 
-  .tmux-session-row:hover { background: var(--bg-hover); }
+  .tmux-session-row:hover {
+    border-color: var(--accent-orange);
+  }
+
+  .tmux-session-row:active { transform: translateY(1px); }
+
+  .tmux-attach-tabs {
+    flex: none;
+    padding: 0 3px;
+    font-size: 11px;
+    color: var(--text-tertiary);
+    border-radius: 3px;
+  }
+
+  .tmux-attach-tabs:hover {
+    color: var(--accent-orange);
+    background: var(--border-subtle);
+  }
 
   .tmux-session-meta {
     font-size: 9px;
@@ -1150,9 +1170,10 @@ function renderTmuxCard(boxes) {
         for (var j = 0; j < sessions.length; j++) {
             var s = sessions[j];
             var rowCls = 'tmux-session-row' + (box.stale || box.status === 'unreachable' ? ' tmux-stale' : '');
-            html += '<div class="' + rowCls + '" data-tmux-box="' + escHtml(box.box) + '" data-tmux-session="' + escHtml(s.name) + '">';
+            html += '<div class="' + rowCls + '" data-tmux-box="' + escHtml(box.box) + '" data-tmux-session="' + escHtml(s.name) + '" title="Attach in a split pane">';
             html += '<span>' + escHtml(s.name) + '</span>';
             html += '<span class="tmux-session-meta">' + s.windows + 'w' + (s.attached ? ' ●' : '') + '</span>';
+            html += '<span class="tmux-attach-tabs" data-tmux-tabs="1" title="Attach as native tabs (control mode)">⧉</span>';
             html += '</div>';
         }
         if (sessions.length === 0 && box.status === 'ok') {
@@ -1179,6 +1200,7 @@ function renderTmuxCard(boxes) {
             type: 'attach_tmux_session',
             box: row.getAttribute('data-tmux-box'),
             session: row.getAttribute('data-tmux-session'),
+            mode: e.target.closest('[data-tmux-tabs]') ? 'tabs' : 'split',
         });
     });
 })();

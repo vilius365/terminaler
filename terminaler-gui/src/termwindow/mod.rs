@@ -3121,12 +3121,20 @@ impl TermWindow {
         self.show_launcher_impl(args, 0);
     }
 
-    /// Attach a tmux session on a configured box: spawn the control-mode
-    /// attach command in a new tab in the "local" domain. The DCS 1000p
-    /// handshake then turns the tmux windows into real tabs.
-    fn attach_tmux_session(&mut self, box_name: &str, session: &str) {
+    /// Attach a tmux session on a configured box.
+    /// SplitPlain (default): classic `tmux attach` UI in a new split next to
+    /// the active pane — layout untouched, tmux `bind -n` keys work.
+    /// ControlTab: `tmux -CC attach` in a new tab — the DCS handshake turns
+    /// the session's windows into native tabs.
+    fn attach_tmux_session(
+        &mut self,
+        box_name: &str,
+        session: &str,
+        mode: config::tmux::TmuxAttachMode,
+    ) {
         use crate::spawn::SpawnWhere;
         use config::keyassignment::{SpawnCommand, SpawnTabDomain};
+        use config::tmux::TmuxAttachMode;
 
         let tmux = self.config.tmux.clone().unwrap_or_default();
         let Some(tmux_box) = tmux
@@ -3141,16 +3149,34 @@ impl TermWindow {
             return;
         };
 
+        let args = match mode {
+            TmuxAttachMode::SplitPlain => tmux_box.attach_plain_argv(session),
+            TmuxAttachMode::ControlTab => tmux_box.attach_argv(session),
+        };
         let spawn = SpawnCommand {
             label: Some(format!("tmux {}:{}", box_name, session)),
-            args: Some(tmux_box.attach_argv(session)),
+            args: Some(args),
             // Deliberately NOT DefaultDomain: the default domain prefers WSL,
             // which would wrap ssh.exe/wsl.exe in another `wsl.exe --exec`.
             domain: SpawnTabDomain::DomainName("local".to_string()),
             ..Default::default()
         };
-        log::info!("Attaching tmux session {}:{}", box_name, session);
-        self.spawn_command(&spawn, SpawnWhere::NewTab);
+        log::info!(
+            "Attaching tmux session {}:{} ({:?})",
+            box_name,
+            session,
+            mode
+        );
+        let spawn_where = match mode {
+            TmuxAttachMode::SplitPlain => SpawnWhere::SplitPane(SplitRequest {
+                direction: SplitDirection::Horizontal,
+                target_is_second: true,
+                size: MuxSplitSize::Percent(50),
+                top_level: false,
+            }),
+            TmuxAttachMode::ControlTab => SpawnWhere::NewTab,
+        };
+        self.spawn_command(&spawn, spawn_where);
     }
 
     /// Apply a named color scheme: persist it to the config file (which the
@@ -4562,8 +4588,12 @@ impl TermWindow {
                 log::info!("TmuxSessionPicker: showing tmux session picker");
                 self.show_tmux_session_picker();
             }
-            AttachTmuxSession { box_name, session } => {
-                self.attach_tmux_session(box_name, session);
+            AttachTmuxSession {
+                box_name,
+                session,
+                mode,
+            } => {
+                self.attach_tmux_session(box_name, session, *mode);
             }
             ToggleTabSidebar => {
                 self.show_tab_sidebar = !self.show_tab_sidebar;
@@ -4764,9 +4794,13 @@ impl TermWindow {
                 if let (Some(box_name), Some(session)) =
                     (action["box"].as_str(), action["session"].as_str())
                 {
+                    let mode = match action["mode"].as_str() {
+                        Some("tabs") => config::tmux::TmuxAttachMode::ControlTab,
+                        _ => config::tmux::TmuxAttachMode::SplitPlain,
+                    };
                     let box_name = box_name.to_string();
                     let session = session.to_string();
-                    self.attach_tmux_session(&box_name, &session);
+                    self.attach_tmux_session(&box_name, &session, mode);
                 }
             }
             "refresh_tmux_sessions" => {
