@@ -130,8 +130,19 @@ impl TmuxBox {
         self.attach_argv_impl(session, false)
     }
 
+    // Two hard-won details in the attach commands below (root-caused live):
+    //
+    // `-u`: the attach runs as a non-interactive ssh/wsl command, so the
+    // remote LANG/LC_ALL from login rc files may be absent and tmux marks
+    // the client non-UTF-8 (all TUI glyphs render as underscores). `-u`
+    // forces UTF-8 regardless of the remote environment.
+    //
+    // window-size reset (plain attach only): a control-mode (-CC) attach
+    // flips windows to `window-size manual` sized to the GUI and detach does
+    // NOT restore it, so a later plain attach in a split becomes a small
+    // panning viewport over the oversized window. Plain attach therefore
+    // unsets window-size first; control mode resizes explicitly anyway.
     fn attach_argv_impl(&self, session: &str, control_mode: bool) -> Vec<String> {
-        let cc = if control_mode { "-CC " } else { "" };
         match &self.connection {
             TmuxConnection::Ssh { target, extra_args } => {
                 let mut argv = vec!["ssh".to_string(), "-t".to_string()];
@@ -139,42 +150,58 @@ impl TmuxBox {
                 argv.push(target.clone());
                 argv.push("--".to_string());
                 // The remote command crosses the remote user's shell, so the
-                // session name must be shell-quoted.
-                argv.push(format!(
-                    "{} {}attach-session -t {}",
-                    self.tmux_command,
-                    cc,
-                    shell_quote(session)
-                ));
+                // session name must be shell-quoted (and we can use shell
+                // constructs: reset window-size on EVERY window, then attach).
+                let tmux = &self.tmux_command;
+                let quoted = shell_quote(session);
+                argv.push(if control_mode {
+                    format!("{tmux} -u -CC attach-session -t {quoted}")
+                } else {
+                    format!(
+                        "for __w in $({tmux} list-windows -t {quoted} -F '#{{window_id}}'); do \
+                         {tmux} set-option -w -t \"$__w\" -u window-size; done; \
+                         exec {tmux} -u attach-session -t {quoted}"
+                    )
+                });
                 argv
             }
             TmuxConnection::Wsl { distribution } => {
                 let mut argv = wsl_prefix(distribution);
-                argv.push(self.tmux_command.clone());
-                if control_mode {
-                    argv.push("-CC".to_string());
-                }
-                argv.extend([
-                    "attach-session".to_string(),
-                    "-t".to_string(),
-                    session.to_string(),
-                ]);
+                argv.extend(self.plain_argv_tail(session, control_mode));
                 argv
             }
             TmuxConnection::Command { argv_prefix } => {
                 let mut argv = argv_prefix.clone();
-                argv.push(self.tmux_command.clone());
-                if control_mode {
-                    argv.push("-CC".to_string());
-                }
-                argv.extend([
-                    "attach-session".to_string(),
-                    "-t".to_string(),
-                    session.to_string(),
-                ]);
+                argv.extend(self.plain_argv_tail(session, control_mode));
                 argv
             }
         }
+    }
+
+    /// Argv-verbatim transports (wsl.exe -e, custom prefixes) have no remote
+    /// shell, so the window-size reset uses tmux's own `;` command chaining
+    /// (a lone `;` argv element separates tmux commands). This only resets
+    /// the session's current window — best effort without a shell loop.
+    fn plain_argv_tail(&self, session: &str, control_mode: bool) -> Vec<String> {
+        let mut argv = vec![self.tmux_command.clone(), "-u".to_string()];
+        if control_mode {
+            argv.push("-CC".to_string());
+        } else {
+            argv.extend([
+                "set-option".to_string(),
+                "-uw".to_string(),
+                "-t".to_string(),
+                session.to_string(),
+                "window-size".to_string(),
+                ";".to_string(),
+            ]);
+        }
+        argv.extend([
+            "attach-session".to_string(),
+            "-t".to_string(),
+            session.to_string(),
+        ]);
+        argv
     }
 }
 
@@ -321,25 +348,35 @@ mod tests {
         let argv = ssh_box().attach_argv("my session's");
         assert_eq!(
             argv.last().unwrap(),
-            r"tmux -CC attach-session -t 'my session'\''s'"
+            r"tmux -u -CC attach-session -t 'my session'\''s'"
         );
     }
 
     #[test]
-    fn plain_attach_has_no_control_flag() {
-        assert_eq!(
-            ssh_box().attach_plain_argv("main").last().unwrap(),
-            "tmux attach-session -t 'main'"
-        );
+    fn plain_attach_resets_window_size_and_forces_utf8() {
+        let remote = ssh_box().attach_plain_argv("main").last().unwrap().clone();
+        // Shell loop unsets window-size on every window, then attaches with -u.
+        assert!(remote.starts_with("for __w in $(tmux list-windows -t 'main'"));
+        assert!(remote.contains("set-option -w -t \"$__w\" -u window-size"));
+        assert!(remote.ends_with("exec tmux -u attach-session -t 'main'"));
+
         let b = TmuxBox {
             name: "wsl".to_string(),
             connection: TmuxConnection::Wsl { distribution: None },
             tmux_command: default_tmux_command(),
             enabled: true,
         };
+        // No remote shell: tmux `;` command chaining, current window only.
         assert_eq!(
             b.attach_plain_argv("main"),
-            vec!["wsl.exe", "-e", "tmux", "attach-session", "-t", "main"]
+            vec![
+                "wsl.exe", "-e", "tmux", "-u", "set-option", "-uw", "-t", "main",
+                "window-size", ";", "attach-session", "-t", "main"
+            ]
+        );
+        assert_eq!(
+            b.attach_argv("main"),
+            vec!["wsl.exe", "-e", "tmux", "-u", "-CC", "attach-session", "-t", "main"]
         );
     }
 
@@ -355,7 +392,10 @@ mod tests {
         };
         assert_eq!(
             b.attach_argv("main"),
-            vec!["wsl.exe", "-d", "Ubuntu", "-e", "tmux", "-CC", "attach-session", "-t", "main"]
+            vec![
+                "wsl.exe", "-d", "Ubuntu", "-e", "tmux", "-u", "-CC", "attach-session", "-t",
+                "main"
+            ]
         );
         assert_eq!(b.list_sessions_argv(5)[..4], ["wsl.exe", "-d", "Ubuntu", "-e"]);
     }
