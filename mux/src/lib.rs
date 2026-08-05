@@ -44,9 +44,9 @@ pub mod renderable;
 // STRIPPED: pub mod ssh_agent;
 pub mod tab;
 pub mod termwiztermtab;
-// STRIPPED: pub mod tmux;
-// STRIPPED: pub mod tmux_commands;
-// STRIPPED: mod tmux_pty;
+pub mod tmux;
+pub mod tmux_commands;
+mod tmux_pty;
 pub mod session_state;
 pub mod window;
 
