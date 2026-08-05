@@ -199,6 +199,59 @@ fn default_tmux_command() -> String {
 mod tests {
     use super::*;
 
+    /// Parse the documented JSON shape through the same pipeline the real
+    /// config loader uses (serde_json -> dynamic -> FromDynamic), so the
+    /// sample in defaults.rs is guaranteed to actually work.
+    #[test]
+    fn parses_documented_json_shape() {
+        let json = r#"{
+            "poll_interval_seconds": 30,
+            "boxes": [
+                { "name": "wsl",        "connection": { "Wsl": { "distribution": "Ubuntu" } } },
+                { "name": "devbox",     "connection": { "Ssh": { "target": "devbox" } } },
+                { "name": "ts",         "connection": { "Command": { "argv_prefix": ["tailscale", "ssh", "host"] } } }
+            ]
+        }"#;
+        let value: serde_json::Value = serde_json::from_str(json).unwrap();
+        let dynamic = crate::json_to_dynamic(&value);
+        let cfg = TmuxConfig::from_dynamic(
+            &dynamic,
+            terminaler_dynamic::FromDynamicOptions {
+                unknown_fields: terminaler_dynamic::UnknownFieldAction::Deny,
+                deprecated_fields: terminaler_dynamic::UnknownFieldAction::Deny,
+            },
+        )
+        .unwrap();
+        assert!(cfg.enabled);
+        assert_eq!(cfg.poll_interval_seconds, 30);
+        assert_eq!(cfg.boxes.len(), 3);
+        assert!(matches!(
+            &cfg.boxes[0].connection,
+            TmuxConnection::Wsl { distribution: Some(d) } if d == "Ubuntu"
+        ));
+        assert!(matches!(
+            &cfg.boxes[1].connection,
+            TmuxConnection::Ssh { target, .. } if target == "devbox"
+        ));
+        assert!(matches!(
+            &cfg.boxes[2].connection,
+            TmuxConnection::Command { argv_prefix } if argv_prefix.len() == 3
+        ));
+    }
+
+    /// `{ "Wsl": {} }` (default distribution) must also parse.
+    #[test]
+    fn parses_wsl_default_distribution() {
+        let json = r#"{ "boxes": [ { "name": "wsl", "connection": { "Wsl": {} } } ] }"#;
+        let value: serde_json::Value = serde_json::from_str(json).unwrap();
+        let dynamic = crate::json_to_dynamic(&value);
+        let cfg = TmuxConfig::from_dynamic(&dynamic, Default::default()).unwrap();
+        assert!(matches!(
+            &cfg.boxes[0].connection,
+            TmuxConnection::Wsl { distribution: None }
+        ));
+    }
+
     fn ssh_box() -> TmuxBox {
         TmuxBox {
             name: "devbox".to_string(),
