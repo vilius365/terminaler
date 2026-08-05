@@ -3149,8 +3149,30 @@ impl TermWindow {
             return;
         };
 
+        if mode == TmuxAttachMode::CurrentPane {
+            // Type the attach command into the active pane's shell, replacing
+            // its content with the session UI (pane must be at a prompt).
+            let Some(pane) = self.get_active_pane_or_overlay() else {
+                log::error!("AttachTmuxSession: no active pane to attach in");
+                return;
+            };
+            let cmd = format!("{}\r", tmux_box.attach_typed_command(session));
+            log::info!(
+                "Attaching tmux session {}:{} in active pane {}",
+                box_name,
+                session,
+                pane.pane_id()
+            );
+            if let Err(err) = pane.writer().write_all(cmd.as_bytes()) {
+                log::error!("AttachTmuxSession: failed to write to pane: {:#}", err);
+            }
+            return;
+        }
+
         let args = match mode {
-            TmuxAttachMode::SplitPlain => tmux_box.attach_plain_argv(session),
+            TmuxAttachMode::SplitPlain | TmuxAttachMode::CurrentPane => {
+                tmux_box.attach_plain_argv(session)
+            }
             TmuxAttachMode::ControlTab => tmux_box.attach_argv(session),
         };
         let spawn = SpawnCommand {
@@ -3168,12 +3190,14 @@ impl TermWindow {
             mode
         );
         let spawn_where = match mode {
-            TmuxAttachMode::SplitPlain => SpawnWhere::SplitPane(SplitRequest {
-                direction: SplitDirection::Horizontal,
-                target_is_second: true,
-                size: MuxSplitSize::Percent(50),
-                top_level: false,
-            }),
+            TmuxAttachMode::SplitPlain | TmuxAttachMode::CurrentPane => {
+                SpawnWhere::SplitPane(SplitRequest {
+                    direction: SplitDirection::Horizontal,
+                    target_is_second: true,
+                    size: MuxSplitSize::Percent(50),
+                    top_level: false,
+                })
+            }
             TmuxAttachMode::ControlTab => SpawnWhere::NewTab,
         };
         self.spawn_command(&spawn, spawn_where);
@@ -4796,6 +4820,7 @@ impl TermWindow {
                 {
                     let mode = match action["mode"].as_str() {
                         Some("tabs") => config::tmux::TmuxAttachMode::ControlTab,
+                        Some("pane") => config::tmux::TmuxAttachMode::CurrentPane,
                         _ => config::tmux::TmuxAttachMode::SplitPlain,
                     };
                     let box_name = box_name.to_string();

@@ -1173,7 +1173,7 @@ function renderTmuxCard(boxes) {
             html += '<div class="' + rowCls + '" data-tmux-box="' + escHtml(box.box) + '" data-tmux-session="' + escHtml(s.name) + '" title="Attach in a split pane">';
             html += '<span>' + escHtml(s.name) + '</span>';
             html += '<span class="tmux-session-meta">' + s.windows + 'w' + (s.attached ? ' ●' : '') + '</span>';
-            html += '<span class="tmux-attach-tabs" data-tmux-tabs="1" title="Attach as native tabs (control mode)">⧉</span>';
+            html += '<span class="tmux-attach-tabs" data-tmux-pane="1" title="Attach in the active pane (replaces its content; pane must be at a prompt)">⧉</span>';
             html += '</div>';
         }
         if (sessions.length === 0 && box.status === 'ok') {
@@ -1200,7 +1200,7 @@ function renderTmuxCard(boxes) {
             type: 'attach_tmux_session',
             box: row.getAttribute('data-tmux-box'),
             session: row.getAttribute('data-tmux-session'),
-            mode: e.target.closest('[data-tmux-tabs]') ? 'tabs' : 'split',
+            mode: e.target.closest('[data-tmux-pane]') ? 'pane' : 'split',
         });
     });
 })();

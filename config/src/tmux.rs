@@ -178,6 +178,63 @@ impl TmuxBox {
         }
     }
 
+    /// A single command line safe to TYPE into the active pane's shell,
+    /// whatever it is (cmd.exe, PowerShell, or a POSIX shell): plain attach
+    /// of the session, replacing the pane's content with the tmux UI.
+    ///
+    /// Quoting is deliberately conservative — double quotes are the one form
+    /// all three shell families pass through as a single argument — so no
+    /// window-size reset chain here (its `$`/`;` constructs expand differently
+    /// per shell). Session names containing double quotes are not supported
+    /// in this mode.
+    pub fn attach_typed_command(&self, session: &str) -> String {
+        let needs_quotes = session.chars().any(|c| c.is_whitespace());
+        match &self.connection {
+            TmuxConnection::Ssh { target, extra_args } => {
+                let extra = if extra_args.is_empty() {
+                    String::new()
+                } else {
+                    format!("{} ", extra_args.join(" "))
+                };
+                // The remote arg is locally double-quoted (stripped by every
+                // local shell family), leaving single quotes for the remote
+                // POSIX shell.
+                format!(
+                    "ssh -t {}{} -- \"{} -u attach-session -t '{}'\"",
+                    extra, target, self.tmux_command, session
+                )
+            }
+            TmuxConnection::Wsl { distribution } => {
+                let dist = distribution
+                    .as_ref()
+                    .map(|d| format!("-d {} ", d))
+                    .unwrap_or_default();
+                let name = if needs_quotes {
+                    format!("\"{}\"", session)
+                } else {
+                    session.to_string()
+                };
+                format!(
+                    "wsl.exe {}-e {} -u attach-session -t {}",
+                    dist, self.tmux_command, name
+                )
+            }
+            TmuxConnection::Command { argv_prefix } => {
+                let name = if needs_quotes {
+                    format!("\"{}\"", session)
+                } else {
+                    session.to_string()
+                };
+                format!(
+                    "{} {} -u attach-session -t {}",
+                    argv_prefix.join(" "),
+                    self.tmux_command,
+                    name
+                )
+            }
+        }
+    }
+
     /// Argv-verbatim transports (wsl.exe -e, custom prefixes) have no remote
     /// shell, so the window-size reset uses tmux's own `;` command chaining
     /// (a lone `;` argv element separates tmux commands). This only resets
@@ -215,6 +272,10 @@ pub enum TmuxAttachMode {
     /// `tmux -CC attach` in a new tab: control mode turns the session's
     /// windows into native Terminaler tabs (takes focus).
     ControlTab,
+    /// Plain `tmux attach` typed into the currently active pane's shell,
+    /// replacing its content with the session UI. Requires the pane to be
+    /// sitting at a shell prompt.
+    CurrentPane,
 }
 
 impl Default for TmuxAttachMode {
@@ -398,6 +459,26 @@ mod tests {
             ]
         );
         assert_eq!(b.list_sessions_argv(5)[..4], ["wsl.exe", "-d", "Ubuntu", "-e"]);
+    }
+
+    #[test]
+    fn typed_command_is_shell_family_safe() {
+        assert_eq!(
+            ssh_box().attach_typed_command("dark-factory"),
+            "ssh -t devbox -- \"tmux -u attach-session -t 'dark-factory'\""
+        );
+        let b = TmuxBox {
+            name: "wsl".to_string(),
+            connection: TmuxConnection::Wsl {
+                distribution: Some("Ubuntu".to_string()),
+            },
+            tmux_command: default_tmux_command(),
+            enabled: true,
+        };
+        assert_eq!(
+            b.attach_typed_command("my session"),
+            "wsl.exe -d Ubuntu -e tmux -u attach-session -t \"my session\""
+        );
     }
 
     #[test]
