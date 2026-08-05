@@ -36,6 +36,7 @@ bitflags::bitflags! {
         const LAYOUTS = 128;
         const CLAUDE_AGENTS = 256;
         const COLORSCHEMES = 512;
+        const TMUX_SESSIONS = 1024;
     }
 }
 
@@ -84,6 +85,9 @@ impl ToString for LauncherFlags {
         if self.contains(Self::COLORSCHEMES) {
             s.push("COLORSCHEMES");
         }
+        if self.contains(Self::TMUX_SESSIONS) {
+            s.push("TMUX_SESSIONS");
+        }
         s.join("|")
     }
 }
@@ -106,6 +110,7 @@ impl TryFrom<String> for LauncherFlags {
                 "LAYOUTS" => flags |= Self::LAYOUTS,
                 "CLAUDE_AGENTS" => flags |= Self::CLAUDE_AGENTS,
                 "COLORSCHEMES" => flags |= Self::COLORSCHEMES,
+                "TMUX_SESSIONS" => flags |= Self::TMUX_SESSIONS,
                 _ => {
                     return Err(format!("invalid LauncherFlags `{}` in `{}`", ele, s));
                 }
@@ -690,6 +695,12 @@ pub enum KeyAssignment {
     ColorSchemePicker,
     /// Apply a named color scheme and persist it to the config file.
     ApplyColorScheme(String),
+    /// Open the tmux session picker overlay listing sessions across
+    /// all configured boxes.
+    TmuxSessionPicker,
+    /// Attach a tmux session on a configured box in a new local tab
+    /// (tmux control mode). Internal: emitted by picker/sidebar entries.
+    AttachTmuxSession { box_name: String, session: String },
 }
 
 #[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]

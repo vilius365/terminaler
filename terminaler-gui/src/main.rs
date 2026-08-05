@@ -58,6 +58,7 @@ mod spawn;
 mod stats;
 mod tabbar;
 mod termwindow;
+mod tmux_discovery;
 mod unicode_names;
 #[cfg(windows)]
 mod webview_sidebar;

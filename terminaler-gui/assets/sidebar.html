@@ -598,6 +598,75 @@
 
   /* Git branch SVG path (reused) */
   .git-icon { width: 11px; height: 11px; fill: currentColor; opacity: 0.7; }
+
+  /* Multibox tmux sessions card */
+  .tmux-card {
+    cursor: default;
+    margin-bottom: 8px;
+  }
+
+  .tmux-box-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 10px;
+    color: var(--text-secondary);
+    margin: 6px 0 3px 0;
+  }
+
+  .tmux-box-header:first-of-type { margin-top: 0; }
+
+  .tmux-status-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    flex: none;
+  }
+  .tmux-dot-ok          { background: var(--accent-green); }
+  .tmux-dot-unreachable { background: var(--accent-red); }
+  .tmux-dot-pending     { background: var(--text-tertiary); }
+
+  .tmux-box-error {
+    font-size: 9px;
+    color: var(--text-tertiary);
+    margin-left: 12px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .tmux-session-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    padding: 2px 4px 2px 12px;
+    font-size: 11px;
+    color: var(--text-primary);
+    border-radius: 4px;
+    cursor: pointer;
+  }
+
+  .tmux-session-row:hover { background: var(--bg-hover); }
+
+  .tmux-session-meta {
+    font-size: 9px;
+    color: var(--text-tertiary);
+    flex: none;
+  }
+
+  .tmux-stale { opacity: 0.55; }
+
+  .tmux-refresh {
+    margin-left: auto;
+    cursor: pointer;
+    font-size: 10px;
+    color: var(--text-tertiary);
+    border: none;
+    background: none;
+    padding: 0 2px;
+  }
+  .tmux-refresh:hover { color: var(--text-primary); }
 </style>
 </head>
 <body>
@@ -606,6 +675,7 @@
   <div class="sidebar-scroll" id="tab-list"></div>
   <div class="sidebar-bottom">
     <div id="claude-stats-container" style="display:none"></div>
+    <div id="tmux-sessions-container" style="display:none"></div>
     <div class="theme-picker">
       <button class="btn-theme" onclick="toggleThemePanel()">
         <span class="btn-theme-label" id="btn-theme-label">🎨 Theme</span>
@@ -1054,6 +1124,65 @@ function renderTab(tab) {
     return html;
 }
 
+function renderTmuxCard(boxes) {
+    var html = '<div class="card tmux-card">';
+    html += '<div class="stats-header">';
+    html += '<span class="stats-title">Tmux Sessions</span>';
+    html += '<button class="tmux-refresh" data-tmux-refresh="1" title="Refresh now">⟳</button>';
+    html += '</div>';
+
+    for (var i = 0; i < boxes.length; i++) {
+        var box = boxes[i];
+        var dotCls = box.status === 'ok' ? 'tmux-dot-ok'
+                   : box.status === 'unreachable' ? 'tmux-dot-unreachable'
+                   : 'tmux-dot-pending';
+        html += '<div class="tmux-box-header">';
+        html += '<span class="tmux-status-dot ' + dotCls + '"></span>';
+        html += '<span>' + escHtml(box.box) + '</span>';
+        if (box.stale) html += '<span class="stats-badge">stale</span>';
+        html += '</div>';
+
+        if (box.status === 'unreachable' && box.error) {
+            html += '<div class="tmux-box-error" title="' + escHtml(box.error) + '">' + escHtml(box.error) + '</div>';
+        }
+
+        var sessions = box.sessions || [];
+        for (var j = 0; j < sessions.length; j++) {
+            var s = sessions[j];
+            var rowCls = 'tmux-session-row' + (box.stale || box.status === 'unreachable' ? ' tmux-stale' : '');
+            html += '<div class="' + rowCls + '" data-tmux-box="' + escHtml(box.box) + '" data-tmux-session="' + escHtml(s.name) + '">';
+            html += '<span>' + escHtml(s.name) + '</span>';
+            html += '<span class="tmux-session-meta">' + s.windows + 'w' + (s.attached ? ' ●' : '') + '</span>';
+            html += '</div>';
+        }
+        if (sessions.length === 0 && box.status === 'ok') {
+            html += '<div class="tmux-box-error">no sessions</div>';
+        }
+    }
+    html += '</div>';
+    return html;
+}
+
+// Event delegation on the stable container (innerHTML replaces the rows on
+// every state push, so per-row listeners would be lost).
+(function() {
+    var el = document.getElementById('tmux-sessions-container');
+    if (!el) return;
+    el.addEventListener('click', function(e) {
+        if (e.target.closest('[data-tmux-refresh]')) {
+            sendAction({ type: 'refresh_tmux_sessions' });
+            return;
+        }
+        var row = e.target.closest('.tmux-session-row');
+        if (!row) return;
+        sendAction({
+            type: 'attach_tmux_session',
+            box: row.getAttribute('data-tmux-box'),
+            session: row.getAttribute('data-tmux-session'),
+        });
+    });
+})();
+
 function renderSidebar(state) {
     const container = document.getElementById('tab-list');
     if (!container) return;
@@ -1075,6 +1204,18 @@ function renderSidebar(state) {
         } else {
             statsEl.innerHTML = '';
             statsEl.style.display = 'none';
+        }
+    }
+
+    // Multibox tmux sessions card
+    var tmuxEl = document.getElementById('tmux-sessions-container');
+    if (tmuxEl) {
+        if (state.tmuxSessions && state.tmuxSessions.length) {
+            tmuxEl.innerHTML = renderTmuxCard(state.tmuxSessions);
+            tmuxEl.style.display = '';
+        } else {
+            tmuxEl.innerHTML = '';
+            tmuxEl.style.display = 'none';
         }
     }
 

@@ -76,6 +76,7 @@ pub struct LauncherArgs {
     domains: Vec<LauncherDomainEntry>,
     tabs: Vec<LauncherTabEntry>,
     claude_agents: Vec<LauncherAgentEntry>,
+    tmux_sessions: Vec<crate::tmux_discovery::BoxSnapshot>,
     pane_id: PaneId,
     domain_id_of_current_tab: DomainId,
     title: String,
@@ -247,11 +248,19 @@ impl LauncherArgs {
             vec![]
         };
 
+        // Snapshot of the discovery cache; never touches the network.
+        let tmux_sessions = if flags.contains(LauncherFlags::TMUX_SESSIONS) {
+            crate::tmux_discovery::snapshot()
+        } else {
+            vec![]
+        };
+
         Self {
             flags,
             domains,
             tabs,
             claude_agents,
+            tmux_sessions,
             pane_id,
             domain_id_of_current_tab,
             title: title.to_string(),
@@ -414,6 +423,55 @@ impl LauncherState {
                     ),
                     action: KeyAssignment::ApplySnapLayout(layout.name),
                 });
+            }
+        }
+
+        if args.flags.contains(LauncherFlags::TMUX_SESSIONS) {
+            use crate::tmux_discovery::BoxStatus;
+            if args.tmux_sessions.is_empty() {
+                self.entries.push(Entry {
+                    label: "No tmux boxes configured (see \"tmux\" in terminaler.json)"
+                        .to_string(),
+                    action: KeyAssignment::Nop,
+                });
+            }
+            for snap in &args.tmux_sessions {
+                match &snap.status {
+                    BoxStatus::Unreachable(err) => {
+                        self.entries.push(Entry {
+                            label: format!("⚠ {} unreachable: {}", snap.box_name, err),
+                            action: KeyAssignment::Nop,
+                        });
+                    }
+                    BoxStatus::Pending if snap.sessions.is_empty() => {
+                        self.entries.push(Entry {
+                            label: format!("… {} (checking)", snap.box_name),
+                            action: KeyAssignment::Nop,
+                        });
+                        continue;
+                    }
+                    _ => {}
+                }
+                for session in &snap.sessions {
+                    let mut label = format!(
+                        "{}:{}  ({} window{}{})",
+                        snap.box_name,
+                        session.session,
+                        session.windows,
+                        if session.windows == 1 { "" } else { "s" },
+                        if session.attached { ", attached" } else { "" },
+                    );
+                    if snap.stale {
+                        label.push_str("  [stale]");
+                    }
+                    self.entries.push(Entry {
+                        label,
+                        action: KeyAssignment::AttachTmuxSession {
+                            box_name: snap.box_name.clone(),
+                            session: session.session.clone(),
+                        },
+                    });
+                }
             }
         }
 

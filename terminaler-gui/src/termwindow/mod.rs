@@ -3106,6 +3106,53 @@ impl TermWindow {
         self.show_launcher_impl(args, 0);
     }
 
+    fn show_tmux_session_picker(&mut self) {
+        // Kick a refresh so a picker re-open shows fresh data; this open
+        // renders whatever the cache already holds.
+        crate::tmux_discovery::ensure_running();
+        crate::tmux_discovery::request_refresh();
+        let args = LauncherActionArgs {
+            title: Some("Tmux Sessions".to_string()),
+            flags: LauncherFlags::TMUX_SESSIONS | LauncherFlags::FUZZY,
+            help_text: None,
+            fuzzy_help_text: None,
+            alphabet: None,
+        };
+        self.show_launcher_impl(args, 0);
+    }
+
+    /// Attach a tmux session on a configured box: spawn the control-mode
+    /// attach command in a new tab in the "local" domain. The DCS 1000p
+    /// handshake then turns the tmux windows into real tabs.
+    fn attach_tmux_session(&mut self, box_name: &str, session: &str) {
+        use crate::spawn::SpawnWhere;
+        use config::keyassignment::{SpawnCommand, SpawnTabDomain};
+
+        let tmux = self.config.tmux.clone().unwrap_or_default();
+        let Some(tmux_box) = tmux
+            .boxes
+            .iter()
+            .find(|b| b.enabled && b.name == box_name)
+        else {
+            log::error!(
+                "AttachTmuxSession: no enabled box named {:?} in config",
+                box_name
+            );
+            return;
+        };
+
+        let spawn = SpawnCommand {
+            label: Some(format!("tmux {}:{}", box_name, session)),
+            args: Some(tmux_box.attach_argv(session)),
+            // Deliberately NOT DefaultDomain: the default domain prefers WSL,
+            // which would wrap ssh.exe/wsl.exe in another `wsl.exe --exec`.
+            domain: SpawnTabDomain::DomainName("local".to_string()),
+            ..Default::default()
+        };
+        log::info!("Attaching tmux session {}:{}", box_name, session);
+        self.spawn_command(&spawn, SpawnWhere::NewTab);
+    }
+
     /// Apply a named color scheme: persist it to the config file (which the
     /// reload below picks up and applies live to every window). If the file
     /// can't be written, fall back to a window-local override so the change is
@@ -4511,6 +4558,13 @@ impl TermWindow {
                 log::info!("ApplyColorScheme: {}", name);
                 self.apply_color_scheme(name);
             }
+            TmuxSessionPicker => {
+                log::info!("TmuxSessionPicker: showing tmux session picker");
+                self.show_tmux_session_picker();
+            }
+            AttachTmuxSession { box_name, session } => {
+                self.attach_tmux_session(box_name, session);
+            }
             ToggleTabSidebar => {
                 self.show_tab_sidebar = !self.show_tab_sidebar;
                 #[cfg(windows)]
@@ -4705,6 +4759,18 @@ impl TermWindow {
             }
             "color_scheme_picker" => {
                 self.show_color_scheme_picker();
+            }
+            "attach_tmux_session" => {
+                if let (Some(box_name), Some(session)) =
+                    (action["box"].as_str(), action["session"].as_str())
+                {
+                    let box_name = box_name.to_string();
+                    let session = session.to_string();
+                    self.attach_tmux_session(&box_name, &session);
+                }
+            }
+            "refresh_tmux_sessions" => {
+                crate::tmux_discovery::request_refresh();
             }
             "toggle_hidden" => {
                 if let Some(pane_id) = action["paneId"].as_u64() {
@@ -4978,11 +5044,43 @@ impl TermWindow {
             config::TabSidebarPosition::Right => "right",
         };
 
+        // Multibox tmux sessions from the discovery cache (never blocks).
+        // Null when the feature is not configured, so JS hides the section.
+        let tmux_sessions = if self.config.tmux.as_ref().map_or(false, |t| t.enabled) {
+            use crate::tmux_discovery::BoxStatus;
+            Some(
+                crate::tmux_discovery::snapshot()
+                    .into_iter()
+                    .map(|snap| {
+                        let (status, error) = match &snap.status {
+                            BoxStatus::Pending => ("pending", None),
+                            BoxStatus::Ok => ("ok", None),
+                            BoxStatus::Unreachable(err) => ("unreachable", Some(err.clone())),
+                        };
+                        serde_json::json!({
+                            "box": snap.box_name,
+                            "status": status,
+                            "error": error,
+                            "stale": snap.stale,
+                            "sessions": snap.sessions.iter().map(|s| serde_json::json!({
+                                "name": s.session,
+                                "windows": s.windows,
+                                "attached": s.attached,
+                            })).collect::<Vec<_>>(),
+                        })
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        } else {
+            None
+        };
+
         serde_json::json!({
             "tabs": tabs,
             "sidebarPosition": position,
             "claudeStats": claude_stats,
             "activeColorScheme": self.config.color_scheme,
+            "tmuxSessions": tmux_sessions,
         })
         .to_string()
     }
