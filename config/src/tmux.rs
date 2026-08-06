@@ -19,6 +19,16 @@ pub struct TmuxConfig {
     /// The machines to discover tmux sessions on.
     #[dynamic(default)]
     pub boxes: Vec<TmuxBox>,
+
+    /// Base URL of the claude-agent-interconnect daemon, used to label
+    /// sessions with the Claude instance name (e.g. "witch") instead of the
+    /// generic agent type. Empty disables the lookup.
+    #[dynamic(default = "default_interconnect_url")]
+    pub interconnect_url: String,
+}
+
+fn default_interconnect_url() -> String {
+    "http://127.0.0.1:7799".to_string()
 }
 
 impl Default for TmuxConfig {
@@ -28,6 +38,7 @@ impl Default for TmuxConfig {
             poll_interval_seconds: default_poll_interval(),
             probe_timeout_seconds: default_probe_timeout(),
             boxes: vec![],
+            interconnect_url: default_interconnect_url(),
         }
     }
 }
@@ -44,8 +55,22 @@ pub struct TmuxBox {
     #[dynamic(default = "default_tmux_command")]
     pub tmux_command: String,
 
+    /// This box's name in the claude-agent-interconnect registry
+    /// (CLAUDE_MACHINE_NAME on that box), used to match instances to
+    /// sessions. Defaults to `name` when unset — set it when the registry
+    /// calls the box something else (e.g. box "wsl" registered as "home").
+    #[dynamic(default)]
+    pub interconnect_machine: Option<String>,
+
     #[dynamic(default = "default_true")]
     pub enabled: bool,
+}
+
+impl TmuxBox {
+    /// The name this box is registered under in the interconnect.
+    pub fn interconnect_machine_name(&self) -> &str {
+        self.interconnect_machine.as_deref().unwrap_or(&self.name)
+    }
 }
 
 #[derive(Debug, Clone, FromDynamic, ToDynamic)]
@@ -74,7 +99,41 @@ impl TmuxBox {
     pub const LIST_SESSIONS_FORMAT: &'static str =
         "#{session_windows} #{session_attached} #{session_created} #{session_name}";
 
+    /// Argv for discovering which agent (if any) each session is running.
+    /// `list-panes -a` walks every pane on the box in one round trip; the
+    /// command comes first and the session name LAST for the same
+    /// spaces-in-names reason as `LIST_SESSIONS_FORMAT` (parse with
+    /// `splitn(3, ' ')`).
+    pub const LIST_PANES_FORMAT: &'static str =
+        "#{pane_current_command} #{pane_pid} #{session_name}";
+
     pub fn list_sessions_argv(&self, connect_timeout_secs: u64) -> Vec<String> {
+        self.discovery_argv(
+            connect_timeout_secs,
+            "list-sessions",
+            Self::LIST_SESSIONS_FORMAT,
+            &[],
+        )
+    }
+
+    pub fn list_panes_argv(&self, connect_timeout_secs: u64) -> Vec<String> {
+        self.discovery_argv(
+            connect_timeout_secs,
+            "list-panes",
+            Self::LIST_PANES_FORMAT,
+            &["-a"],
+        )
+    }
+
+    /// Shared shape of the read-only discovery probes: `tmux <subcommand>
+    /// [flags] -F '<format>'` over whichever transport this box uses.
+    fn discovery_argv(
+        &self,
+        connect_timeout_secs: u64,
+        subcommand: &str,
+        format: &str,
+        flags: &[&str],
+    ) -> Vec<String> {
         match &self.connection {
             TmuxConnection::Ssh { target, extra_args } => {
                 let mut argv = vec![
@@ -87,31 +146,29 @@ impl TmuxBox {
                 argv.extend(extra_args.iter().cloned());
                 argv.push(target.clone());
                 argv.push("--".to_string());
+                let flags = if flags.is_empty() {
+                    String::new()
+                } else {
+                    format!("{} ", flags.join(" "))
+                };
                 argv.push(format!(
-                    "{} list-sessions -F '{}'",
-                    self.tmux_command,
-                    Self::LIST_SESSIONS_FORMAT
+                    "{} {} {}-F '{}'",
+                    self.tmux_command, subcommand, flags, format
                 ));
                 argv
             }
             TmuxConnection::Wsl { distribution } => {
                 let mut argv = wsl_prefix(distribution);
-                argv.extend([
-                    self.tmux_command.clone(),
-                    "list-sessions".to_string(),
-                    "-F".to_string(),
-                    Self::LIST_SESSIONS_FORMAT.to_string(),
-                ]);
+                argv.extend([self.tmux_command.clone(), subcommand.to_string()]);
+                argv.extend(flags.iter().map(|f| f.to_string()));
+                argv.extend(["-F".to_string(), format.to_string()]);
                 argv
             }
             TmuxConnection::Command { argv_prefix } => {
                 let mut argv = argv_prefix.clone();
-                argv.extend([
-                    self.tmux_command.clone(),
-                    "list-sessions".to_string(),
-                    "-F".to_string(),
-                    Self::LIST_SESSIONS_FORMAT.to_string(),
-                ]);
+                argv.extend([self.tmux_command.clone(), subcommand.to_string()]);
+                argv.extend(flags.iter().map(|f| f.to_string()));
+                argv.extend(["-F".to_string(), format.to_string()]);
                 argv
             }
         }
@@ -374,6 +431,44 @@ mod tests {
         ));
     }
 
+    /// The interconnect keys must parse through the STRICT pipeline
+    /// (`Deny` unknown fields), which is what makes a wrong spelling in the
+    /// docs a hard config error rather than a silently ignored key.
+    #[test]
+    fn parses_documented_interconnect_keys() {
+        let json = r#"{
+            "interconnect_url": "http://127.0.0.1:7799",
+            "boxes": [
+                { "name": "devbox", "connection": { "Ssh": { "target": "devbox" } } },
+                { "name": "wsl", "interconnect_machine": "home",
+                  "connection": { "Wsl": { "distribution": "Ubuntu" } } }
+            ]
+        }"#;
+        let value: serde_json::Value = serde_json::from_str(json).unwrap();
+        let cfg = TmuxConfig::from_dynamic(
+            &crate::json_to_dynamic(&value),
+            terminaler_dynamic::FromDynamicOptions {
+                unknown_fields: terminaler_dynamic::UnknownFieldAction::Deny,
+                deprecated_fields: terminaler_dynamic::UnknownFieldAction::Deny,
+            },
+        )
+        .unwrap();
+        assert_eq!(cfg.interconnect_url, "http://127.0.0.1:7799");
+        // Unset -> falls back to the box name; set -> the registry's name.
+        assert_eq!(cfg.boxes[0].interconnect_machine_name(), "devbox");
+        assert_eq!(cfg.boxes[1].interconnect_machine_name(), "home");
+    }
+
+    /// The lookup is opt-out: omitting the key must leave it enabled at the
+    /// default URL, not silently disabled.
+    #[test]
+    fn interconnect_url_defaults_when_absent() {
+        let value: serde_json::Value = serde_json::from_str(r#"{"boxes": []}"#).unwrap();
+        let cfg =
+            TmuxConfig::from_dynamic(&crate::json_to_dynamic(&value), Default::default()).unwrap();
+        assert_eq!(cfg.interconnect_url, "http://127.0.0.1:7799");
+    }
+
     fn ssh_box() -> TmuxBox {
         TmuxBox {
             name: "devbox".to_string(),
@@ -382,6 +477,7 @@ mod tests {
                 extra_args: vec![],
             },
             tmux_command: default_tmux_command(),
+            interconnect_machine: None,
             enabled: true,
         }
     }
@@ -400,6 +496,47 @@ mod tests {
                 "devbox",
                 "--",
                 "tmux list-sessions -F '#{session_windows} #{session_attached} #{session_created} #{session_name}'",
+            ]
+        );
+    }
+
+    #[test]
+    fn interconnect_machine_defaults_to_box_name_but_can_differ() {
+        let mut b = ssh_box();
+        assert_eq!(b.interconnect_machine_name(), "devbox");
+        // e.g. the box called "wsl" locally registers itself as "home".
+        b.interconnect_machine = Some("home".to_string());
+        assert_eq!(b.interconnect_machine_name(), "home");
+    }
+
+    #[test]
+    fn ssh_list_panes_argv() {
+        let argv = ssh_box().list_panes_argv(5);
+        assert_eq!(
+            argv.last().unwrap(),
+            "tmux list-panes -a -F '#{pane_current_command} #{pane_pid} #{session_name}'"
+        );
+    }
+
+    #[test]
+    fn wsl_list_panes_argv_passes_flags_verbatim() {
+        let b = TmuxBox {
+            name: "wsl".to_string(),
+            connection: TmuxConnection::Wsl { distribution: None },
+            tmux_command: default_tmux_command(),
+            interconnect_machine: None,
+            enabled: true,
+        };
+        assert_eq!(
+            b.list_panes_argv(5),
+            vec![
+                "wsl.exe",
+                "-e",
+                "tmux",
+                "list-panes",
+                "-a",
+                "-F",
+                "#{pane_current_command} #{pane_pid} #{session_name}",
             ]
         );
     }
@@ -425,6 +562,7 @@ mod tests {
             name: "wsl".to_string(),
             connection: TmuxConnection::Wsl { distribution: None },
             tmux_command: default_tmux_command(),
+            interconnect_machine: None,
             enabled: true,
         };
         // No remote shell: tmux `;` command chaining, current window only.
@@ -449,6 +587,7 @@ mod tests {
                 distribution: Some("Ubuntu".to_string()),
             },
             tmux_command: default_tmux_command(),
+            interconnect_machine: None,
             enabled: true,
         };
         assert_eq!(
@@ -473,6 +612,7 @@ mod tests {
                 distribution: Some("Ubuntu".to_string()),
             },
             tmux_command: default_tmux_command(),
+            interconnect_machine: None,
             enabled: true,
         };
         assert_eq!(
@@ -489,6 +629,7 @@ mod tests {
                 argv_prefix: vec!["tailscale".to_string(), "ssh".to_string(), "host".to_string()],
             },
             tmux_command: "/usr/bin/tmux".to_string(),
+            interconnect_machine: None,
             enabled: true,
         };
         let argv = b.attach_argv("main");

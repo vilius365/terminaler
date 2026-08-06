@@ -85,7 +85,7 @@ Two-process model: GUI client renders and handles input, daemon holds PTY sessio
 | `mux/src/domain.rs` | Domain trait (shell spawning) — Local + WSL |
 | `mux/src/tmux.rs` | TmuxDomain — tmux -CC control mode; windows become tabs (restored from upstream) |
 | `config/src/tmux.rs` | TmuxConfig/TmuxBox — multibox tmux discovery config + attach argv builders |
-| `terminaler-gui/src/tmux_discovery.rs` | Background tmux session poller (ssh/wsl probes, cached snapshots) |
+| `terminaler-gui/src/tmux_discovery.rs` | Background tmux session poller (ssh/wsl probes, cached snapshots, agent/instance labelling) |
 | `bintree/src/lib.rs` | Binary tree (Tree<L,N> enum, cursors) |
 | `terminaler-web/src/lib.rs` | Web server public API |
 | `terminaler-web/src/ws_session.rs` | WebSocket session management |
@@ -143,6 +143,24 @@ Config file: `%APPDATA%\Terminaler\terminaler.json` (JSONC - comments allowed)
     "webAccess": {
         "enabled": false,
         "bindAddress": "127.0.0.1:9876"
+    },
+
+    // Multibox tmux discovery (sidebar card + Ctrl+Shift+S picker)
+    "tmux": {
+        // Sessions are labelled with the claude-agent-interconnect instance
+        // name (e.g. "witch") where one is registered, falling back to the
+        // agent type from the pane command (e.g. "claude"). "" disables the
+        // instance lookup and leaves only the fallback.
+        // NOTE: the "tmux" section uses snake_case keys (unlike most of the
+        // config); unknown keys are rejected outright, so camelCase fails.
+        "interconnect_url": "http://127.0.0.1:7799",
+        "boxes": [
+            { "name": "devbox", "connection": { "Ssh": { "target": "devbox" } } },
+            // interconnect_machine: this box's CLAUDE_MACHINE_NAME, when the
+            // registry knows it by a different name than `name`.
+            { "name": "wsl", "interconnect_machine": "home",
+              "connection": { "Wsl": { "distribution": "Ubuntu" } } }
+        ]
     }
 }
 ```

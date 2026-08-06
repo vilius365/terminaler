@@ -5125,6 +5125,8 @@ impl TermWindow {
                                 "name": s.session,
                                 "windows": s.windows,
                                 "attached": s.attached,
+                                "agent": s.agent,
+                                "agentIsInstance": s.agent_is_instance,
                             })).collect::<Vec<_>>(),
                         })
                     })

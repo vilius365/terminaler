@@ -454,9 +454,20 @@ impl LauncherState {
                 }
                 for session in &snap.sessions {
                     let mut label = format!(
-                        "{}:{}  ({} window{}{})",
+                        "{}:{}  ({}{} window{}{})",
                         snap.box_name,
                         session.session,
+                        session
+                            .agent
+                            .as_ref()
+                            .map(|a| {
+                                if session.agent_is_instance {
+                                    format!("⇄ {}, ", a)
+                                } else {
+                                    format!("{}, ", a)
+                                }
+                            })
+                            .unwrap_or_default(),
                         session.windows,
                         if session.windows == 1 { "" } else { "s" },
                         if session.attached { ", attached" } else { "" },

@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-08-06
+
+### Added
+- **Claude instance name on tmux session rows**: each session in the sidebar card (and the `ctrl+shift+s` picker) is labelled with the agent running in it. Where the session is registered with claude-agent-interconnect the badge shows the **instance name** with a `⇄` prefix (`⇄ holly`) — the same name that session's statusline shows — so identical-looking sessions across boxes are distinguishable at a glance. The registry is read once per poll cycle (not per box) from `GET <interconnect_url>/instances` and matched on `machine` + `tmux_session`, both of which it already carries; no pane-id plumbing needed. Where no instance is registered, a second per-box probe (`tmux list-panes -a -F '#{pane_current_command} #{pane_pid} #{session_name}'`) supplies the generic agent **type** as a muted fallback badge (`claude`, `codex`, `aider`, `gemini`, `opencode`, `cursor-agent`; `node` is deliberately excluded — it would tag every `npm run dev` pane). Both lookups are strictly best-effort: a daemon that is down or a failing pane scan steps the badge down (instance → type → nothing) and can never make a reachable box look unreachable or block the session list. New config: `tmux.interconnect_url` (default `http://127.0.0.1:7799`, `""` disables) and per-box `interconnect_machine` for when the registry knows a box under a different name than its `name` (e.g. box `wsl` registered as `home`). Live-validated on devbox: 4 instances fetched, 3 sessions matched.
+
+### Fixed
+- **`wsl.exe` probe failures reported as the useless "probe failed with no stderr"**: `wsl.exe` writes its diagnostics ("There is no distribution with the supplied name") as **UTF-16LE**, which the UTF-8-only decode turned into NUL-separated mush — the first line came out empty and the real message was discarded. Probe output is now decoded as UTF-16LE when a BOM or a high NUL density says so (genuine UTF-8 from the Linux side passes through untouched), falls back to **stdout** when stderr is empty (`wsl.exe` uses both), and reports the exit code when both streams are silent. The "no server running" check now looks at both streams too, so a box with no tmux server running is the normal empty state rather than an error.
+
+### Changed
+- **Window count is no longer the cryptic `1w`**: session rows show `▣ 3` with a tooltip spelling it out (`3 windows, attached`, correctly singular at `1 window`). The session name now absorbs the row's slack and truncates with an ellipsis, so the agent badge and count stay visible however narrow the sidebar is.
+- Documented the `tmux` config section in `CLAUDE.md`, including two traps that cost real debugging time: the section uses **snake_case** keys (unlike most of the config) and **rejects unknown keys outright**, so a camelCase spelling is a hard error rather than an ignored line; and JSONC permits comments but **not trailing commas**, so a config whose last entry is followed only by comment lines is invalid and silently falls back to the last-good config — indistinguishable from a broken feature.
+
 ## 2026-08-05
 
 ### Fixed

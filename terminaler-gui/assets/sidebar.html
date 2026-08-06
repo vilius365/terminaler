@@ -669,6 +669,39 @@
     background: var(--border-subtle);
   }
 
+  /* The name absorbs the slack (and truncates) so the agent badge and the
+     window count stay visible however narrow the sidebar gets. */
+  .tmux-session-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .tmux-session-agent {
+    flex: none;
+    padding: 0 4px;
+    font-size: 9px;
+    line-height: 14px;
+    color: var(--accent-orange);
+    background: var(--border-subtle);
+    border-radius: 3px;
+    max-width: 72px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* A named interconnect instance is the more specific fact, so it gets the
+     stronger treatment; the generic agent type stays muted. */
+  .tmux-session-agent-instance {
+    max-width: 92px;
+    color: var(--bg-hover);
+    background: var(--accent-orange);
+    font-weight: 600;
+  }
+
   .tmux-session-meta {
     font-size: 9px;
     color: var(--text-tertiary);
@@ -1171,8 +1204,19 @@ function renderTmuxCard(boxes) {
             var s = sessions[j];
             var rowCls = 'tmux-session-row' + (box.stale || box.status === 'unreachable' ? ' tmux-stale' : '');
             html += '<div class="' + rowCls + '" data-tmux-box="' + escHtml(box.box) + '" data-tmux-session="' + escHtml(s.name) + '" title="Attach in a split pane">';
-            html += '<span>' + escHtml(s.name) + '</span>';
-            html += '<span class="tmux-session-meta">' + s.windows + 'w' + (s.attached ? ' ●' : '') + '</span>';
+            html += '<span class="tmux-session-name">' + escHtml(s.name) + '</span>';
+            if (s.agent) {
+                // ⇄ marks a claude-agent-interconnect instance name (matching
+                // the statusline); a bare label is the generic agent type.
+                var agentCls = 'tmux-session-agent' + (s.agentIsInstance ? ' tmux-session-agent-instance' : '');
+                var agentTip = s.agentIsInstance
+                    ? 'Claude instance "' + s.agent + '" (interconnect)'
+                    : 'Running ' + s.agent;
+                html += '<span class="' + agentCls + '" title="' + escHtml(agentTip) + '">'
+                     + (s.agentIsInstance ? '⇄ ' : '') + escHtml(s.agent) + '</span>';
+            }
+            var windowLabel = s.windows + (s.windows === 1 ? ' window' : ' windows');
+            html += '<span class="tmux-session-meta" title="' + windowLabel + (s.attached ? ', attached' : '') + '">▣ ' + s.windows + (s.attached ? ' ●' : '') + '</span>';
             html += '<span class="tmux-attach-tabs" data-tmux-pane="1" title="Attach in the active pane (replaces its content; pane must be at a prompt)">⧉</span>';
             html += '</div>';
         }
