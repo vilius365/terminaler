@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-08-07
+
+### Fixed
+- **Tmux instance badge was unreadable white-on-yellow**: `.tmux-session-agent-instance` set `color: var(--bg-hover)`, a custom property that is **never defined anywhere** in `sidebar.html`. Because `color` is an inherited property, an invalid `var()` resolves to the inherited value rather than the initial one — so the badge took the row's near-white `--text-primary` (`#e0e0e0`) on the orange `--accent-orange` (`#db8b0b`) background: a contrast ratio of **2.06:1**, well below the 4.5:1 accessibility floor. Now uses `--bg-base`, giving **6.88:1**. Two sibling symptoms of the same missing variable remain and are cosmetic only: `.tmux-session-row`'s `background: var(--bg-hover)` silently resolves to transparent (`background` is *not* inherited, so it falls to the initial value), and `--bg-tertiary` is likewise referenced but never defined.
+
+### Added
+- **`ci/build-windows-staging.sh` — cross-build for Windows without quitting Terminaler.** `~/pCloudDrive/terminaler-windows-build/` **is** the folder the Windows exes run from, not a staging area, so building into it *was* deploying — and since Windows locks running exes, every build required closing the app first. Builds now land in the sibling `terminaler-windows-staging/`, which syncs harmlessly while Terminaler runs; `--promote` then copies staging → live behind a timestamped backup of the current exes, and is the only step needing the app (and `terminaler-mux-server.exe`) closed. Also `--status` (compare staged vs live mtimes) and `--dry-run`. Ships the full 6-file set — 3 exes plus `WebView2Loader.dll`, `conpty.dll`, `OpenConsole.exe` — and writes a `BUILD-INFO.txt` recording commit, branch, dirty-state and sha256, so a build's provenance is never in doubt again.
+
+### Changed
+- **`CLAUDE.md` config documentation corrected — it was substantially wrong.** It stated "Config keys: camelCase in JSON" and documented `profiles`, `layouts`, `workspaces` and `keybindings` sections; **none of those keys exist in the parser** (`grep -rn "profiles" config/src/*.rs` returns nothing). The JSON keys are the literal **snake_case** Rust field names — the `Config` struct derives `FromDynamic` with no rename attributes — e.g. `default_prog`, `default_domain`, `font_size`, `web_access`/`bind_address`, and `keys` (not `keybindings`). `config/src/defaults.rs` is the accurate reference. This also resolves a self-contradiction: the 2026-08-06 entry above (and the `tmux` section note) claimed the `tmux` section used snake_case "unlike most of the config" — in fact the *whole* config always has.
+
+### Notes
+- **`default_prog` does not apply to WSL panes, and this fork defaults to WSL.** `terminaler-gui/src/main.rs:585-595` prefers the first WSL domain as the default (falling back to `local` only when no distro exists), and `mux/src/domain.rs:438-441` reads `default_prog` from *that domain* — which `WslDomain::default_domains()` leaves unset — via `.map(…).unwrap_or(…)`, a chain that yields `Some(None)` and therefore silently discards the top-level value. This is **upstream WezTerm behavior** (it arrived verbatim in the `f425086` snapshot), i.e. deliberate namespace separation, not a bug: top-level `default_prog` is a local-domain concept and WSL domains carry their own. To point new panes at a remote host, pair the two settings — `"default_domain": "local"` alongside `"default_prog": ["ssh", "<host>"]` — so ssh runs as a Windows process with the Windows ssh config. Making `default_prog` fall through to WSL panes would *not* be equivalent: `fixup_command` wraps a WSL domain's command as `wsl.exe --distribution <d> --exec <args>`, so it would run ssh from *inside* WSL with WSL's ssh config.
+
 ## 2026-08-06
 
 ### Added

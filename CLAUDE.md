@@ -18,6 +18,25 @@ cargo test
 cargo build --target x86_64-pc-windows-gnu
 ```
 
+### Shipping a Windows build (pCloud)
+
+`~/pCloudDrive/terminaler-windows-build/` **is** the folder the Windows exes run
+from — it is not a staging area. Copying into it *is* deploying, and Windows
+locks running exes, so a direct build requires quitting Terminaler first.
+
+Use the staging script instead — it builds into a sibling folder, so you can keep
+working while it runs:
+
+```bash
+ci/build-windows-staging.sh              # build -> ~/pCloudDrive/terminaler-windows-staging/
+ci/build-windows-staging.sh --status     # compare staged vs live build times
+ci/build-windows-staging.sh --promote    # staging -> live (backs up current exes first)
+```
+
+Only `--promote` needs Terminaler (and `terminaler-mux-server.exe`) fully closed.
+Support files that must travel with the exes: `WebView2Loader.dll`, `conpty.dll`,
+`OpenConsole.exe` — the script handles all three.
+
 **Config location**: `%APPDATA%\Terminaler\terminaler.json` (JSONC with comments)
 
 ## Architecture Overview
@@ -102,7 +121,9 @@ Two-process model: GUI client renders and handles input, daemon holds PTY sessio
 ### Naming
 - Crate names: `terminaler-*` (kebab-case)
 - Binary names: `terminaler-gui` (GUI), `terminaler-mux-server` (daemon), `terminaler` (CLI)
-- Config keys: camelCase in JSON
+- Config keys: **snake_case** in JSON — the keys are the literal Rust field names
+  (no rename attributes), e.g. `default_prog`, `default_domain`, `font_size`,
+  `web_access`/`bind_address`. `config/src/defaults.rs` is the accurate reference.
 - Rust identifiers: standard conventions (snake_case for functions/variables, PascalCase for types)
 
 ### Error Handling
@@ -115,34 +136,32 @@ Two-process model: GUI client renders and handles input, daemon holds PTY sessio
 Config file: `%APPDATA%\Terminaler\terminaler.json` (JSONC - comments allowed)
 
 ```jsonc
+// Keys below are VERIFIED against config/src/config.rs. Note there is no
+// "profiles", "layouts", "workspaces", "keybindings" or "theme" key — earlier
+// revisions of this file documented those, but the parser has never had them.
 {
-    // Shell profiles
-    "profiles": [...],
+    // Default program for new panes. Element 0 is the executable, the rest are
+    // arguments. Omit for the platform default shell (PowerShell on Windows).
+    "default_prog": ["ssh", "devbox"],
 
-    // Snap layout presets (8 built-in + custom)
-    "layouts": {
-        "builtIn": [...],
-        "custom": [...]
-    },
-
-    // Workspace templates
-    "workspaces": [...],
-
-    // Keybindings (action ID + key mapping)
-    "keybindings": [
-        { "keys": "ctrl+shift+l", "id": "Terminaler.SnapLayoutPicker" },
-        { "keys": "ctrl+shift+o", "id": "Terminaler.WorkspacePicker" }
-    ],
+    // Default domain (shell). "local", or "WSL:<distro>" where <distro> matches
+    // `wsl.exe -l -v` EXACTLY (literal match, not a prefix).
+    "default_domain": "local",
 
     // Appearance
-    "theme": "dark",
-    "font": { "family": "Cascadia Code", "size": 12 },
+    "color_scheme": "Gruvbox Dark (Gogh)",
+    "font_size": 12.0,
     "colors": {...},
 
+    // Keybindings — note the key is "keys", and each entry is key + action
+    "keys": [
+        { "key": "ctrl+shift+l", "action": { "SnapLayoutPicker": null } }
+    ],
+
     // Remote web access
-    "webAccess": {
+    "web_access": {
         "enabled": false,
-        "bindAddress": "127.0.0.1:9876"
+        "bind_address": "127.0.0.1:9876"
     },
 
     // Multibox tmux discovery (sidebar card + Ctrl+Shift+S picker)
@@ -151,8 +170,8 @@ Config file: `%APPDATA%\Terminaler\terminaler.json` (JSONC - comments allowed)
         // name (e.g. "witch") where one is registered, falling back to the
         // agent type from the pane command (e.g. "claude"). "" disables the
         // instance lookup and leaves only the fallback.
-        // NOTE: the "tmux" section uses snake_case keys (unlike most of the
-        // config); unknown keys are rejected outright, so camelCase fails.
+        // NOTE: snake_case keys, like the rest of the config; unknown keys are
+        // rejected outright, so camelCase fails.
         // Also: JSONC allows comments but NOT trailing commas — on any parse
         // error the last-good config is kept near-silently, so a bad edit
         // looks exactly like a broken feature. Suspect syntax first.
