@@ -695,9 +695,12 @@
 
   /* A named interconnect instance is the more specific fact, so it gets the
      stronger treatment; the generic agent type stays muted. */
+  /* Dark text on the orange badge: --bg-hover was never defined, so this
+     inherited the row's near-white --text-primary and read as unreadable
+     white-on-yellow. */
   .tmux-session-agent-instance {
     max-width: 92px;
-    color: var(--bg-hover);
+    color: var(--bg-base);
     background: var(--accent-orange);
     font-weight: 600;
   }
