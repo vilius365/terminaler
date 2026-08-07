@@ -19,6 +19,7 @@ use crate::keys::{Key, LeaderKey, Mouse};
 use crate::units::Dimension;
 // STRIPPED: use crate::unix::UnixDomain;
 use crate::claude_agent::ClaudeAgentConfig;
+use crate::tmux::TmuxConfig;
 use crate::web::WebAccessConfig;
 use crate::wsl::WslDomain;
 use crate::{
@@ -907,6 +908,11 @@ pub struct Config {
     /// Claude agent orchestration (NewClaudeAgent / AgentDashboard actions)
     #[dynamic(default)]
     pub claude_agent: Option<ClaudeAgentConfig>,
+
+    /// Multibox tmux session discovery and attach
+    /// (TmuxSessionPicker action, sidebar session list)
+    #[dynamic(default)]
+    pub tmux: Option<TmuxConfig>,
 }
 
 fn default_freetype_load_target() -> FreeTypeLoadTarget {

@@ -72,6 +72,16 @@ pub fn default_config_content() -> String {
     //     "claude_command": ["cmd", "/c", "claude"],
     //     "template": "claude-code"
     // }
+
+    // Multibox tmux sessions (ctrl+shift+s = session picker; sidebar section).
+    // Attaching uses tmux control mode: tmux windows become real tabs.
+    // "tmux": {
+    //     "poll_interval_seconds": 30,
+    //     "boxes": [
+    //         { "name": "wsl",    "connection": { "Wsl": { "distribution": "Ubuntu" } } },
+    //         { "name": "devbox", "connection": { "Ssh": { "target": "devbox" } } }
+    //     ]
+    // }
 }
 "#
     .to_string()

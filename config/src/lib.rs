@@ -41,6 +41,7 @@ mod units;
 pub mod unix; // minimal UnixDomain stub for Phase 0
 mod version;
 pub mod themes;
+pub mod tmux;
 pub mod web;
 pub mod window;
 mod wsl;
@@ -60,6 +61,7 @@ pub use keys::*;
 // STRIPPED: pub use serial::*;
 // STRIPPED: pub use ssh::*;
 pub use terminal::*;
+pub use tmux::*;
 // STRIPPED: pub use tls::*;
 pub use units::*;
 pub use unix::*; // UnixDomain, UnixTarget stubs

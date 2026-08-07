@@ -2095,6 +2095,14 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             menubar: &["View"],
             icon: Some("md_palette"),
         },
+        TmuxSessionPicker => CommandDef {
+            brief: "Tmux Session Picker".into(),
+            doc: "List tmux sessions across configured boxes and attach in control mode".into(),
+            keys: vec![(Modifiers::CTRL | Modifiers::SHIFT, "s".into())],
+            args: &[ArgType::ActiveWindow],
+            menubar: &["Shell"],
+            icon: None,
+        },
         _ => return None,
     })
 }
@@ -2227,6 +2235,7 @@ fn compute_default_actions() -> Vec<KeyAssignment> {
         SnapLayoutPicker,
         WorkspacePicker,
         ColorSchemePicker,
+        TmuxSessionPicker,
         ToggleTabSidebar,
         // ----------------- Terminaler Claude Agents
         NewClaudeAgent,

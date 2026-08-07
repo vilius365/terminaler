@@ -83,6 +83,9 @@ Two-process model: GUI client renders and handles input, daemon holds PTY sessio
 | `mux/src/tab.rs` | Tab with bintree::Tree pane layout |
 | `mux/src/session_state.rs` | Session state serialization (save/restore) |
 | `mux/src/domain.rs` | Domain trait (shell spawning) — Local + WSL |
+| `mux/src/tmux.rs` | TmuxDomain — tmux -CC control mode; windows become tabs (restored from upstream) |
+| `config/src/tmux.rs` | TmuxConfig/TmuxBox — multibox tmux discovery config + attach argv builders |
+| `terminaler-gui/src/tmux_discovery.rs` | Background tmux session poller (ssh/wsl probes, cached snapshots, agent/instance labelling) |
 | `bintree/src/lib.rs` | Binary tree (Tree<L,N> enum, cursors) |
 | `terminaler-web/src/lib.rs` | Web server public API |
 | `terminaler-web/src/ws_session.rs` | WebSocket session management |
@@ -140,8 +143,41 @@ Config file: `%APPDATA%\Terminaler\terminaler.json` (JSONC - comments allowed)
     "webAccess": {
         "enabled": false,
         "bindAddress": "127.0.0.1:9876"
+    },
+
+    // Multibox tmux discovery (sidebar card + Ctrl+Shift+S picker)
+    "tmux": {
+        // Sessions are labelled with the claude-agent-interconnect instance
+        // name (e.g. "witch") where one is registered, falling back to the
+        // agent type from the pane command (e.g. "claude"). "" disables the
+        // instance lookup and leaves only the fallback.
+        // NOTE: the "tmux" section uses snake_case keys (unlike most of the
+        // config); unknown keys are rejected outright, so camelCase fails.
+        // Also: JSONC allows comments but NOT trailing commas — on any parse
+        // error the last-good config is kept near-silently, so a bad edit
+        // looks exactly like a broken feature. Suspect syntax first.
+        // interconnect_url must be reachable FROM the machine running the GUI;
+        // the 127.0.0.1 default is wrong whenever the daemon is on another box.
+        "interconnect_url": "http://127.0.0.1:7799",
+        "boxes": [
+            { "name": "devbox", "connection": { "Ssh": { "target": "devbox" } } },
+            // interconnect_machine: this box's CLAUDE_MACHINE_NAME, when the
+            // registry knows it by a different name than `name`.
+            // "distribution" must match `wsl.exe -l -v` EXACTLY (literal, not a
+            // prefix match); omit the key to track the default distro. It feeds
+            // the probe AND both attach paths, so a wrong value breaks all three.
+            { "name": "wsl", "interconnect_machine": "home",
+              "connection": { "Wsl": { "distribution": "Ubuntu" } } }
+        ]
     }
 }
+
+The `Ssh` variant hardcodes `-o BatchMode=yes`, so probes never prompt. A box
+behind an interactive auth gate (e.g. Tailscale SSH in `check` mode) therefore
+fails with only a timeout, and `sshd` logs a bare `Connection reset [preauth]`
+rather than an auth error — a plain interactive `ssh host` still succeeds and
+hides it. Reproduce with the prober's own argv, or use the `Command` variant
+(`{"argv_prefix": ["tailscale", "ssh", "user@host"]}`) to bypass BatchMode.
 ```
 
 ## WezTerm Upstream Reference

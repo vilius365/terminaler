@@ -1254,6 +1254,12 @@ impl crate::TermWindow {
             return;
         }
 
+        // Start the tmux discovery poller once the sidebar is live, so the
+        // session list populates without the user opening the picker first.
+        if self.config.tmux.as_ref().map_or(false, |t| t.enabled) {
+            crate::tmux_discovery::ensure_running();
+        }
+
         // 1. Drain queued IPC messages (safe here — outside Win32 message handlers)
         let messages: Vec<String> = if let Some(ref wv) = self.webview_sidebar {
             let mut q = wv.ipc_queue.lock().unwrap();
