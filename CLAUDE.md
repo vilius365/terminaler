@@ -2,6 +2,15 @@
 
 Windows-native terminal multiplexer with predefined snap layouts, workspace templates, and session persistence. Forked from [WezTerm](https://github.com/wez/wezterm) (MIT license).
 
+## Git Workflow (overrides the global feature-branch rule)
+
+Personal project — **commit straight to `main`**. No feature branches, no PRs.
+This is a deliberate project-level override of the user-global "all code
+changes must be a PR on a new branch" rule (2026-08-17).
+
+Unchanged from the global rules: push and PR remain **user-driven** — do not
+`git push` autonomously at end of turn.
+
 ## Quick Start
 
 ```bash
