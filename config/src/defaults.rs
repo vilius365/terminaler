@@ -13,6 +13,17 @@ pub fn default_config_content() -> String {
     // Set to "local" for PowerShell/CMD, or "WSL:<distro>" for a specific WSL distro.
     // "default_domain": "local",
 
+    // What happens to a pane when its program exits.
+    // "Close" (default) always closes the pane; "CloseOnCleanExit" closes it
+    // only if the program succeeded, keeping it open on a non-zero exit so you
+    // can read the error; "Hold" keeps it open until you close it explicitly.
+    // Worth setting to "Hold" if default_prog runs something that can fail for
+    // external reasons (e.g. ssh to a host that may be unreachable): with
+    // "Close", the startup pane closes on failure, and when it is the last pane
+    // that takes the window and the app with it — which looks like a crash at
+    // startup rather than a failed command.
+    // "exit_behavior": "Hold",
+
     // Font settings
     // "font_size": 12.0,
 
