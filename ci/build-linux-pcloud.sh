@@ -135,9 +135,13 @@ Debian / Ubuntu:
       libwayland-client0 libegl1 libfontconfig1 libfreetype6 \\
       libharfbuzz0b libssl3
 
-Then:
-  chmod +x terminaler-gui terminaler-mux-server terminaler
-  ./terminaler-gui
+Then copy them to local disk and run from there. The pCloud mount blocks the
+execute bit, so chmod +x in place appears to work but running still fails with
+"Permission denied" — the copy is not optional:
+  mkdir -p ~/bin
+  cp terminaler terminaler-gui terminaler-mux-server ~/bin/
+  chmod +x ~/bin/terminaler ~/bin/terminaler-gui ~/bin/terminaler-mux-server
+  ~/bin/terminaler-gui
 
 Config lives at ~/.config/terminaler/terminaler.json (generated on first run).
 The mux socket is \$XDG_RUNTIME_DIR/terminaler/sock.
