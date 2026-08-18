@@ -1,6 +1,12 @@
 # Terminaler
 
-Windows-native terminal multiplexer with predefined snap layouts, workspace templates, and session persistence. Forked from [WezTerm](https://github.com/wez/wezterm) (MIT license).
+Terminal multiplexer with predefined snap layouts, workspace templates, and
+session persistence, running natively on **Windows and Linux** (X11 + Wayland).
+Forked from [WezTerm](https://github.com/wez/wezterm) (MIT license).
+
+The fork was originally stripped to Windows-only; the Linux backends were
+restored from the pre-strip tree (2026-08-18). macOS remains unsupported and
+falls back to a stub windowing backend.
 
 ## Git Workflow (overrides the global feature-branch rule)
 
@@ -27,6 +33,39 @@ cargo test
 cargo build --target x86_64-pc-windows-gnu
 ```
 
+### Building on Linux
+
+Wayland and X11 are both compiled in by default; the backend is picked at
+runtime from the session. See README.md for the full system dependency list
+(`libxcb-devel`, `xcb-util-*-devel`, `libxkbcommon-x11-devel`, `wayland-devel`,
+`mesa-libEGL-devel`, ...). On RHEL derivatives those `xcb-util-*` packages need
+`--enablerepo=crb`.
+
+```bash
+cargo build --release                    # X11 + Wayland
+cargo build --release --no-default-features --features vendored-fonts   # X11 only
+```
+
+**Config location on Linux**: `~/.config/terminaler/terminaler.json` (XDG), and
+the mux socket lives in `$XDG_RUNTIME_DIR/terminaler/sock`. The first-run
+template is generated per-platform, so a Linux config documents `$SHELL` and
+compositor transparency rather than WSL and Windows 11 backdrops.
+
+A headless box (no `$DISPLAY`) can still verify the mux end-to-end, which is
+the platform-neutral core:
+
+```bash
+./target/debug/terminaler-mux-server &
+export TERMINALER_UNIX_SOCKET="${XDG_RUNTIME_DIR}/terminaler/sock"
+./target/debug/terminaler cli list
+./target/debug/terminaler cli spawn --pane-id 0 -- /bin/bash -c 'echo hi; sleep 30'
+./target/debug/terminaler cli get-text --pane-id 1
+```
+
+The GUI itself needs a display; without one it exits with
+`XOpenDisplay failed to open a display`, which confirms the real X11 backend is
+live (the stub would say "not supported on this platform").
+
 ### Shipping a Windows build (pCloud)
 
 `~/pCloudDrive/terminaler-windows-build/` **is** the folder the Windows exes run
@@ -46,7 +85,8 @@ Only `--promote` needs Terminaler (and `terminaler-mux-server.exe`) fully closed
 Support files that must travel with the exes: `WebView2Loader.dll`, `conpty.dll`,
 `OpenConsole.exe` — the script handles all three.
 
-**Config location**: `%APPDATA%\Terminaler\terminaler.json` (JSONC with comments)
+**Config location**: `%APPDATA%\Terminaler\terminaler.json` on Windows,
+`~/.config/terminaler/terminaler.json` on Linux (JSONC with comments)
 
 ## Architecture Overview
 
@@ -142,7 +182,10 @@ Two-process model: GUI client renders and handles input, daemon holds PTY sessio
 
 ## JSON Configuration Format
 
-Config file: `%APPDATA%\Terminaler\terminaler.json` (JSONC - comments allowed)
+Config file: `%APPDATA%\Terminaler\terminaler.json` (Windows) /
+`~/.config/terminaler/terminaler.json` (Linux) — JSONC, comments allowed.
+The `Wsl` tmux connection variant is Windows-only; on Linux use `Ssh`, or
+`Command` with an empty `argv_prefix` for a local tmux server.
 
 ```jsonc
 // Keys below are VERIFIED against config/src/config.rs. Note there is no

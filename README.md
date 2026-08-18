@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://img.shields.io/badge/platform-Windows-0078d4?style=flat-square&logo=windows" alt="Windows" />
+  <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux-0078d4?style=flat-square" alt="Windows | Linux" />
   <img src="https://img.shields.io/badge/language-Rust-dea584?style=flat-square&logo=rust" alt="Rust" />
   <img src="https://img.shields.io/badge/renderer-wgpu-4fc08d?style=flat-square" alt="wgpu" />
   <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="MIT License" />
@@ -7,15 +7,15 @@
 
 # Terminaler
 
-A **Windows-native GPU-accelerated terminal multiplexer** with snap layouts, workspace templates, session persistence, and remote web access. Built in Rust, powered by wgpu.
+A **GPU-accelerated terminal multiplexer** with snap layouts, workspace templates, session persistence, and remote web access. Built in Rust, powered by wgpu. Runs natively on **Windows** and **Linux** (X11 and Wayland).
 
-Forked from [WezTerm](https://github.com/wez/wezterm) — stripped to Windows-only, rebuilt with opinionated defaults for developers who live in the terminal.
+Forked from [WezTerm](https://github.com/wez/wezterm), rebuilt with opinionated defaults for developers who live in the terminal.
 
 ## Why Terminaler?
 
 Most terminal multiplexers are Unix-first, Windows-second. Terminaler flips that:
 
-- **Windows-native** — ConPTY, native window management, `%APPDATA%` config. No WSL required to run (but WSL shells work great inside it).
+- **Native on both platforms** — ConPTY and `%APPDATA%` on Windows; native PTYs, XDG config paths and X11/Wayland windowing on Linux. No WSL required to run on Windows (but WSL shells work great inside it).
 - **Snap layouts** — 8 built-in presets. Pick a layout, get your panes instantly. No manual splitting.
 - **Workspace templates** — Predefined environments that open the right shells in the right directories with the right layout. Jump into "Claude Code" or "Full-stack dev" with one shortcut.
 - **Session persistence** — Close the window, reopen it, get your tabs and panes back. Sessions serialize to JSON automatically.
@@ -37,6 +37,34 @@ cargo build --release
 
 # Run
 cargo run --release --bin terminaler-gui
+```
+
+#### Linux system dependencies
+
+The GUI links against X11, xkbcommon and Wayland. Both backends are built by
+default; the one actually used is chosen at runtime from your session.
+
+```bash
+# Fedora / RHEL derivatives
+sudo dnf install libxcb-devel xcb-util-devel xcb-util-image-devel \
+    xcb-util-keysyms-devel xcb-util-wm-devel libxkbcommon-devel \
+    libxkbcommon-x11-devel libX11-devel wayland-devel mesa-libEGL-devel \
+    fontconfig-devel freetype-devel openssl-devel
+
+# Debian / Ubuntu
+sudo apt install libxcb1-dev libxcb-util-dev libxcb-image0-dev \
+    libxcb-keysyms1-dev libxcb-icccm4-dev libxkbcommon-dev \
+    libxkbcommon-x11-dev libx11-dev libwayland-dev libegl1-mesa-dev \
+    libfontconfig-1-dev libfreetype-dev libssl-dev
+```
+
+On RHEL derivatives (Rocky/Alma), the `xcb-util-*` packages live in the CRB
+repo — add `--enablerepo=crb` if dnf reports "No match for argument".
+
+To build without Wayland (X11 only):
+
+```bash
+cargo build --release --no-default-features --features vendored-fonts
 ```
 
 ### Cross-compile for Windows (from WSL/Linux)
@@ -64,7 +92,7 @@ terminaler-gui.exe           terminaler-daemon.exe
                                 Web server (optional)
 ```
 
-**Two-process model**: the GUI renders and handles input, the daemon holds PTY sessions and multiplexer state. Communication over Windows named pipes. This means your terminal sessions survive GUI restarts.
+**Two-process model**: the GUI renders and handles input, the daemon holds PTY sessions and multiplexer state. Communication runs over Windows named pipes on Windows and unix domain sockets on Linux. This means your terminal sessions survive GUI restarts.
 
 ## Snap Layouts
 
