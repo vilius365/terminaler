@@ -75,7 +75,25 @@ impl FontRasterizer for FreeTypeRasterizer {
                             );
                         }
                         FontRasterizerSelection::Harfbuzz => {
-                            return self.hb_raster.rasterize_glyph(glyph_pos, size, dpi);
+                            // Needs cairo, which this fork stripped; the call
+                            // always fails. Try it (so the config option is
+                            // honoured if the rasterizer is ever restored) but
+                            // fall back to outlines rather than emitting a
+                            // blank cell.
+                            match self.hb_raster.rasterize_glyph(glyph_pos, size, dpi) {
+                                Ok(g) => return Ok(g),
+                                Err(err) => {
+                                    log::debug!(
+                                        "harfbuzz colr rasterizer unavailable ({}); \
+                                         falling back to freetype outlines",
+                                        err
+                                    );
+                                    return self.rasterize_outlines(
+                                        glyph_pos,
+                                        load_flags | FT_LOAD_NO_HINTING as i32,
+                                    );
+                                }
+                            }
                         }
                     }
                 }

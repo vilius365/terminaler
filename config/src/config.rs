@@ -2247,7 +2247,13 @@ fn default_macos_forward_mods() -> Modifiers {
 }
 
 fn default_colr_rasterizer() -> FontRasterizerSelection {
-    FontRasterizerSelection::Harfbuzz
+    // Upstream defaults to Harfbuzz here, but that rasterizer needs cairo,
+    // which was stripped from this fork — HarfbuzzRasterizer::rasterize_glyph
+    // unconditionally bails. Defaulting to it meant every SVG/COLRv1 glyph
+    // failed to load and rendered as a blank cell (e.g. "✔" and "⚡" from a
+    // fallback font). FreeType outline rendering is implemented and is the
+    // fallback the sibling match arm already uses.
+    FontRasterizerSelection::FreeType
 }
 
 #[cfg(test)]
