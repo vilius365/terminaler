@@ -19,7 +19,7 @@ pub enum UnixTarget {
 }
 
 /// Minimal configuration for a Unix domain socket mux domain.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct UnixDomain {
     /// Name of this domain (used as an identifier).
     #[serde(default)]
@@ -64,6 +64,27 @@ fn default_read_timeout() -> Duration {
 
 fn default_write_timeout() -> Duration {
     Duration::from_secs(60)
+}
+
+// Hand-written rather than derived: a derived Default would zero the timeouts,
+// because #[serde(default = "...")] only applies when deserializing. Zero is
+// not a benign value here -- on unix, set_read_timeout(0) is rejected outright
+// ("cannot set a 0 duration timeout"), so every locally constructed domain
+// (the mux server's listener, the GUI's own domain) became unreachable.
+impl Default for UnixDomain {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            socket_path: None,
+            no_serve_automatically: false,
+            skip_permissions_check: false,
+            connect_automatically: false,
+            local_echo_threshold_ms: None,
+            overlay_lag_indicator: default_true_local(),
+            read_timeout: default_read_timeout(),
+            write_timeout: default_write_timeout(),
+        }
+    }
 }
 
 impl UnixDomain {
