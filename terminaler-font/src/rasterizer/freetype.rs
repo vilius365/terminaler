@@ -69,9 +69,11 @@ impl FontRasterizer for FreeTypeRasterizer {
                     let config = config::configuration();
                     match config.font_colr_rasterizer {
                         FontRasterizerSelection::FreeType => {
-                            return self.rasterize_outlines(
+                            return self.rasterize_colr_fallback(
                                 glyph_pos,
-                                load_flags | FT_LOAD_NO_HINTING as i32,
+                                load_flags,
+                                render_mode,
+                                is_scaled,
                             );
                         }
                         FontRasterizerSelection::Harfbuzz => {
@@ -88,9 +90,11 @@ impl FontRasterizer for FreeTypeRasterizer {
                                          falling back to freetype outlines",
                                         err
                                     );
-                                    return self.rasterize_outlines(
+                                    return self.rasterize_colr_fallback(
                                         glyph_pos,
-                                        load_flags | FT_LOAD_NO_HINTING as i32,
+                                        load_flags,
+                                        render_mode,
+                                        is_scaled,
                                     );
                                 }
                             }
@@ -422,6 +426,62 @@ impl FreeTypeRasterizer {
             display_pixel_geometry,
             scale: parsed.scale.unwrap_or(1.),
             hb_raster: HarfbuzzRasterizer::from_locator(&parsed)?,
+        })
+    }
+
+    /// Render a COLR glyph without its colour layers.
+    ///
+    /// Both colour paths dead-end in this fork: the harfbuzz rasterizer and
+    /// `rasterize_from_ops` each need the cairo that was stripped for the
+    /// Windows-only build, so every COLRv1/SVG glyph previously failed and the
+    /// caller substituted a blank cell (reported as "✔" and "⚡" vanishing).
+    ///
+    /// freetype has already loaded the outline by the time it reports
+    /// IsColr1OrLater — it only declines to render the colour layers. Rendering
+    /// again without FT_LOAD_COLOR therefore yields the glyph's shape in the
+    /// current foreground colour: monochrome rather than full colour, but
+    /// legible, which beats an empty cell.
+    fn rasterize_colr_fallback(
+        &self,
+        glyph_pos: u32,
+        load_flags: FT_Int32,
+        render_mode: ftwrap::FT_Render_Mode,
+        is_scaled: bool,
+    ) -> anyhow::Result<RasterizedGlyph> {
+        const FT_LOAD_COLOR: FT_Int32 = 1 << 20;
+        let mono_flags = (load_flags & !FT_LOAD_COLOR) | FT_LOAD_NO_HINTING as FT_Int32;
+
+        let mut face = self.face.borrow_mut();
+        let ft_glyph =
+            face.load_and_render_glyph(glyph_pos, mono_flags, render_mode, self.synthesize_bold)?;
+
+        let mode: ftwrap::FT_Pixel_Mode =
+            unsafe { mem::transmute(u32::from(ft_glyph.bitmap.pixel_mode)) };
+        let pitch = ft_glyph.bitmap.pitch.abs() as usize;
+        let data = unsafe {
+            crate::ftwrap::from_raw_parts(
+                ft_glyph.bitmap.buffer,
+                ft_glyph.bitmap.rows as usize * pitch,
+            )
+        };
+
+        Ok(match mode {
+            ftwrap::FT_Pixel_Mode::FT_PIXEL_MODE_LCD => {
+                self.rasterize_lcd(pitch, ft_glyph, data, is_scaled)
+            }
+            ftwrap::FT_Pixel_Mode::FT_PIXEL_MODE_LCD_V => {
+                self.rasterize_lcd_v(pitch, ft_glyph, data, is_scaled)
+            }
+            ftwrap::FT_Pixel_Mode::FT_PIXEL_MODE_BGRA => {
+                self.rasterize_bgra(pitch, ft_glyph, data, is_scaled)?
+            }
+            ftwrap::FT_Pixel_Mode::FT_PIXEL_MODE_GRAY => {
+                self.rasterize_gray(pitch, ft_glyph, data, is_scaled)
+            }
+            ftwrap::FT_Pixel_Mode::FT_PIXEL_MODE_MONO => {
+                self.rasterize_mono(pitch, ft_glyph, data, is_scaled)
+            }
+            mode => bail!("unhandled pixel mode: {:?}", mode),
         })
     }
 

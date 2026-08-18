@@ -944,7 +944,13 @@ impl Face {
             // So, we probe here to look for color layer information: if we find it,
             // we don't call freetype's renderer and instead bubble up an error
             // that the embedding application can trap and decide what to do.
-            if slot.format == FT_Glyph_Format_::FT_GLYPH_FORMAT_OUTLINE {
+            // Only probe when the caller actually asked for colour. A caller
+            // that cleared FT_LOAD_COLOR wants the plain outline — reporting
+            // IsColr1OrLater to it would be a dead end, since that error exists
+            // precisely to hand the glyph to a colour rasterizer.
+            if load_flags & (FT_LOAD_COLOR as FT_Int32) != 0
+                && slot.format == FT_Glyph_Format_::FT_GLYPH_FORMAT_OUTLINE
+            {
                 if self
                     .get_color_glyph_paint(
                         glyph_index,
