@@ -1,17 +1,12 @@
 use crate::screen::Screens;
-#[cfg(windows)]
-use crate::Connection;
-use crate::{Appearance, GeometryOrigin, RequestedWindowGeometry, ResolvedGeometry};
+use crate::{Appearance, Connection, GeometryOrigin, RequestedWindowGeometry, ResolvedGeometry};
 use anyhow::Result as Fallible;
 use config::keyassignment::KeyAssignment;
 use config::DimensionContext;
-#[cfg(windows)]
 use std::cell::RefCell;
-#[cfg(windows)]
 use std::rc::Rc;
 use std::sync::Mutex;
 
-#[cfg(windows)]
 thread_local! {
     static CONN: RefCell<Option<Rc<Connection>>> = RefCell::new(None);
 }
@@ -21,7 +16,6 @@ fn nop_event_handler(_event: ApplicationEvent) {}
 static EVENT_HANDLER: Mutex<fn(ApplicationEvent)> = Mutex::new(nop_event_handler);
 
 pub fn shutdown() {
-    #[cfg(windows)]
     CONN.with(|m| drop(m.borrow_mut().take()));
 }
 
@@ -33,7 +27,6 @@ pub enum ApplicationEvent {
 }
 
 pub trait ConnectionOps {
-    #[cfg(windows)]
     fn get() -> Option<Rc<Connection>> {
         let mut res = None;
         CONN.with(|m| {
@@ -60,7 +53,6 @@ pub trait ConnectionOps {
         crate::DEFAULT_DPI
     }
 
-    #[cfg(windows)]
     fn init() -> Fallible<Rc<Connection>> {
         let conn = Rc::new(Connection::create_new()?);
         CONN.with(|m| *m.borrow_mut() = Some(Rc::clone(&conn)));

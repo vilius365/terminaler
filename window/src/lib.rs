@@ -18,18 +18,16 @@ mod spawn;
 
 pub use raw_window_handle;
 
+#[cfg(target_os = "macos")]
+pub(crate) const DEFAULT_DPI: f64 = 72.0;
+#[cfg(not(target_os = "macos"))]
 pub(crate) const DEFAULT_DPI: f64 = 96.0;
 
 pub fn default_dpi() -> f64 {
-    #[cfg(windows)]
-    {
-        match Connection::get() {
-            Some(conn) => conn.default_dpi(),
-            None => DEFAULT_DPI,
-        }
+    match Connection::get() {
+        Some(conn) => conn.default_dpi(),
+        None => DEFAULT_DPI,
     }
-    #[cfg(not(windows))]
-    DEFAULT_DPI
 }
 
 mod egl;
@@ -220,13 +218,11 @@ pub enum WindowEvent {
     AdviseModifiersLedStatus(Modifiers, KeyboardLedStatus),
 }
 
-#[cfg(windows)]
 pub struct WindowEventSender {
     handler: Box<dyn FnMut(WindowEvent, &Window)>,
     window: Option<Window>,
 }
 
-#[cfg(windows)]
 impl WindowEventSender {
     pub fn new<F: 'static + FnMut(WindowEvent, &Window)>(handler: F) -> Self {
         Self {
@@ -244,25 +240,6 @@ impl WindowEventSender {
             log::trace!("{:?}", event);
             (self.handler)(event, window);
         }
-    }
-}
-
-#[cfg(not(windows))]
-pub struct WindowEventSender {
-    handler: Box<dyn FnMut(WindowEvent)>,
-}
-
-#[cfg(not(windows))]
-impl WindowEventSender {
-    pub fn new<F: 'static + FnMut(WindowEvent)>(handler: F) -> Self {
-        Self {
-            handler: Box::new(handler),
-        }
-    }
-
-    pub fn dispatch(&mut self, event: WindowEvent) {
-        log::trace!("{:?}", event);
-        (self.handler)(event);
     }
 }
 
