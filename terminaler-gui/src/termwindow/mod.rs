@@ -5115,6 +5115,10 @@ impl TermWindow {
                             BoxStatus::Pending => ("pending", None),
                             BoxStatus::Ok => ("ok", None),
                             BoxStatus::Unreachable(err) => ("unreachable", Some(err.clone())),
+                            // Registry-derived: shown, but not attachable.
+                            // Existing sidebar JS treats an unknown status as
+                            // "not ok", which is the behaviour we want.
+                            BoxStatus::RegistryOnly => ("registry-only", None),
                         };
                         serde_json::json!({
                             "box": snap.box_name,
@@ -5127,6 +5131,7 @@ impl TermWindow {
                                 "attached": s.attached,
                                 "agent": s.agent,
                                 "agentIsInstance": s.agent_is_instance,
+                                "attachable": s.attachable,
                             })).collect::<Vec<_>>(),
                         })
                     })

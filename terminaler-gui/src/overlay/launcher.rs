@@ -452,6 +452,22 @@ impl LauncherState {
                     }
                     _ => {}
                 }
+                // Agents known only from the interconnect registry: listed so
+                // they are visible, but there is no transport to attach with.
+                if snap.status == BoxStatus::RegistryOnly {
+                    for session in &snap.sessions {
+                        let agent = session.agent.as_deref().unwrap_or("agent");
+                        self.entries.push(Entry {
+                            label: format!(
+                                "⇄ {} @ {}:{}  (no transport — add a \"boxes\" entry for {} to attach)",
+                                agent, snap.box_name, session.session, snap.box_name
+                            ),
+                            action: KeyAssignment::Nop,
+                        });
+                    }
+                    continue;
+                }
+
                 for session in &snap.sessions {
                     let mut label = format!(
                         "{}:{}  ({}{} window{}{})",

@@ -19,6 +19,11 @@ pub enum BoxStatus {
     Ok,
     /// Last probe failed; the message is the first stderr line.
     Unreachable(String),
+    /// Not a configured box: these sessions come from the claude-agent-
+    /// interconnect registry, which is global, so agents on machines the user
+    /// never listed still show up. There is no transport to reach them, so
+    /// they are listed but cannot be attached.
+    RegistryOnly,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,6 +41,10 @@ pub struct TmuxSessionEntry {
     /// generic agent type. The sidebar marks these with a ⇄ prefix, matching
     /// the statusline convention.
     pub agent_is_instance: bool,
+    /// False when the entry came from the registry alone and the box has no
+    /// configured transport, so there is no way to run `tmux attach` on it.
+    /// The UI lists these but explains why selecting them cannot attach.
+    pub attachable: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -115,6 +124,20 @@ fn poller_loop() {
                     Arc::clone(&instances),
                 );
             }
+
+            // Surface agents on machines with no configured box. A probe can
+            // only reach boxes the user listed, but the registry knows every
+            // machine, so without this an agent elsewhere is invisible.
+            let configured: Vec<String> = tmux
+                .boxes
+                .iter()
+                .filter(|b| b.enabled)
+                .map(|b| b.interconnect_machine_name().to_string())
+                .collect();
+            let extra = registry_only_snapshots(&instances, &configured);
+            let mut snapshots = state().lock();
+            snapshots.retain(|s| s.status != BoxStatus::RegistryOnly);
+            snapshots.extend(extra);
         }
 
         // Sleep until the next cycle or an explicit refresh request.
@@ -131,7 +154,10 @@ fn poller_loop() {
 /// preserving existing entries and dropping removed ones.
 fn sync_boxes(boxes: &[TmuxBox]) {
     let mut snapshots = state().lock();
-    snapshots.retain(|s| boxes.iter().any(|b| b.enabled && b.name == s.box_name));
+    snapshots.retain(|s| {
+        s.status == BoxStatus::RegistryOnly
+            || boxes.iter().any(|b| b.enabled && b.name == s.box_name)
+    });
     for tmux_box in boxes.iter().filter(|b| b.enabled) {
         if !snapshots.iter().any(|s| s.box_name == tmux_box.name) {
             snapshots.push(BoxSnapshot {
@@ -372,6 +398,8 @@ fn parse_list_sessions(stdout: &str) -> Vec<TmuxSessionEntry> {
                 attached: attached > 0,
                 agent: None,
                 agent_is_instance: false,
+                // Came from a real probe, so the box has a working transport.
+                attachable: true,
             })
         })
         .collect()
@@ -386,6 +414,8 @@ struct InterconnectInstance {
     machine: Option<String>,
     #[serde(default)]
     tmux_session: Option<String>,
+    #[serde(default)]
+    tmux_window: Option<String>,
     #[serde(default)]
     status: Option<String>,
 }
@@ -433,6 +463,83 @@ fn fetch_interconnect_instances(base_url: &str, timeout: Duration) -> Vec<Interc
             vec![]
         }
     }
+}
+
+/// Build pseudo-snapshots for machines that appear in the interconnect
+/// registry but have no configured box.
+///
+/// The registry is global — it knows every Claude Code agent on every machine —
+/// while the tmux probes only reach boxes the user listed. Without this, an
+/// agent on an unlisted machine is invisible even though we know it exists.
+///
+/// The unit here is the INSTANCE, not the tmux session: several agents commonly
+/// share one session in different windows (e.g. grace/inlet/stone/scout/plume
+/// all in `local_lan`), so keying by session would silently drop all but one.
+/// Entries are marked non-attachable: the registry records machine/session/
+/// window but no transport, and a machine name is not necessarily a reachable
+/// host from wherever the GUI runs.
+fn registry_only_snapshots(
+    instances: &[InterconnectInstance],
+    configured_machines: &[String],
+) -> Vec<BoxSnapshot> {
+    use std::collections::BTreeMap;
+
+    let mut by_machine: BTreeMap<String, Vec<TmuxSessionEntry>> = BTreeMap::new();
+
+    for inst in instances {
+        if matches!(inst.status.as_deref(), Some("dead") | Some("inactive")) {
+            continue;
+        }
+        let Some(machine) = inst.machine.as_deref() else {
+            continue;
+        };
+        if machine.is_empty() || inst.instance_id.is_empty() {
+            continue;
+        }
+        if configured_machines.iter().any(|m| m == machine) {
+            continue;
+        }
+        let Some(session) = inst.tmux_session.as_deref() else {
+            continue;
+        };
+        if session.is_empty() {
+            continue;
+        }
+
+        // Name the window explicitly when there is one, so several agents in
+        // the same session stay distinguishable in the list.
+        let label = match inst.tmux_window.as_deref() {
+            Some(w) if !w.is_empty() => format!("{}:{}", session, w),
+            _ => session.to_string(),
+        };
+
+        by_machine
+            .entry(machine.to_string())
+            .or_default()
+            .push(TmuxSessionEntry {
+                session: label,
+                windows: 1,
+                attached: false,
+                agent: Some(inst.instance_id.clone()),
+                agent_is_instance: true,
+                attachable: false,
+            });
+    }
+
+    by_machine
+        .into_iter()
+        .map(|(machine, mut sessions)| {
+            sessions.sort_by(|a, b| a.session.cmp(&b.session));
+            BoxSnapshot {
+                box_name: machine,
+                status: BoxStatus::RegistryOnly,
+                sessions,
+                last_success: None,
+                stale: false,
+                updating: false,
+            }
+        })
+        .collect()
 }
 
 /// Index instances registered on `machine` by their tmux session name.
@@ -555,6 +662,7 @@ mod tests {
             instance_id: id.to_string(),
             machine: Some(machine.to_string()),
             tmux_session: Some(session.to_string()),
+            tmux_window: None,
             status: Some(status.to_string()),
         }
     }
@@ -588,6 +696,7 @@ mod tests {
                 instance_id: "tonic".to_string(),
                 machine: Some("devbox".to_string()),
                 tmux_session: Some("live".to_string()),
+                tmux_window: None,
                 status: None,
             },
         ];
@@ -713,5 +822,92 @@ mod tests {
             "error connecting to /tmp/tmux-1000/default (No such file or directory)"
         ));
         assert!(!is_no_server("ssh: connect to host devbox port 22: Connection refused"));
+    }
+
+    fn reg_inst(
+        id: &str,
+        machine: &str,
+        session: Option<&str>,
+        window: Option<&str>,
+        status: Option<&str>,
+    ) -> InterconnectInstance {
+        InterconnectInstance {
+            instance_id: id.to_string(),
+            machine: Some(machine.to_string()),
+            tmux_session: session.map(|s| s.to_string()),
+            tmux_window: window.map(|w| w.to_string()),
+            status: status.map(|s| s.to_string()),
+        }
+    }
+
+    /// Several agents commonly share one tmux session in different windows.
+    /// Keying by session would keep one and silently drop the rest, which is
+    /// the whole point of listing per instance.
+    #[test]
+    fn registry_only_keeps_every_agent_sharing_a_session() {
+        let instances = vec![
+            reg_inst("grace", "homepc", Some("local_lan"), Some("0"), Some("active")),
+            reg_inst("inlet", "homepc", Some("local_lan"), Some("1"), Some("active")),
+            reg_inst("stone", "homepc", Some("local_lan"), Some("2"), Some("active")),
+            reg_inst("scout", "homepc", Some("local_lan"), Some("3"), Some("active")),
+            reg_inst("plume", "homepc", Some("local_lan"), Some("4"), Some("active")),
+        ];
+        let snaps = registry_only_snapshots(&instances, &[]);
+        assert_eq!(snaps.len(), 1);
+        assert_eq!(snaps[0].box_name, "homepc");
+        assert_eq!(snaps[0].status, BoxStatus::RegistryOnly);
+        assert_eq!(snaps[0].sessions.len(), 5, "all five agents must survive");
+
+        let agents: Vec<&str> = snaps[0]
+            .sessions
+            .iter()
+            .map(|s| s.agent.as_deref().unwrap())
+            .collect();
+        for expected in ["grace", "inlet", "stone", "scout", "plume"] {
+            assert!(agents.contains(&expected), "{} missing", expected);
+        }
+        // Window is part of the label so entries stay distinguishable.
+        assert!(snaps[0].sessions.iter().any(|s| s.session == "local_lan:0"));
+        assert!(snaps[0].sessions.iter().all(|s| !s.attachable));
+        assert!(snaps[0].sessions.iter().all(|s| s.agent_is_instance));
+    }
+
+    /// A machine with a configured box is probed properly; the registry must
+    /// not add a duplicate, non-attachable copy of it.
+    #[test]
+    fn registry_only_skips_configured_machines() {
+        let instances = vec![
+            reg_inst("gully", "devbox", Some("terminaler"), Some("0"), Some("active")),
+            reg_inst("pixel", "laptop", Some("projects"), Some("0"), Some("active")),
+        ];
+        let snaps = registry_only_snapshots(&instances, &["devbox".to_string()]);
+        assert_eq!(snaps.len(), 1);
+        assert_eq!(snaps[0].box_name, "laptop");
+    }
+
+    #[test]
+    fn registry_only_skips_dead_and_unusable_rows() {
+        let instances = vec![
+            reg_inst("old", "laptop", Some("projects"), Some("0"), Some("dead")),
+            reg_inst("gone", "laptop", Some("projects"), Some("0"), Some("inactive")),
+            reg_inst("nosession", "laptop", None, None, Some("active")),
+            reg_inst("empty", "laptop", Some(""), Some("0"), Some("active")),
+            reg_inst("live", "laptop", Some("projects"), Some("1"), Some("active")),
+        ];
+        let snaps = registry_only_snapshots(&instances, &[]);
+        assert_eq!(snaps.len(), 1);
+        assert_eq!(snaps[0].sessions.len(), 1);
+        assert_eq!(snaps[0].sessions[0].agent.as_deref(), Some("live"));
+    }
+
+    /// A missing status field must not disqualify an instance: older daemons
+    /// do not send one.
+    #[test]
+    fn registry_only_accepts_missing_status() {
+        let instances = vec![reg_inst("dusk", "laptop", Some("itt"), None, None)];
+        let snaps = registry_only_snapshots(&instances, &[]);
+        assert_eq!(snaps.len(), 1);
+        // No window recorded, so the label is the bare session name.
+        assert_eq!(snaps[0].sessions[0].session, "itt");
     }
 }
