@@ -1939,6 +1939,18 @@ impl super::TermWindow {
                     context.set_cursor(Some(MouseCursor::SizeLeftRight));
                     self.dragging.replace((item.clone(), event));
                 }
+                TabSidebarItem::TmuxSession { box_name, session } => {
+                    // Same action the Ctrl+Shift+S picker performs.
+                    self.perform_key_assignment(
+                        &self.get_active_pane_or_overlay().unwrap(),
+                        &KeyAssignment::AttachTmuxSession {
+                            box_name: box_name.clone(),
+                            session: session.clone(),
+                            mode: Default::default(),
+                        },
+                    )
+                    .ok();
+                }
             },
             WMEK::Press(MousePress::Middle) => match sidebar_item {
                 TabSidebarItem::Tab { tab_idx, .. } => {
@@ -1964,6 +1976,7 @@ impl super::TermWindow {
                 | TabSidebarItem::ClosePane { .. }
                 | TabSidebarItem::MuteNotifications { .. }
                 | TabSidebarItem::Tab { .. }
+                | TabSidebarItem::TmuxSession { .. }
                 | TabSidebarItem::Pane { .. } => {
                     context.set_cursor(Some(MouseCursor::Hand));
                 }

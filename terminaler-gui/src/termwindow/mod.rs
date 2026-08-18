@@ -348,6 +348,8 @@ pub enum TabSidebarItem {
     MuteNotifications { pane_id: usize },
     NewTabButton,
     ResizeHandle,
+    /// A discovered tmux session in the AGENTS section; clicking attaches to it.
+    TmuxSession { box_name: String, session: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -604,6 +606,9 @@ pub struct TermWindow {
     /// Custom default profile action for the "+" button (set via dropdown).
     /// If None, falls back to SpawnTab(CurrentPaneDomain).
     pub default_profile_action: Option<KeyAssignment>,
+    /// Fingerprint of the tmux/agent discovery snapshot the cached sidebar was
+    /// built from, so a poll that changes the agent list forces a rebuild.
+    tmux_sidebar_fingerprint: String,
 
     event_states: HashMap<String, EventState>,
     pub current_event: Option<Value>,
@@ -998,6 +1003,7 @@ impl TermWindow {
             key_table_state: KeyTableState::default(),
             modal: RefCell::new(None),
             default_profile_action: None,
+            tmux_sidebar_fingerprint: String::new(),
             opengl_info: None,
         };
 

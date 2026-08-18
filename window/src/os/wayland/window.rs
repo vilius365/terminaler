@@ -247,9 +247,14 @@ impl WaylandWindow {
         window.set_title(name.to_string());
         let decorations = config.window_decorations;
 
+        // TITLE means "let the compositor decorate this window", which is what
+        // gives GNOME's own title bar, resize edges and resize cursors. Testing
+        // for equality with the default instead meant any customised value —
+        // notably "TITLE | RESIZE" — fell through to client-side decorations,
+        // leaving a window with no resize handles at its edges.
         let decor_mode = if decorations == WindowDecorations::NONE {
             None
-        } else if decorations == WindowDecorations::default() {
+        } else if decorations.contains(WindowDecorations::TITLE) {
             Some(DecorationMode::Server)
         } else {
             Some(DecorationMode::Client)

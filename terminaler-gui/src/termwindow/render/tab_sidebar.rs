@@ -840,10 +840,114 @@ impl crate::TermWindow {
         }))
         .min_width(Some(Dimension::Pixels(sidebar_width)));
 
+        // Claude agents / tmux sessions.
+        //
+        // The WebView sidebar renders this from serialize_sidebar_state(), but
+        // that whole path is Windows-only (WebView2), so on every other platform
+        // the section simply did not exist. Build it natively from the same
+        // discovery snapshot the Ctrl+Shift+S picker uses, which already covers
+        // every machine in the interconnect registry, not just configured boxes.
+        let mut sidebar_children = vec![tabs_container, new_tab_button];
+        if self.config.tmux.as_ref().map_or(false, |t| t.enabled) {
+            let snaps = crate::tmux_discovery::snapshot();
+            if !snaps.is_empty() {
+                let dim_text = LinearRgba::with_components(
+                    text_color.0 * 0.65,
+                    text_color.1 * 0.65,
+                    text_color.2 * 0.65,
+                    text_color.3,
+                );
+
+                let mut agent_children = vec![Element::new(
+                    &title_font,
+                    ElementContent::Text("AGENTS".to_string()),
+                )
+                .display(DisplayType::Block)
+                .line_height(Some(1.4))
+                .padding(BoxDimension {
+                    left: Dimension::Pixels(6.),
+                    right: Dimension::Pixels(6.),
+                    top: Dimension::Pixels(4.),
+                    bottom: Dimension::Pixels(2.),
+                })
+                .colors(ElementColors {
+                    border: BorderColor::default(),
+                    bg: bg_color.into(),
+                    text: dim_text.into(),
+                })];
+
+                for snap in &snaps {
+                    for session in &snap.sessions {
+                        // ⇄ marks an interconnect instance name, matching the
+                        // statusline and the WebView sidebar's convention.
+                        let label = match session.agent.as_deref() {
+                            Some(agent) if session.agent_is_instance => {
+                                format!("⇄ {}  {}:{}", agent, snap.box_name, session.session)
+                            }
+                            Some(agent) => {
+                                format!("{}  {}:{}", agent, snap.box_name, session.session)
+                            }
+                            None => format!("{}:{}", snap.box_name, session.session),
+                        };
+
+                        // Non-attachable entries come from the registry alone
+                        // (no transport configured), so they are shown dimmed
+                        // and are not clickable.
+                        let row_text = if session.attachable {
+                            text_color
+                        } else {
+                            dim_text
+                        };
+
+                        let mut row = Element::new(&font, ElementContent::Text(label))
+                            .display(DisplayType::Block)
+                            .line_height(Some(1.1))
+                            .padding(BoxDimension {
+                                left: Dimension::Pixels(8.),
+                                right: Dimension::Pixels(6.),
+                                top: Dimension::Pixels(1.),
+                                bottom: Dimension::Pixels(1.),
+                            })
+                            .colors(ElementColors {
+                                border: BorderColor::default(),
+                                bg: bg_color.into(),
+                                text: row_text.into(),
+                            });
+
+                        if session.attachable {
+                            row = row
+                                .item_type(UIItemType::TabSidebar(TabSidebarItem::TmuxSession {
+                                    box_name: snap.box_name.clone(),
+                                    session: session.session.clone(),
+                                }))
+                                .hover_colors(Some(ElementColors {
+                                    border: BorderColor::default(),
+                                    bg: active_tab_colors.bg_color.to_linear().into(),
+                                    text: active_tab_colors.fg_color.to_linear().into(),
+                                }));
+                        }
+
+                        agent_children.push(row);
+                    }
+                }
+
+                sidebar_children.push(
+                    Element::new(&font, ElementContent::Children(agent_children))
+                        .display(DisplayType::Block)
+                        .colors(ElementColors {
+                            border: BorderColor::default(),
+                            bg: bg_color.into(),
+                            text: text_color.into(),
+                        })
+                        .min_width(Some(Dimension::Pixels(sidebar_width))),
+                );
+            }
+        }
+
         // Root container
         let root = Element::new(
             &font,
-            ElementContent::Children(vec![tabs_container, new_tab_button]),
+            ElementContent::Children(sidebar_children),
         )
         .display(DisplayType::Block)
         .padding(BoxDimension {
@@ -978,6 +1082,29 @@ impl crate::TermWindow {
             self.tab_sidebar.take();
             // Schedule next frame for smooth animation (~30fps)
             self.update_next_frame_time(Some(Instant::now() + Duration::from_millis(32)));
+        }
+
+        // The sidebar is cached until invalidated, so a poll that discovers new
+        // agents would otherwise never reach the screen. Compare a cheap
+        // fingerprint of the discovery snapshot and rebuild when it moves.
+        if self.config.tmux.as_ref().map_or(false, |t| t.enabled) {
+            let mut fingerprint = String::new();
+            for snap in crate::tmux_discovery::snapshot() {
+                for session in &snap.sessions {
+                    fingerprint.push_str(&snap.box_name);
+                    fingerprint.push(':');
+                    fingerprint.push_str(&session.session);
+                    if let Some(agent) = &session.agent {
+                        fingerprint.push('/');
+                        fingerprint.push_str(agent);
+                    }
+                    fingerprint.push('\n');
+                }
+            }
+            if self.tmux_sidebar_fingerprint != fingerprint {
+                self.tmux_sidebar_fingerprint = fingerprint;
+                self.tab_sidebar.take();
+            }
         }
 
         if self.tab_sidebar.is_none() {
