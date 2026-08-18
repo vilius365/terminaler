@@ -902,6 +902,16 @@ impl crate::TermWindow {
         // Update sidebar metadata periodically
         self.update_sidebar_info();
 
+        // Start the tmux discovery poller once the sidebar is live, so the
+        // session list populates without the user opening the picker first.
+        // The WebView sidebar does the same from push_webview_sidebar_state();
+        // that function is #[cfg(windows)], so without this call the poller
+        // never started on the GPU-rendered (non-Windows) path and the tmux
+        // section stayed empty no matter how the boxes were configured.
+        if self.config.tmux.as_ref().map_or(false, |t| t.enabled) {
+            crate::tmux_discovery::ensure_running();
+        }
+
         // Paint full-height background for the sidebar column
         let sidebar_width = self.tab_sidebar_width as f32;
         let window_height = self.dimensions.pixel_height as f32;

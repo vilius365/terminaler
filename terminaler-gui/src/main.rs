@@ -1108,6 +1108,14 @@ fn run() -> anyhow::Result<()> {
         }
     }
 
+    // Must precede Opt::parse(): the `version` attribute on Opt calls
+    // config::terminaler_version(), which clap evaluates while building the
+    // command, and bootstrap() is what assigns that value. Parsing first made
+    // `--version` print "someone forgot to call assign_version_info" and exit
+    // before the version was ever set. terminaler-cli and terminaler-mux-server
+    // already bootstrap before parsing; this matches them.
+    env_bootstrap::bootstrap();
+
     let opts = Opt::parse();
 
     // This is a bit gross.
@@ -1127,8 +1135,6 @@ fn run() -> anyhow::Result<()> {
             winapi::um::wincon::AttachConsole(winapi::um::wincon::ATTACH_PARENT_PROCESS);
         }
     };
-
-    env_bootstrap::bootstrap();
 
     stats::Stats::init()?;
     let _saver = umask::UmaskSaver::new();

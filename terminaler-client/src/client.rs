@@ -940,8 +940,16 @@ impl Client {
         class_name: &str,
     ) -> anyhow::Result<config::UnixDomain> {
         match std::env::var_os("TERMINALER_UNIX_SOCKET") {
+            // An explicitly configured socket names one specific server. If it
+            // is not listening, that is an error worth reporting: spawning a
+            // fresh GUI would bind its own socket elsewhere and still not
+            // satisfy the request, so it only produces a confusing detour
+            // (a headless `terminaler start --always-new-process` that fails
+            // to bind and exits). The auto-discovered GUI path below already
+            // opts out of serving for the same reason.
             Some(path) if !path.is_empty() => Ok(config::UnixDomain {
                 socket_path: Some(path.into()),
+                no_serve_automatically: true,
                 ..Default::default()
             }),
             Some(_) | None => {
