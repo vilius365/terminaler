@@ -2,17 +2,58 @@
 
 /// Generate a default JSONC config file content with helpful comments.
 pub fn default_config_content() -> String {
-    r#"{
+    // A few sections only make sense on one platform: shell domains, window
+    // backdrops and the tmux transport all differ. Generate the variant that
+    // matches the host so a first-run config never documents WSL on Linux (or
+    // xdg-open on Windows).
+    let domain_help = if cfg!(windows) {
+        r#"{DOMAIN_HELP}"#
+    } else {
+        r#"    // Default domain (shell). "local" runs your login shell ($SHELL).
+    // "default_domain": "local",
+    //
+    // Default program for new panes. Element 0 is the executable, the rest are
+    // arguments. Omit for your login shell.
+    // "default_prog": ["/bin/bash", "-l"],
+"#
+    };
+
+    let backdrop_help = if cfg!(windows) {
+        r#"{BACKDROP_HELP}"#
+    } else {
+        r#"    // Window transparency. Requires a compositor that supports it
+    // (most Wayland compositors and X11 with a compositing WM).
+    // Background opacity: 0.0 (fully transparent) to 1.0 (opaque). Default: 0.85
+    // "window_background_opacity": 0.85,
+"#
+    };
+
+    let agent_help = if cfg!(windows) {
+        r#"{AGENT_HELP}"#
+    } else {
+        r#"    //     "worktree_root": "/home/you/dev/worktrees",  // default: <repo-parent>/<repo>-worktrees/
+    //     "claude_command": ["claude"],
+"#
+    };
+
+    let tmux_boxes = if cfg!(windows) {
+        r#"{TMUX_BOXES}"#
+    } else {
+        r#"    //         // Local tmux uses the "Command" escape hatch with an empty
+    //         // prefix, so the tmux command runs directly on this machine.
+    //         { "name": "local",  "connection": { "Command": { "argv_prefix": [] } } },
+    //         { "name": "devbox", "connection": { "Ssh": { "target": "devbox" } } }
+"#
+    };
+
+    let template = r#"{
     // Terminaler Configuration
     // Documentation: https://github.com/user/terminaler
     //
     // This file uses JSONC format (JSON with comments).
     // Lines starting with // are comments and will be ignored.
 
-    // Default domain (shell). WSL is used automatically if available.
-    // Set to "local" for PowerShell/CMD, or "WSL:<distro>" for a specific WSL distro.
-    // "default_domain": "local",
-
+{DOMAIN_HELP}
     // What happens to a pane when its program exits.
     // "Close" (default) always closes the pane; "CloseOnCleanExit" closes it
     // only if the program succeeded, keeping it open on a non-zero exit so you
@@ -31,13 +72,7 @@ pub fn default_config_content() -> String {
     // "initial_rows": 24,
     // "initial_cols": 80,
 
-    // Window transparency (Windows 11 glass effect)
-    // Backdrop type: "Auto", "Disable", "Acrylic", "Mica", "Tabbed"
-    // Default: "Acrylic"
-    // "win32_system_backdrop": "Acrylic",
-    // Background opacity: 0.0 (fully transparent) to 1.0 (opaque). Default: 0.85
-    // "window_background_opacity": 0.85,
-
+{BACKDROP_HELP}
     // Color scheme. The default is "Gruvbox Dark (Gogh)" — a warm, low-strain
     // dark palette (cream text on a soft dark grey, not pure black). Set any of
     // the ~1000 bundled schemes here, e.g. "Tokyo Night", "Solarized Dark (Gogh)",
@@ -77,11 +112,7 @@ pub fn default_config_content() -> String {
 
     // Claude agent orchestration (ctrl+shift+a = New Agent, ctrl+shift+j = dashboard)
     // "claude_agent": {
-    //     "worktree_root": "C:\\dev\\worktrees",   // default: <repo-parent>/<repo>-worktrees/
-    //     // Windows default is ["cmd", "/c", "claude"] (claude is a .cmd shim,
-    //     // not a .exe); non-Windows default is ["claude"]. Override if needed.
-    //     "claude_command": ["cmd", "/c", "claude"],
-    //     "template": "claude-code"
+{AGENT_HELP}    //     "template": "claude-code"
     // }
 
     // Multibox tmux sessions (ctrl+shift+s = session picker; sidebar section).
@@ -89,13 +120,16 @@ pub fn default_config_content() -> String {
     // "tmux": {
     //     "poll_interval_seconds": 30,
     //     "boxes": [
-    //         { "name": "wsl",    "connection": { "Wsl": { "distribution": "Ubuntu" } } },
-    //         { "name": "devbox", "connection": { "Ssh": { "target": "devbox" } } }
-    //     ]
+{TMUX_BOXES}    //     ]
     // }
 }
-"#
-    .to_string()
+"#;
+
+    template
+        .replace("{DOMAIN_HELP}", domain_help)
+        .replace("{BACKDROP_HELP}", backdrop_help)
+        .replace("{AGENT_HELP}", agent_help)
+        .replace("{TMUX_BOXES}", tmux_boxes)
 }
 
 /// Get the default config file path for the current platform.

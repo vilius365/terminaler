@@ -22,3 +22,10 @@ windows = { workspace=true, features = [
     "Win32_Foundation",
 ]}
 xml-rs.workspace = true
+
+[target.'cfg(all(not(windows), not(target_os="macos")))'.dependencies]
+async-io.workspace = true
+futures-util.workspace = true
+serde = {workspace=true, features = ["derive"]}
+zbus.workspace = true
+zvariant.workspace = true

@@ -19,7 +19,17 @@ impl ToastNotification {
 
 #[cfg(windows)]
 use crate::windows as backend;
-#[cfg(not(windows))]
+
+// Linux/BSD: notifications go over the org.freedesktop.Notifications D-Bus
+// service, the desktop-native equivalent of the Windows toast API.
+#[cfg(all(not(windows), not(target_os = "macos")))]
+mod dbus;
+#[cfg(all(not(windows), not(target_os = "macos")))]
+use crate::dbus as backend;
+
+// Any other platform (e.g. macOS, which this fork does not support) silently
+// drops notifications rather than failing.
+#[cfg(all(not(windows), target_os = "macos"))]
 mod nop {
     use super::*;
 
@@ -27,7 +37,7 @@ mod nop {
         Ok(())
     }
 }
-#[cfg(not(windows))]
+#[cfg(all(not(windows), target_os = "macos"))]
 use nop as backend;
 
 pub fn show(notif: ToastNotification) {
