@@ -243,3 +243,4 @@ xcb-imdkit = { version="0.3", git="https://github.com/wezterm/xcb-imdkit-rs.git"
 xkbcommon = "0.7.0"
 zbus = "4.2"
 zvariant = "4.0"
+sctk-adwaita = { version = "0.10", default-features = false, features = ["ab_glyph"] }

@@ -28,7 +28,11 @@ use smithay_client_toolkit::reexports::csd_frame::{
 };
 use smithay_client_toolkit::reexports::protocols::xdg::shell::client::xdg_toplevel::ResizeEdge as XdgResizeEdge;
 use smithay_client_toolkit::seat::pointer::CursorIcon;
-use smithay_client_toolkit::shell::xdg::fallback_frame::FallbackFrame;
+// AdwaitaFrame draws a GNOME/Adwaita-styled titlebar. GNOME's Mutter never
+// decorates windows itself, so a client-side frame is the only option there;
+// smithay's FallbackFrame is deliberately plain, which read as a non-native
+// override next to real GTK windows.
+use sctk_adwaita::{AdwaitaFrame, FrameConfig};
 use smithay_client_toolkit::shell::xdg::window::{
     DecorationMode, Window as XdgWindow, WindowConfigure, WindowDecorations as Decorations,
     WindowHandler,
@@ -270,8 +274,17 @@ impl WaylandWindow {
             let wayland_state = &conn.wayland_state.borrow();
             let shm = &wayland_state.shm;
             let subcompositor = wayland_state.subcompositor.clone();
-            FallbackFrame::new(&window, shm, subcompositor, qh.clone())
-                .expect("failed to create csd frame")
+            let compositor = Arc::new(wayland_state.compositor.clone());
+            AdwaitaFrame::new(
+                &window,
+                shm,
+                compositor,
+                subcompositor,
+                qh.clone(),
+                // auto() follows the desktop's light/dark preference.
+                FrameConfig::auto(),
+            )
+            .expect("failed to create csd frame")
         };
         let hidden = match decor_mode {
             Some(DecorationMode::Client) => false,
@@ -583,7 +596,7 @@ pub struct WaylandWindowInner {
     surface_factor: f64,
     copy_and_paste: Arc<Mutex<CopyAndPaste>>,
     window: Option<XdgWindow>,
-    pub(super) window_frame: FallbackFrame<WaylandState>,
+    pub(super) window_frame: AdwaitaFrame<WaylandState>,
     dimensions: Dimensions,
     resize_increments: Option<ResizeIncrement>,
     window_state: WindowState,
