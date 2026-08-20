@@ -252,6 +252,11 @@ impl WaylandWindow {
         // for equality with the default instead meant any customised value —
         // notably "TITLE | RESIZE" — fell through to client-side decorations,
         // leaving a window with no resize handles at its edges.
+        // TITLE means "give this window a title bar". Prefer the compositor's
+        // own decorations, but this is only a request — compositors that do not
+        // implement server-side decorations (notably GNOME's Mutter) decline
+        // it, and the configure handler below then reveals our client-side
+        // fallback frame so the window is never left undecorated.
         let decor_mode = if decorations == WindowDecorations::NONE {
             None
         } else if decorations.contains(WindowDecorations::TITLE) {
@@ -270,6 +275,11 @@ impl WaylandWindow {
         };
         let hidden = match decor_mode {
             Some(DecorationMode::Client) => false,
+            // Asked for server decorations: keep our frame until the compositor
+            // confirms it took the job. Starting hidden and only appearing on
+            // refusal would flash an undecorated window, and on a compositor
+            // that never sends a decoration mode we would stay undecorated.
+            Some(DecorationMode::Server) => false,
             _ => true,
         };
         window_frame.set_hidden(hidden);
@@ -846,6 +856,30 @@ impl WaylandWindowInner {
             self.window_frame.update_state(window_config.state);
             self.window_frame
                 .update_wm_capabilities(window_config.capabilities);
+
+            // Honour the decoration mode the compositor actually chose rather
+            // than the one we asked for. Requesting Server decorations is only
+            // a request: GNOME's Mutter does not implement server-side
+            // decorations and silently declines, and with our client-side
+            // fallback frame hidden that left a window with no title bar and
+            // nothing to drag or resize by. Show the fallback frame whenever
+            // the compositor did not take the job.
+            if self.config.window_decorations != WindowDecorations::NONE {
+                let server_decorated =
+                    window_config.decoration_mode == DecorationMode::Server;
+                if self.window_frame.is_hidden() == !server_decorated {
+                    self.window_frame.set_hidden(server_decorated);
+                    if !server_decorated {
+                        if let (Some(w), Some(h)) = (
+                            NonZeroU32::new(self.dimensions.pixel_width as u32),
+                            NonZeroU32::new(self.dimensions.pixel_height as u32),
+                        ) {
+                            self.window_frame.resize(w, h);
+                        }
+                    }
+                    self.refresh_frame();
+                }
+            }
         }
 
         if let Some((mut w, mut h)) = pending.configure.take() {
