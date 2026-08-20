@@ -294,16 +294,26 @@ impl crate::TermWindow {
                     border: BorderColor::default(),
                     bg: bg_color.into(),
                     text: text_secondary.into(),
-                }),
+                })
+                .min_width(Some(Dimension::Pixels(sidebar_width))),
             );
 
             for session in &snap.sessions {
-                // Session name absorbs the slack and truncates, so the agent
-                // badge stays visible however narrow the sidebar is — the same
-                // reasoning as .tmux-session-name's flex rule.
+                // Fixed-width columns. Truncating alone was not enough: a short
+                // name pulled the badge and window count left, so rows with
+                // different text lengths had visibly different structure. Pad
+                // each column to a constant cell count instead, so every row is
+                // the same shape and only its content differs.
+                const NAME_COLS: usize = 14;
+                const BADGE_COLS: usize = 10;
+
                 let mut row_children = vec![Element::new(
                     font,
-                    ElementContent::Text(truncate_str(&session.session, 14)),
+                    ElementContent::Text(format!(
+                        "{:<width$}",
+                        truncate_str(&session.session, NAME_COLS),
+                        width = NAME_COLS
+                    )),
                 )
                 .display(DisplayType::Inline)
                 .colors(ElementColors {
@@ -330,7 +340,11 @@ impl crate::TermWindow {
                     row_children.push(
                         Element::new(
                             font,
-                            ElementContent::Text(format!(" {} ", truncate_str(agent, 10))),
+                            ElementContent::Text(format!(
+                                " {:<width$} ",
+                                truncate_str(agent, BADGE_COLS),
+                                width = BADGE_COLS
+                            )),
                         )
                         .display(DisplayType::Inline)
                         .colors(ElementColors {
@@ -338,6 +352,18 @@ impl crate::TermWindow {
                             bg: badge_bg.into(),
                             text: badge_fg.into(),
                         }),
+                    );
+                } else {
+                    // Spacer of identical width, so the window-count column
+                    // starts at the same x on rows that have no agent.
+                    row_children.push(
+                        Element::new(font, ElementContent::Text(" ".repeat(BADGE_COLS + 2)))
+                            .display(DisplayType::Inline)
+                            .colors(ElementColors {
+                                border: BorderColor::default(),
+                                bg: InheritableColor::Inherited,
+                                text: InheritableColor::Inherited,
+                            }),
                     );
                 }
 
@@ -379,7 +405,13 @@ impl crate::TermWindow {
                         border: BorderColor::new(border_subtle),
                         bg: border_subtle.into(),
                         text: text_primary.into(),
-                    });
+                    })
+                    // Cards are uniform: the row spans the sidebar minus its
+                    // own margins, padding and border, so text length changes
+                    // what a row says, never its shape.
+                    .min_width(Some(Dimension::Pixels(
+                        (sidebar_width - 16. - 12. - 2.).max(0.),
+                    )));
 
                 if session.attachable {
                     row = row
