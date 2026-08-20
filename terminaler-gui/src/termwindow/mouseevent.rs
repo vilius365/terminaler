@@ -1936,7 +1936,21 @@ impl super::TermWindow {
                     self.invalidate_tab_sidebar();
                 }
                 TabSidebarItem::NewTabButton => {
-                    self.spawn_tab(&SpawnTabDomain::CurrentPaneDomain);
+                    // Split the active pane rather than spawning a tab. A new
+                    // tab replaces what is on screen, so asking for another
+                    // terminal used to hide the one you were working in; a
+                    // split puts the two side by side, which is what the row
+                    // in the pane list implies.
+                    self.perform_key_assignment(
+                        &self.get_active_pane_or_overlay().unwrap(),
+                        &KeyAssignment::SplitPane(config::keyassignment::SplitPane {
+                            direction: config::keyassignment::PaneDirection::Right,
+                            size: config::keyassignment::SplitSize::Percent(50),
+                            command: Default::default(),
+                            top_level: false,
+                        }),
+                    )
+                    .ok();
                 }
                 TabSidebarItem::ResizeHandle => {
                     context.set_cursor(Some(MouseCursor::SizeLeftRight));

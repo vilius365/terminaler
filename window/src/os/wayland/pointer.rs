@@ -5,7 +5,7 @@ use std::time::Duration;
 use smithay_client_toolkit::compositor::SurfaceData;
 use smithay_client_toolkit::reexports::csd_frame::{DecorationsFrame, FrameAction, FrameClick};
 use smithay_client_toolkit::seat::pointer::{
-    PointerData, PointerDataExt, PointerEvent, PointerEventKind, PointerHandler,
+    CursorIcon, PointerData, PointerDataExt, PointerEvent, PointerEventKind, PointerHandler,
 };
 use wayland_client::backend::ObjectId;
 use wayland_client::protocol::wl_pointer::{ButtonState, WlPointer};
@@ -58,7 +58,7 @@ impl PointerHandler for WaylandState {
                 }
             }
         }
-        self.pointer_window_frame(pointer, events);
+        self.pointer_window_frame(_conn, pointer, events);
     }
 }
 
@@ -201,7 +201,16 @@ fn event_serial(event: &PointerEvent) -> Option<u32> {
 }
 
 impl WaylandState {
-    fn pointer_window_frame(&mut self, pointer: &WlPointer, events: &[PointerEvent]) {
+    fn pointer_window_frame(
+        &mut self,
+        conn: &Connection,
+        pointer: &WlPointer,
+        events: &[PointerEvent],
+    ) {
+        // Collected while the window borrow is held and applied after it is
+        // released: setting the cursor needs the connection's wayland_state,
+        // which is already mutably borrowed for this dispatch.
+        let mut frame_cursor: Option<CursorIcon> = None;
         let windows = self.windows.borrow();
 
         for evt in events {
@@ -221,7 +230,12 @@ impl WaylandState {
 
                 match evt.kind {
                     PointerEventKind::Enter { .. } => {
-                        inner.window_frame.click_point_moved(
+                        // The frame returns the cursor for whatever part of
+                        // the decoration the pointer is over — the resize
+                        // arrows along the edges and corners in particular.
+                        // Dropping it left the plain arrow showing everywhere,
+                        // so the window had no visible resize affordance.
+                        frame_cursor = inner.window_frame.click_point_moved(
                             Duration::ZERO,
                             &evt.surface.id(),
                             x,
@@ -233,7 +247,7 @@ impl WaylandState {
                         inner.clear_pending_move();
                     }
                     PointerEventKind::Motion { time } => {
-                        inner.window_frame.click_point_moved(
+                        frame_cursor = inner.window_frame.click_point_moved(
                             Duration::from_millis(time as u64),
                             &evt.surface.id(),
                             x,
@@ -291,6 +305,15 @@ impl WaylandState {
                         }
                     }
                     _ => {}
+                }
+            }
+        }
+        drop(windows);
+
+        if let Some(icon) = frame_cursor {
+            if let Some(pointer_obj) = &self.pointer {
+                if let Err(err) = pointer_obj.set_cursor(conn, icon) {
+                    log::error!("set frame cursor: {}", err);
                 }
             }
         }
