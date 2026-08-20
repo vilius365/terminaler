@@ -92,6 +92,25 @@ pub enum TmuxConnection {
     Command { argv_prefix: Vec<String> },
 }
 
+impl TmuxConnection {
+    /// Strings that identify this box inside an attach command's argv.
+    ///
+    /// Used to tell which configured box a running `tmux attach` pane is
+    /// talking to. A local `Command` connection with no prefix has nothing to
+    /// match on and returns an empty list, meaning "cannot be distinguished by
+    /// transport" rather than "matches nothing".
+    pub fn probe_tokens(&self) -> Vec<String> {
+        match self {
+            Self::Ssh { target, .. } => vec![target.clone()],
+            Self::Wsl { distribution } => distribution
+                .as_ref()
+                .map(|d| vec![d.clone()])
+                .unwrap_or_default(),
+            Self::Command { argv_prefix } => argv_prefix.clone(),
+        }
+    }
+}
+
 impl TmuxBox {
     /// Argv for discovering sessions on this box. The format string puts the
     /// session name LAST so names containing spaces survive ssh's re-joining
