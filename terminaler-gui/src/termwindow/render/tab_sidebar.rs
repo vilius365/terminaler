@@ -337,11 +337,15 @@ impl crate::TermWindow {
                     .as_deref()
                     .map(|a| a.chars().count().min(12))
                     .unwrap_or(0);
+                // The badge floats right, so the name only has to reserve
+                // enough width to keep the two from overlapping.
                 let badge_field = if badge_cols > 0 { badge_cols + 2 } else { 0 };
                 let name_cols = row_cols.saturating_sub(badge_field).max(6);
 
                 let mut row_children = vec![Element::new(
                     font,
+                    // Padded to name_cols so every row reserves the same width
+                    // for the name and the floated badge always clears it.
                     ElementContent::Text(format!(
                         "{:<width$}",
                         truncate_str(&session.session, name_cols),
@@ -383,6 +387,13 @@ impl crate::TermWindow {
                             )),
                         )
                         .display(DisplayType::Inline)
+                        // Pinned to the right edge rather than trailing the
+                        // name. The badge is set in title_font, a size down
+                        // from the name's font, so padding the name to
+                        // name_cols cannot line the badges up: each row would
+                        // end at a slightly different x. Floating right anchors
+                        // every badge to the same edge whatever the name.
+                        .float(Float::Right)
                         .colors(ElementColors {
                             border: BorderColor::default(),
                             bg: badge_bg.into(),
