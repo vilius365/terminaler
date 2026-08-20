@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use smithay_client_toolkit::compositor::SurfaceData;
-use smithay_client_toolkit::reexports::csd_frame::{DecorationsFrame, FrameClick};
+use smithay_client_toolkit::reexports::csd_frame::{DecorationsFrame, FrameAction, FrameClick};
 use smithay_client_toolkit::seat::pointer::{
     PointerData, PointerDataExt, PointerEvent, PointerEventKind, PointerHandler,
 };
@@ -230,6 +230,7 @@ impl WaylandState {
                     }
                     PointerEventKind::Leave { .. } => {
                         inner.window_frame.click_point_left();
+                        inner.clear_pending_move();
                     }
                     PointerEventKind::Motion { time } => {
                         inner.window_frame.click_point_moved(
@@ -238,6 +239,10 @@ impl WaylandState {
                             x,
                             y,
                         );
+                        // A titlebar press only becomes a window drag once the
+                        // pointer travels; until then it might still be the
+                        // first half of a double click.
+                        inner.maybe_start_pending_move(pointer, x, y);
                     }
                     PointerEventKind::Press {
                         button,
@@ -266,11 +271,22 @@ impl WaylandState {
                         // double click and maximized the window instead of
                         // starting a drag. `time` is the event's own millisecond
                         // clock, which is what the comparison expects.
+                        // A release ends the gesture: whatever the press
+                        // recorded was a click, not a drag.
+                        if !pressed {
+                            inner.clear_pending_move();
+                        }
                         if let Some(action) = inner.window_frame.on_click(
                             Duration::from_millis(time as u64),
                             click,
                             pressed,
                         ) {
+                            // Record where a would-be move started instead of
+                            // starting it now; `frame_action` deliberately does
+                            // nothing for Move. See `PendingMove`.
+                            if matches!(action, FrameAction::Move) {
+                                inner.record_pending_move(serial, x, y);
+                            }
                             inner.frame_action(pointer, serial, action);
                         }
                     }

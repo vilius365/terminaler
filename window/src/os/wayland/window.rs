@@ -345,6 +345,7 @@ impl WaylandWindow {
             key_repeat: None,
             pending_event,
             pending_mouse,
+            pending_move: None,
 
             pending_first_configure: Some(pending_first_configure),
             frame_callback: None,
@@ -591,6 +592,28 @@ pub(crate) fn read_pipe_with_timeout(mut file: ReadPipe) -> anyhow::Result<Strin
     Ok(String::from_utf8(result)?)
 }
 
+/// A titlebar press waiting to be classified as a drag or a click.
+///
+/// `xdg_toplevel.move_()` hands the pointer to the compositor for an
+/// interactive move grab, after which no further pointer events reach us. Doing
+/// that on the first press meant the second press of a double click was never
+/// delivered, so the frame could never match the two and double-click-to-maximize
+/// did nothing. The press is therefore recorded here and only promoted to a real
+/// move once the pointer travels past `MOVE_THRESHOLD_SURFACE_UNITS`.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct PendingMove {
+    /// The press serial. Motion events carry no serial of their own, but
+    /// `move_()` requires the serial of the press that began the gesture.
+    serial: u32,
+    x: f64,
+    y: f64,
+}
+
+/// How far the pointer must travel from the press before a titlebar drag is
+/// treated as a move rather than a click. A drag that stays inside this radius
+/// will not move the window; GTK behaves the same way.
+const MOVE_THRESHOLD_SURFACE_UNITS: f64 = 8.0;
+
 pub struct WaylandWindowInner {
     pub(crate) events: WindowEventSender,
     surface_factor: f64,
@@ -609,6 +632,9 @@ pub struct WaylandWindowInner {
     pub(super) key_repeat: Option<(u32, Arc<Mutex<KeyRepeatState>>)>,
     pub(super) pending_event: Arc<Mutex<PendingEvent>>,
     pub(super) pending_mouse: Arc<Mutex<PendingMouse>>,
+    /// A titlebar press that may turn into an interactive move, held back
+    /// until the pointer actually travels. See `frame_action`.
+    pub(super) pending_move: Option<PendingMove>,
     pending_first_configure: Option<async_channel::Sender<()>>,
     frame_callback: Option<WlCallback>,
     invalidated: bool,
@@ -1291,8 +1317,16 @@ impl WaylandWindowInner {
         match action {
             FrameAction::Close => self.events.dispatch(WindowEvent::CloseRequested),
             FrameAction::Minimize => self.window.as_ref().unwrap().set_minimized(),
-            FrameAction::Maximize => self.window.as_ref().unwrap().set_maximized(),
-            FrameAction::UnMaximize => self.window.as_ref().unwrap().unset_maximized(),
+            // A maximize resolves the gesture, so the press that opened it must
+            // not also start a deferred drag once the pointer moves.
+            FrameAction::Maximize => {
+                self.pending_move = None;
+                self.window.as_ref().unwrap().set_maximized()
+            }
+            FrameAction::UnMaximize => {
+                self.pending_move = None;
+                self.window.as_ref().unwrap().unset_maximized()
+            }
             FrameAction::ShowMenu(x, y) => {
                 self.window
                     .as_ref()
@@ -1314,9 +1348,36 @@ impl WaylandWindowInner {
                 };
                 self.window.as_ref().unwrap().resize(seat, serial, edge)
             }
-            FrameAction::Move => self.window.as_ref().unwrap().move_(seat, serial),
+            // Deferred: see `PendingMove`. The press position is recorded by the
+            // caller, which is the only place that knows it.
+            FrameAction::Move => {}
             _ => log::warn!("unhandled FrameAction: {:?}", action),
         }
+    }
+
+    /// Promote a recorded titlebar press into a compositor move grab once the
+    /// pointer has travelled far enough to count as a drag.
+    pub(super) fn maybe_start_pending_move(&mut self, pointer: &WlPointer, x: f64, y: f64) {
+        let Some(pending) = self.pending_move else {
+            return;
+        };
+        if (x - pending.x).hypot(y - pending.y) < MOVE_THRESHOLD_SURFACE_UNITS {
+            return;
+        }
+        self.pending_move = None;
+        let pointer_data = pointer.data::<PointerUserData>().unwrap();
+        let seat = pointer_data.pdata.seat();
+        if let Some(window) = self.window.as_ref() {
+            window.move_(seat, pending.serial);
+        }
+    }
+
+    pub(super) fn record_pending_move(&mut self, serial: u32, x: f64, y: f64) {
+        self.pending_move = Some(PendingMove { serial, x, y });
+    }
+
+    pub(super) fn clear_pending_move(&mut self) {
+        self.pending_move = None;
     }
 
     fn maximize(&mut self) {
