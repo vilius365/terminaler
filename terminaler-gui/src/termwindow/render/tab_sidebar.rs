@@ -17,25 +17,6 @@ use terminaler_font::LoadedFont;
 use terminaler_term::color::ColorPalette;
 use window::color::LinearRgba;
 
-const PLUS_BUTTON: &[Poly] = &[
-    Poly {
-        path: &[
-            PolyCommand::MoveTo(BlockCoord::Frac(1, 2), BlockCoord::Zero),
-            PolyCommand::LineTo(BlockCoord::Frac(1, 2), BlockCoord::One),
-        ],
-        intensity: BlockAlpha::Full,
-        style: PolyStyle::Outline,
-    },
-    Poly {
-        path: &[
-            PolyCommand::MoveTo(BlockCoord::Zero, BlockCoord::Frac(1, 2)),
-            PolyCommand::LineTo(BlockCoord::One, BlockCoord::Frac(1, 2)),
-        ],
-        intensity: BlockAlpha::Full,
-        style: PolyStyle::Outline,
-    },
-];
-
 const X_BUTTON: &[Poly] = &[
     Poly {
         path: &[
@@ -1236,59 +1217,35 @@ impl crate::TermWindow {
         // New tab button — centered, stuck to bottom
         let new_tab_colors = colors.new_tab();
         let new_tab_hover = colors.new_tab_hover();
-        let plus_size = metrics.cell_size.height as f32 * 0.4;
-        let h_padding = (sidebar_width - plus_size - 2.) / 2.; // center horizontally
+        // A labelled row in the flow of the list rather than a control pinned
+        // to the sidebar's bottom edge. Pinning needed the tab list stretched
+        // to a predicted height, and whenever the prediction was short the
+        // button was pushed off-screen; a row in document order cannot be.
         let new_tab_button = Element::new(
             &font,
-            ElementContent::Poly {
-                line_width: metrics.underline_height.max(2),
-                poly: SizedPoly {
-                    poly: PLUS_BUTTON,
-                    width: Dimension::Pixels(plus_size),
-                    height: Dimension::Pixels(plus_size),
-                },
-            },
+            ElementContent::Text("  +  new terminal".to_string()),
         )
         .display(DisplayType::Block)
-        .vertical_align(VerticalAlign::Middle)
         .item_type(UIItemType::TabSidebar(TabSidebarItem::NewTabButton))
+        .line_height(Some(1.2))
         .padding(BoxDimension {
-            left: Dimension::Pixels(h_padding),
-            right: Dimension::Pixels(h_padding),
-            top: Dimension::Pixels(6.),
+            left: Dimension::Pixels(10.),
+            right: Dimension::Pixels(6.),
+            top: Dimension::Pixels(4.),
             bottom: Dimension::Pixels(6.),
         })
-        .border(BoxDimension {
-            left: Dimension::Pixels(1.),
-            right: Dimension::Pixels(1.),
-            top: Dimension::Pixels(1.),
-            bottom: Dimension::Pixels(1.),
-        })
         .colors(ElementColors {
-            border: BorderColor {
-                left: LinearRgba::with_components(bg_color.0 + 0.08, bg_color.1 + 0.08, bg_color.2 + 0.08, 0.5),
-                top: LinearRgba::with_components(bg_color.0 + 0.08, bg_color.1 + 0.08, bg_color.2 + 0.08, 0.5),
-                right: LinearRgba::with_components(bg_color.0 - 0.02, bg_color.1 - 0.02, bg_color.2 - 0.02, 0.5),
-                bottom: LinearRgba::with_components(bg_color.0 - 0.02, bg_color.1 - 0.02, bg_color.2 - 0.02, 0.5),
-            },
-            bg: new_tab_colors.bg_color.to_linear().into(),
+            border: BorderColor::default(),
+            bg: InheritableColor::Inherited,
             text: new_tab_colors.fg_color.to_linear().into(),
         })
         .hover_colors(Some(ElementColors {
-            border: BorderColor::new(LinearRgba::with_components(bg_color.0 + 0.12, bg_color.1 + 0.12, bg_color.2 + 0.12, 0.8)),
+            border: BorderColor::default(),
             bg: new_tab_hover.bg_color.to_linear().into(),
             text: new_tab_hover.fg_color.to_linear().into(),
         }))
         .min_width(Some(Dimension::Pixels(sidebar_width)));
 
-        // Measure the button rather than estimating it. The old
-        // `cell_height + 16` guess was the same class of bug as the agents
-        // estimate: when it undershot, the reserved space was short by the
-        // difference and the last row was clipped part-way through.
-        let button_height = self
-            .compute_element(&context_probe, &new_tab_button)
-            .map(|c| c.bounds.height())
-            .unwrap_or_else(|_| metrics.cell_size.height as f32 + 16.);
         // Claude agents / tmux sessions.
         //
         // The WebView sidebar renders this from serialize_sidebar_state(), but
@@ -1306,7 +1263,7 @@ impl crate::TermWindow {
         // many agents. Rows beyond the budget are summarised rather than
         // silently dropped, and Ctrl+Shift+S still lists every session.
         let row_budget = {
-            let avail = ((window_height - button_height) * 0.5).max(0.);
+            let avail = (window_height * 0.5).max(0.);
             let row_h = metrics.cell_size.height as f32 * 1.2 + 10.;
             if row_h > 0. { (avail / row_h) as usize } else { usize::MAX }
         };
@@ -1329,24 +1286,31 @@ impl crate::TermWindow {
         };
 
 
-        let tabs_min_height =
-            window_height - button_height - agents_height - 3.; // 3px top padding
+        // Everything flows in document order, with nothing stretched to pin a
+        // child to the window's bottom edge.
+        //
+        // The old layout padded this container out to
+        // `window_height - button_height - agents_height` so the new-tab button
+        // sat at the bottom. That is a *minimum*, so whenever the tab list's own
+        // content was taller than the remainder the container grew past it and
+        // pushed the button below the visible area — which is why the button
+        // looked like it never rendered on Linux. It was painting the whole
+        // time, just off-screen, and no amount of adjusting the reservation
+        // could fix a prediction the layout is free to exceed.
         let tabs_container = Element::new(&font, ElementContent::Children(tab_elements))
             .display(DisplayType::Block)
-            .min_height(Some(Dimension::Pixels(tabs_min_height.max(0.))))
             .colors(ElementColors {
                 border: BorderColor::default(),
                 bg: InheritableColor::Inherited,
                 text: InheritableColor::Inherited,
             });
 
-        let mut sidebar_children = vec![tabs_container];
+        // The new-terminal row closes the local group instead of floating at
+        // the bottom of the sidebar, so it needs no height prediction at all.
+        let mut sidebar_children = vec![tabs_container, new_tab_button];
         if let Some(section) = agents_section {
             sidebar_children.push(section);
         }
-        // New-tab button last, so it stays pinned below the agent list rather
-        // than floating between the pane tree and the agents section.
-        sidebar_children.push(new_tab_button);
 
         // Root container
         let root = Element::new(
