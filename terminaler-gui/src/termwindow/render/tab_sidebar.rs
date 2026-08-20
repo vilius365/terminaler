@@ -1118,35 +1118,10 @@ impl crate::TermWindow {
         }
 
         // Wrap tab entries in a container with min_height to push + button to bottom
-        let button_height = metrics.cell_size.height as f32 + 16.; // button + padding
-        // Claude agents / tmux sessions.
-        //
-        // The WebView sidebar renders this from serialize_sidebar_state(), but
-        // that path is Windows-only (WebView2), so on every other platform the
-        // section did not exist at all. Build it natively from the same
-        // discovery snapshot the Ctrl+Shift+S picker reads, which already
-        // covers every machine in the interconnect registry.
-        //
-        // Built here, before tabs_min_height, because the tabs container is
-        // stretched to push the new-tab button to the bottom of the sidebar:
-        // its height has to account for this section or the agent rows land
-        // below the visible area.
-        // Cap the section at half the sidebar so the tab and pane tree, which
-        // is the primary content, cannot be squeezed out by a machine running
-        // many agents. Rows beyond the budget are summarised rather than
-        // silently dropped, and Ctrl+Shift+S still lists every session.
-        let row_budget = {
-            let avail = ((window_height - button_height) * 0.5).max(0.);
-            let row_h = metrics.cell_size.height as f32 * 1.2 + 10.;
-            if row_h > 0. { (avail / row_h) as usize } else { usize::MAX }
-        };
-        let agents_section =
-            self.build_agents_section(&font, &title_font, &metrics, palette, bg_color,
-                                      text_color, active_tab_colors, sidebar_width,
-                                      row_budget);
-
+        // Layout context used only to measure elements before the final tree
+        // is assembled; identical to the one used for the real layout below.
         let dpi = self.dimensions.dpi as f32;
-        let context = LayoutContext {
+        let context_probe = LayoutContext {
             width: config::DimensionContext {
                 dpi,
                 pixel_max: sidebar_width,
@@ -1162,31 +1137,6 @@ impl crate::TermWindow {
             gl_state: self.render_state.as_ref().unwrap(),
             zindex: 10,
         };
-
-        // Measure the section instead of estimating it. A hand-computed guess
-        // has to match what layout actually produces to the pixel; when it came
-        // up short the tabs container over-reserved and pushed the agent rows
-        // off the bottom of the window, which a maximized window made obvious
-        // because it fits more rows.
-        let agents_height = match agents_section.as_ref() {
-            Some(section) => self
-                .compute_element(&context, section)
-                .map(|c| c.bounds.height())
-                .unwrap_or(0.),
-            None => 0.,
-        };
-
-
-        let tabs_min_height =
-            window_height - button_height - agents_height - 3.; // 3px top padding
-        let tabs_container = Element::new(&font, ElementContent::Children(tab_elements))
-            .display(DisplayType::Block)
-            .min_height(Some(Dimension::Pixels(tabs_min_height.max(0.))))
-            .colors(ElementColors {
-                border: BorderColor::default(),
-                bg: InheritableColor::Inherited,
-                text: InheritableColor::Inherited,
-            });
 
         // New tab button — centered, stuck to bottom
         let new_tab_colors = colors.new_tab();
@@ -1236,10 +1186,72 @@ impl crate::TermWindow {
         }))
         .min_width(Some(Dimension::Pixels(sidebar_width)));
 
-        let mut sidebar_children = vec![tabs_container, new_tab_button];
+        // Measure the button rather than estimating it. The old
+        // `cell_height + 16` guess was the same class of bug as the agents
+        // estimate: when it undershot, the reserved space was short by the
+        // difference and the last row was clipped part-way through.
+        let button_height = self
+            .compute_element(&context_probe, &new_tab_button)
+            .map(|c| c.bounds.height())
+            .unwrap_or_else(|_| metrics.cell_size.height as f32 + 16.);
+        // Claude agents / tmux sessions.
+        //
+        // The WebView sidebar renders this from serialize_sidebar_state(), but
+        // that path is Windows-only (WebView2), so on every other platform the
+        // section did not exist at all. Build it natively from the same
+        // discovery snapshot the Ctrl+Shift+S picker reads, which already
+        // covers every machine in the interconnect registry.
+        //
+        // Built here, before tabs_min_height, because the tabs container is
+        // stretched to push the new-tab button to the bottom of the sidebar:
+        // its height has to account for this section or the agent rows land
+        // below the visible area.
+        // Cap the section at half the sidebar so the tab and pane tree, which
+        // is the primary content, cannot be squeezed out by a machine running
+        // many agents. Rows beyond the budget are summarised rather than
+        // silently dropped, and Ctrl+Shift+S still lists every session.
+        let row_budget = {
+            let avail = ((window_height - button_height) * 0.5).max(0.);
+            let row_h = metrics.cell_size.height as f32 * 1.2 + 10.;
+            if row_h > 0. { (avail / row_h) as usize } else { usize::MAX }
+        };
+        let agents_section =
+            self.build_agents_section(&font, &title_font, &metrics, palette, bg_color,
+                                      text_color, active_tab_colors, sidebar_width,
+                                      row_budget);
+
+        // Measure the section instead of estimating it. A hand-computed guess
+        // has to match what layout actually produces to the pixel; when it came
+        // up short the tabs container over-reserved and pushed the agent rows
+        // off the bottom of the window, which a maximized window made obvious
+        // because it fits more rows.
+        let agents_height = match agents_section.as_ref() {
+            Some(section) => self
+                .compute_element(&context_probe, section)
+                .map(|c| c.bounds.height())
+                .unwrap_or(0.),
+            None => 0.,
+        };
+
+
+        let tabs_min_height =
+            window_height - button_height - agents_height - 3.; // 3px top padding
+        let tabs_container = Element::new(&font, ElementContent::Children(tab_elements))
+            .display(DisplayType::Block)
+            .min_height(Some(Dimension::Pixels(tabs_min_height.max(0.))))
+            .colors(ElementColors {
+                border: BorderColor::default(),
+                bg: InheritableColor::Inherited,
+                text: InheritableColor::Inherited,
+            });
+
+        let mut sidebar_children = vec![tabs_container];
         if let Some(section) = agents_section {
             sidebar_children.push(section);
         }
+        // New-tab button last, so it stays pinned below the agent list rather
+        // than floating between the pane tree and the agents section.
+        sidebar_children.push(new_tab_button);
 
         // Root container
         let root = Element::new(
@@ -1260,7 +1272,7 @@ impl crate::TermWindow {
         })
         .min_width(Some(Dimension::Pixels(sidebar_width)));
 
-        let mut computed = self.compute_element(&context, &root)?;
+        let mut computed = self.compute_element(&context_probe, &root)?;
 
         // Position sidebar below the title bar
         let x_offset = match self.config.tab_sidebar_position {
