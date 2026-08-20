@@ -245,6 +245,16 @@ impl crate::TermWindow {
         let border_subtle = rgb(0x2e, 0x2e, 0x2e);
         let bg_base = rgb(0x12, 0x12, 0x12);
 
+        // How many character cells fit inside a row card: the sidebar minus the
+        // row's margins (10+6), padding (6+6) and border (1+1). Derived rather
+        // than hardcoded so a resized sidebar re-flows the columns.
+        let cell_w = metrics.cell_size.width as f32;
+        let row_cols = if cell_w > 0. {
+            (((sidebar_width - 30.) / cell_w).floor() as usize).max(12)
+        } else {
+            24
+        };
+
         let mut children = vec![];
 
         for snap in &snaps {
@@ -299,20 +309,30 @@ impl crate::TermWindow {
             );
 
             for session in &snap.sessions {
-                // Fixed-width columns. Truncating alone was not enough: a short
-                // name pulled the badge and window count left, so rows with
-                // different text lengths had visibly different structure. Pad
-                // each column to a constant cell count instead, so every row is
-                // the same shape and only its content differs.
-                const NAME_COLS: usize = 14;
-                const BADGE_COLS: usize = 10;
+                // Columns are sized from the sidebar width rather than fixed,
+                // and share it by priority: the project directory (the tmux
+                // session name) is what identifies a row, so it takes the slack
+                // and is the last thing to be truncated; the agent badge takes
+                // only what it needs; the window count is a fixed tail. Every
+                // row still pads to the same totals, so widening the sidebar
+                // reveals more of the name without changing the row's shape.
+                let meta_cols = 4; // "  1w"
+                let badge_cols = session
+                    .agent
+                    .as_deref()
+                    .map(|a| a.chars().count().min(12))
+                    .unwrap_or(0);
+                let badge_field = if badge_cols > 0 { badge_cols + 2 } else { 0 };
+                let name_cols = row_cols
+                    .saturating_sub(meta_cols + badge_field)
+                    .max(6);
 
                 let mut row_children = vec![Element::new(
                     font,
                     ElementContent::Text(format!(
                         "{:<width$}",
-                        truncate_str(&session.session, NAME_COLS),
-                        width = NAME_COLS
+                        truncate_str(&session.session, name_cols),
+                        width = name_cols
                     )),
                 )
                 .display(DisplayType::Inline)
@@ -342,8 +362,8 @@ impl crate::TermWindow {
                             font,
                             ElementContent::Text(format!(
                                 " {:<width$} ",
-                                truncate_str(agent, BADGE_COLS),
-                                width = BADGE_COLS
+                                truncate_str(agent, badge_cols),
+                                width = badge_cols
                             )),
                         )
                         .display(DisplayType::Inline)
@@ -352,18 +372,6 @@ impl crate::TermWindow {
                             bg: badge_bg.into(),
                             text: badge_fg.into(),
                         }),
-                    );
-                } else {
-                    // Spacer of identical width, so the window-count column
-                    // starts at the same x on rows that have no agent.
-                    row_children.push(
-                        Element::new(font, ElementContent::Text(" ".repeat(BADGE_COLS + 2)))
-                            .display(DisplayType::Inline)
-                            .colors(ElementColors {
-                                border: BorderColor::default(),
-                                bg: InheritableColor::Inherited,
-                                text: InheritableColor::Inherited,
-                            }),
                     );
                 }
 
