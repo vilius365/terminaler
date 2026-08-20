@@ -908,6 +908,22 @@ impl WaylandWindowInner {
                 // Do this early because this affects surface_to_pixels/pixels_to_surface
                 self.dimensions.dpi = dpi;
 
+                // The configure size covers the whole window, decorations
+                // included. With a client-side frame the titlebar has to come
+                // off before the rest is treated as content, or the terminal is
+                // laid out taller than the visible area and its bottom rows —
+                // and anything else pinned to the bottom, such as the sidebar's
+                // agent list — are drawn past the edge of the window. Maximizing
+                // made this obvious because the compositor then dictates an
+                // exact size that the content cannot exceed.
+                if !self.window_frame.is_hidden() {
+                    if let (Some(fw), Some(fh)) = (NonZeroU32::new(w), NonZeroU32::new(h)) {
+                        let (cw, ch) = self.window_frame.subtract_borders(fw, fh);
+                        w = cw.map(|v| v.get()).unwrap_or(w);
+                        h = ch.map(|v| v.get()).unwrap_or(h);
+                    }
+                }
+
                 let mut pixel_width = self.surface_to_pixels(w.try_into().unwrap());
                 let mut pixel_height = self.surface_to_pixels(h.try_into().unwrap());
 
