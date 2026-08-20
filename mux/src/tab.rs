@@ -902,6 +902,13 @@ impl Tab {
         self.inner.lock().resize_split_by(split_index, delta)
     }
 
+    /// Flip the split containing `pane_id` between a left/right and a
+    /// top/bottom arrangement. Returns false when the pane is not in a split,
+    /// so a caller can leave the control out of its UI.
+    pub fn toggle_split_direction_for_pane(&self, pane_id: PaneId) -> bool {
+        self.inner.lock().toggle_split_direction_for_pane(pane_id)
+    }
+
     /// Adjusts the size of the active pane in the specified direction
     /// by the specified amount.
     pub fn adjust_pane_size(&self, direction: PaneDirection, amount: usize) {
@@ -1664,6 +1671,103 @@ impl TabInner {
         self.adjust_node_at_cursor(&mut cursor, delta);
         self.cascade_size_from_cursor(cursor);
         Mux::try_get().map(|mux| mux.notify(MuxNotification::TabResized(self.id)));
+    }
+
+    /// Flip the direction of the split that directly contains `pane_id`.
+    ///
+    /// The pane itself is a leaf, so the node to change is its parent. The
+    /// child sizes describe the old axis and cannot carry over: a horizontal
+    /// node's `first.cols` was carved out of the width, which says nothing
+    /// about how many rows the first child should get once the split runs the
+    /// other way. apply_sizes_from_splits applies `first`/`second` verbatim
+    /// rather than redistributing, so the children have to be resized here to
+    /// span the node's full extent along the new axis; leaving the old values
+    /// in place collapses one child to nothing and the pane vanishes.
+    fn toggle_split_direction_for_pane(&mut self, pane_id: PaneId) -> bool {
+        if self.zoomed.is_some() {
+            return false;
+        }
+
+        let mut cursor = self.pane.take().unwrap().cursor();
+
+        // Walk to the leaf holding this pane, then step up to its split.
+        loop {
+            if cursor.is_leaf()
+                && cursor
+                    .leaf_mut()
+                    .map(|p| p.pane_id() == pane_id)
+                    .unwrap_or(false)
+            {
+                match cursor.go_up() {
+                    Ok(parent) => {
+                        cursor = parent;
+                        break;
+                    }
+                    // A lone pane has no split to flip.
+                    Err(c) => {
+                        self.pane.replace(c.tree());
+                        return false;
+                    }
+                }
+            }
+            match cursor.preorder_next() {
+                Ok(c) => cursor = c,
+                Err(c) => {
+                    self.pane.replace(c.tree());
+                    return false;
+                }
+            }
+        }
+
+        let cell_dimensions = self.cell_dimensions();
+        if let Ok(Some(node)) = cursor.node_mut() {
+            // Measure the node along both axes before flipping, while the
+            // helpers still agree with the stored direction.
+            let total_cols = node.width();
+            let total_rows = node.height();
+
+            node.direction = match node.direction {
+                SplitDirection::Horizontal => SplitDirection::Vertical,
+                SplitDirection::Vertical => SplitDirection::Horizontal,
+            };
+
+            // One cell of the extent is the divider, so the children share
+            // what is left. An odd remainder goes to the first child.
+            match node.direction {
+                SplitDirection::Vertical => {
+                    let usable = total_rows.saturating_sub(1);
+                    let first_rows = (usable + 1) / 2;
+                    node.first.rows = first_rows;
+                    node.second.rows = usable.saturating_sub(first_rows);
+                    node.first.cols = total_cols;
+                    node.second.cols = total_cols;
+                }
+                SplitDirection::Horizontal => {
+                    let usable = total_cols.saturating_sub(1);
+                    let first_cols = (usable + 1) / 2;
+                    node.first.cols = first_cols;
+                    node.second.cols = usable.saturating_sub(first_cols);
+                    node.first.rows = total_rows;
+                    node.second.rows = total_rows;
+                }
+            }
+
+            for part in [&mut node.first, &mut node.second] {
+                part.pixel_width = part.cols.saturating_mul(cell_dimensions.pixel_width);
+                part.pixel_height = part.rows.saturating_mul(cell_dimensions.pixel_height);
+            }
+        } else {
+            self.pane.replace(cursor.tree());
+            return false;
+        }
+
+        // Sizes across the whole tab are recomputed from the split data, the
+        // same sequence rotate_clockwise uses after it rearranges the tree.
+        self.pane.replace(cursor.tree());
+        let size = self.size;
+        apply_sizes_from_splits(self.pane.as_mut().unwrap(), &size);
+        Mux::try_get().map(|mux| mux.notify(MuxNotification::TabResized(self.id)));
+        true
     }
 
     fn adjust_node_at_cursor(&mut self, cursor: &mut Cursor, delta: isize) {
@@ -2688,6 +2792,68 @@ mod test {
         }
         fn get_current_working_dir(&self, _policy: CachePolicy) -> Option<Url> {
             None
+        }
+    }
+
+    #[test]
+    fn toggle_split_direction_keeps_both_panes_visible() {
+        let size = TerminalSize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 800,
+            pixel_height: 600,
+            dpi: 96,
+        };
+
+        let tab = Tab::new(&size);
+        tab.assign_pane(&FakePane::new(1, size));
+
+        let horz_size = tab
+            .compute_split_size(
+                0,
+                SplitRequest {
+                    direction: SplitDirection::Horizontal,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        tab.split_and_insert(
+            0,
+            SplitRequest {
+                direction: SplitDirection::Horizontal,
+                ..Default::default()
+            },
+            FakePane::new(2, horz_size.second),
+        )
+        .unwrap();
+
+        // Side by side to begin with: same top, different left.
+        let panes = tab.iter_panes();
+        assert_eq!(2, panes.len());
+        assert_eq!(panes[0].top, panes[1].top);
+        assert_ne!(panes[0].left, panes[1].left);
+
+        assert!(tab.toggle_split_direction_for_pane(1));
+
+        // Now stacked, and crucially both panes still occupy real space —
+        // applying the pre-flip sizes to the new axis used to collapse one of
+        // them to nothing, which read as the pane disappearing.
+        let panes = tab.iter_panes();
+        assert_eq!(2, panes.len());
+        assert_eq!(panes[0].left, panes[1].left);
+        assert_ne!(panes[0].top, panes[1].top);
+        for p in &panes {
+            assert!(p.height > 0, "pane {} collapsed: {:?}", p.index, p);
+            assert!(p.width > 0, "pane {} collapsed: {:?}", p.index, p);
+        }
+
+        // And flipping back restores a side-by-side arrangement.
+        assert!(tab.toggle_split_direction_for_pane(1));
+        let panes = tab.iter_panes();
+        assert_eq!(panes[0].top, panes[1].top);
+        assert_ne!(panes[0].left, panes[1].left);
+        for p in &panes {
+            assert!(p.height > 0 && p.width > 0, "pane {} collapsed", p.index);
         }
     }
 

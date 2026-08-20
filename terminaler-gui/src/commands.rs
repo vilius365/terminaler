@@ -1985,6 +1985,16 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             menubar: &["Edit", "Copy Mode"],
             icon: None,
         },
+        ToggleSplitDirection => CommandDef {
+            brief: "Toggle Split Direction".into(),
+            doc: "Flip the split holding the active pane between a left/right \
+            and a top/bottom arrangement"
+                .into(),
+            keys: vec![(Modifiers::CTRL.union(Modifiers::SHIFT), "e".into())],
+            args: &[ArgType::ActivePane],
+            menubar: &["Window"],
+            icon: Some("cod_split_horizontal"),
+        },
         RotatePanes(direction) => CommandDef {
             brief: format!("Rotate panes {direction:?}").into(),
             doc: format!("Rotate panes {direction:?}").into(),
@@ -2193,6 +2203,7 @@ fn compute_default_actions() -> Vec<KeyAssignment> {
         }),
         RotatePanes(RotationDirection::Clockwise),
         RotatePanes(RotationDirection::CounterClockwise),
+        ToggleSplitDirection,
         ActivateTab(0),
         ActivateTab(1),
         ActivateTab(2),

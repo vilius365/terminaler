@@ -98,7 +98,7 @@ pub(crate) const TOAST_ICON_SIZE: f32 = 24.0;
 pub(crate) const TOAST_ICON_INSET: f32 = (TOAST_BTN_SIZE - TOAST_ICON_SIZE) / 2.0;
 pub(crate) const TOAST_GAP: f32 = 2.0;
 pub(crate) const TOAST_PADDING: f32 = 4.0;
-pub(crate) const TOAST_COUNT: usize = 9;
+pub(crate) const TOAST_COUNT: usize = 10;
 /// Total width: padding + 9*btn + 8*gap + padding
 pub(crate) const TOAST_WIDTH: f32 =
     TOAST_PADDING * 2.0 + TOAST_COUNT as f32 * TOAST_BTN_SIZE + (TOAST_COUNT - 1) as f32 * TOAST_GAP;
@@ -123,6 +123,7 @@ pub(crate) const TOAST_BUTTON_NAMES: [&str; TOAST_COUNT] = [
     "dev",
     "claude-code",
     "move-to-tab",
+    "flip-split",
 ];
 
 // ---------------------------------------------------------------------------
@@ -146,6 +147,14 @@ const TOAST_LAYOUT_RECTS: [&[(f32, f32, f32, f32)]; 7] = [
     &[(0.0, 0.0, 0.46, 1.0), (0.54, 0.0, 0.46, 0.62), (0.54, 0.71, 0.46, 0.29)],
     // claude-code: big top + thin bottom
     &[(0.0, 0.0, 1.0, 0.71), (0.0, 0.79, 1.0, 0.21)],
+];
+
+/// Flip-split icon: a tall half on the left and two stacked halves on the
+/// right, showing both split arrangements side by side.
+const ICON_FLIP_SPLIT: &[(f32, f32, f32, f32)] = &[
+    (0.0, 0.0, 0.42, 1.0),
+    (0.5, 0.0, 0.5, 0.42),
+    (0.5, 0.5, 0.5, 0.5),
 ];
 
 // -- Move-to-tab icon: upward arrow (triangle head + rounded shaft) --
@@ -1325,6 +1334,22 @@ impl crate::TermWindow {
                         layers, 2, euclid::point2(ix, iy),
                         ICON_MOVE_TAB, 1, icon_sz, white,
                     ).context("toast move-tab icon")?;
+                } else if i == 9 {
+                    // Flip-split: one half upright and one laid on its side, so
+                    // the icon reads as the two arrangements the button swaps
+                    // between rather than as another layout preset.
+                    for &(xf, yf, wf, hf) in ICON_FLIP_SPLIT {
+                        self.filled_rectangle(
+                            layers, 2,
+                            euclid::rect(
+                                ix + xf * TOAST_ICON_SIZE,
+                                iy + yf * TOAST_ICON_SIZE,
+                                wf * TOAST_ICON_SIZE,
+                                hf * TOAST_ICON_SIZE,
+                            ),
+                            white,
+                        ).context("toast flip-split icon")?;
+                    }
                 } else {
                     for &(xf, yf, wf, hf) in TOAST_LAYOUT_RECTS[i - 1] {
                         self.filled_rectangle(

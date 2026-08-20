@@ -345,6 +345,8 @@ impl super::TermWindow {
                         Mux::get().remove_pane(pane_id);
                     } else if btn == "move-to-tab" {
                         self.execute_pane_to_tab(pane_id);
+                    } else if btn == "flip-split" {
+                        self.toggle_split_direction(pane_id);
                     } else {
                         self.apply_snap_layout_to_pane(pane_id, btn);
                     }
@@ -1661,7 +1663,7 @@ impl super::TermWindow {
         event: &MouseEvent,
         pane_id: mux::pane::PaneId,
     ) -> Option<&'static str> {
-        const BUTTON_NAMES: [&str; 9] = [
+        const BUTTON_NAMES: [&str; 10] = [
             "close",
             "hsplit",
             "vsplit",
@@ -1671,6 +1673,7 @@ impl super::TermWindow {
             "dev",
             "claude-code",
             "move-to-tab",
+            "flip-split",
         ];
 
         let panes = self.get_panes_to_render();

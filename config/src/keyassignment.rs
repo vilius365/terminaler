@@ -653,6 +653,9 @@ pub enum KeyAssignment {
 
     CopyMode(CopyModeAssignment),
     RotatePanes(RotationDirection),
+    /// Flip the split containing the active pane between left/right and
+    /// top/bottom.
+    ToggleSplitDirection,
     SplitPane(SplitPane),
     PaneSelect(PaneSelectArguments),
     CharSelect(CharSelectArguments),

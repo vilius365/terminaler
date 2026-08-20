@@ -3083,6 +3083,20 @@ impl TermWindow {
         .detach();
     }
 
+    /// Flip the split holding `pane_id` between left/right and top/bottom.
+    pub fn toggle_split_direction(&mut self, pane_id: PaneId) {
+        let mux = Mux::get();
+        let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
+            Some(tab) => tab,
+            None => return,
+        };
+        if tab.toggle_split_direction_for_pane(pane_id) {
+            drop(tab);
+            drop(mux);
+            self.invalidate_tab_sidebar();
+        }
+    }
+
     pub fn apply_snap_layout_to_pane(&mut self, pane_id: PaneId, name: &str) {
         let mux = Mux::get();
         let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
@@ -4510,6 +4524,13 @@ impl TermWindow {
             }
             CopyMode(_) => {
                 // NOP here; handled by the overlay directly
+            }
+            ToggleSplitDirection => {
+                let pane_id = match self.get_active_pane_or_overlay() {
+                    Some(pane) => pane.pane_id(),
+                    None => return Ok(PerformAssignmentResult::Handled),
+                };
+                self.toggle_split_direction(pane_id);
             }
             RotatePanes(direction) => {
                 let mux = Mux::get();
