@@ -199,6 +199,7 @@ impl crate::TermWindow {
         font: &Rc<LoadedFont>,
         title_font: &Rc<LoadedFont>,
         metrics: &RenderMetrics,
+        palette: &ColorPalette,
         bg_color: LinearRgba,
         text_color: LinearRgba,
         active_tab_colors: TabBarColor,
@@ -214,60 +215,170 @@ impl crate::TermWindow {
             return (None, 0.);
         }
 
-        let dim_text = LinearRgba::with_components(
-            text_color.0 * 0.65,
-            text_color.1 * 0.65,
-            text_color.2 * 0.65,
-            text_color.3,
-        );
+        // Palette matches the WebView sidebar's CSS variables so the two
+        // platforms look like the same product. Hardcoded rather than pulled
+        // from the terminal palette for exactly that reason: the Windows
+        // sidebar is fixed-colour too, and the section should not restyle
+        // itself per colour scheme when its Windows counterpart does not.
+        // sRGB -> linear, the same transfer function SrgbaTuple::to_linear
+        // applies; done inline to keep this helper dependency-free.
+        let srgb_to_linear = |c: f32| -> f32 {
+            if c <= 0.04045 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        let rgb = |r: u8, g: u8, b: u8| -> LinearRgba {
+            LinearRgba::with_components(
+                srgb_to_linear(r as f32 / 255.),
+                srgb_to_linear(g as f32 / 255.),
+                srgb_to_linear(b as f32 / 255.),
+                1.,
+            )
+        };
+        let accent_orange = rgb(0xdb, 0x8b, 0x0b);
+        let accent_green = rgb(0x3f, 0xb9, 0x50);
+        let text_primary = rgb(0xe0, 0xe0, 0xe0);
+        let text_secondary = rgb(0x99, 0x99, 0x99);
+        let text_tertiary = rgb(0x66, 0x66, 0x66);
+        let border_subtle = rgb(0x2e, 0x2e, 0x2e);
+        let bg_base = rgb(0x12, 0x12, 0x12);
 
-        let mut children = vec![Element::new(
-            title_font,
-            ElementContent::Text("AGENTS".to_string()),
-        )
-        .display(DisplayType::Block)
-        .line_height(Some(1.4))
-        .padding(BoxDimension {
-            left: Dimension::Pixels(6.),
-            right: Dimension::Pixels(6.),
-            top: Dimension::Pixels(4.),
-            bottom: Dimension::Pixels(2.),
-        })
-        .colors(ElementColors {
-            border: BorderColor::default(),
-            bg: bg_color.into(),
-            text: dim_text.into(),
-        })];
+        let mut children = vec![];
 
         for snap in &snaps {
+            if snap.sessions.is_empty() {
+                continue;
+            }
+
+            // Box header: a status dot and the machine name, mirroring
+            // .tmux-box-header / .tmux-status-dot.
+            let dot_color = match snap.status {
+                crate::tmux_discovery::BoxStatus::Ok => accent_green,
+                crate::tmux_discovery::BoxStatus::Unreachable(_) => rgb(0xf8, 0x51, 0x49),
+                _ => text_tertiary,
+            };
+            children.push(
+                Element::new(
+                    font,
+                    ElementContent::Children(vec![
+                        Element::new(font, ElementContent::Text("\u{25cf} ".to_string()))
+                            .display(DisplayType::Inline)
+                            .colors(ElementColors {
+                                border: BorderColor::default(),
+                                bg: InheritableColor::Inherited,
+                                text: dot_color.into(),
+                            }),
+                        Element::new(
+                            font,
+                            ElementContent::Text(truncate_str(&snap.box_name, 18)),
+                        )
+                        .display(DisplayType::Inline)
+                        .colors(ElementColors {
+                            border: BorderColor::default(),
+                            bg: InheritableColor::Inherited,
+                            text: text_secondary.into(),
+                        }),
+                    ]),
+                )
+                .display(DisplayType::Block)
+                .line_height(Some(1.3))
+                .padding(BoxDimension {
+                    left: Dimension::Pixels(8.),
+                    right: Dimension::Pixels(6.),
+                    top: Dimension::Pixels(5.),
+                    bottom: Dimension::Pixels(2.),
+                })
+                .colors(ElementColors {
+                    border: BorderColor::default(),
+                    bg: bg_color.into(),
+                    text: text_secondary.into(),
+                }),
+            );
+
             for session in &snap.sessions {
-                // ⇄ marks an interconnect instance name, matching the
-                // statusline and the WebView sidebar's convention.
-                let label = match session.agent.as_deref() {
-                    Some(agent) if session.agent_is_instance => {
-                        format!("⇄ {}  {}:{}", agent, snap.box_name, session.session)
+                // Session name absorbs the slack and truncates, so the agent
+                // badge stays visible however narrow the sidebar is — the same
+                // reasoning as .tmux-session-name's flex rule.
+                let mut row_children = vec![Element::new(
+                    font,
+                    ElementContent::Text(truncate_str(&session.session, 14)),
+                )
+                .display(DisplayType::Inline)
+                .colors(ElementColors {
+                    border: BorderColor::default(),
+                    bg: InheritableColor::Inherited,
+                    text: if session.attachable {
+                        text_primary
+                    } else {
+                        text_tertiary
                     }
-                    Some(agent) => format!("{}  {}:{}", agent, snap.box_name, session.session),
-                    None => format!("{}:{}", snap.box_name, session.session),
-                };
+                    .into(),
+                })];
 
-                // Registry-only entries have no transport to attach through,
-                // so they are dimmed and inert rather than clickable.
-                let row_text = if session.attachable { text_color } else { dim_text };
+                if let Some(agent) = &session.agent {
+                    // A named interconnect instance is the more specific fact,
+                    // so it gets the filled orange badge with dark text; a
+                    // generic agent type stays muted. Matches
+                    // .tmux-session-agent{,-instance}.
+                    let (badge_bg, badge_fg) = if session.agent_is_instance {
+                        (accent_orange, bg_base)
+                    } else {
+                        (border_subtle, accent_orange)
+                    };
+                    row_children.push(
+                        Element::new(
+                            font,
+                            ElementContent::Text(format!(" {} ", truncate_str(agent, 10))),
+                        )
+                        .display(DisplayType::Inline)
+                        .colors(ElementColors {
+                            border: BorderColor::default(),
+                            bg: badge_bg.into(),
+                            text: badge_fg.into(),
+                        }),
+                    );
+                }
 
-                let mut row = Element::new(font, ElementContent::Text(label))
+                // Window count, quiet like .tmux-session-meta.
+                row_children.push(
+                    Element::new(font, ElementContent::Text(format!("  {}w", session.windows)))
+                        .display(DisplayType::Inline)
+                        .colors(ElementColors {
+                            border: BorderColor::default(),
+                            bg: InheritableColor::Inherited,
+                            text: text_tertiary.into(),
+                        }),
+                );
+
+                // Indented card with a subtle border, hovering to orange —
+                // .tmux-session-row and its :hover rule.
+                let mut row = Element::new(font, ElementContent::Children(row_children))
                     .display(DisplayType::Block)
-                    .line_height(Some(1.1))
-                    .padding(BoxDimension {
-                        left: Dimension::Pixels(8.),
+                    .line_height(Some(1.2))
+                    .margin(BoxDimension {
+                        left: Dimension::Pixels(10.),
                         right: Dimension::Pixels(6.),
+                        top: Dimension::Pixels(2.),
+                        bottom: Dimension::Pixels(2.),
+                    })
+                    .padding(BoxDimension {
+                        left: Dimension::Pixels(6.),
+                        right: Dimension::Pixels(6.),
+                        top: Dimension::Pixels(2.),
+                        bottom: Dimension::Pixels(2.),
+                    })
+                    .border(BoxDimension {
+                        left: Dimension::Pixels(1.),
+                        right: Dimension::Pixels(1.),
                         top: Dimension::Pixels(1.),
                         bottom: Dimension::Pixels(1.),
                     })
                     .colors(ElementColors {
-                        border: BorderColor::default(),
-                        bg: bg_color.into(),
-                        text: row_text.into(),
+                        border: BorderColor::new(border_subtle),
+                        bg: border_subtle.into(),
+                        text: text_primary.into(),
                     });
 
                 if session.attachable {
@@ -277,9 +388,9 @@ impl crate::TermWindow {
                             session: session.session.clone(),
                         }))
                         .hover_colors(Some(ElementColors {
-                            border: BorderColor::default(),
-                            bg: active_tab_colors.bg_color.to_linear().into(),
-                            text: active_tab_colors.fg_color.to_linear().into(),
+                            border: BorderColor::new(accent_orange),
+                            bg: border_subtle.into(),
+                            text: text_primary.into(),
                         }));
                 }
 
@@ -287,12 +398,18 @@ impl crate::TermWindow {
             }
         }
 
-        // Height estimate mirrors the line heights and padding above: the
-        // header plus one row per session. compute_element would give an exact
-        // figure, but it needs a LayoutContext that does not exist yet at the
-        // point the caller has to reserve this space.
+        if children.is_empty() {
+            return (None, 0.);
+        }
+
+        // Height estimate mirrors the line heights and padding above: separator,
+        // header, then one row per session. compute_element would be exact, but
+        // it needs a LayoutContext that does not exist where the caller has to
+        // reserve this space.
         let cell_h = metrics.cell_size.height as f32;
-        let height = (cell_h * 1.4 + 6.) + (row_count as f32) * (cell_h * 1.1 + 2.);
+        let box_count = snaps.iter().filter(|s| !s.sessions.is_empty()).count() as f32;
+        let height = box_count * (cell_h * 1.3 + 7.)
+            + (row_count as f32) * (cell_h * 1.2 + 10.);
 
         let section = Element::new(font, ElementContent::Children(children))
             .display(DisplayType::Block)
@@ -913,8 +1030,8 @@ impl crate::TermWindow {
         // its height has to account for this section or the agent rows land
         // below the visible area.
         let (agents_section, agents_height) =
-            self.build_agents_section(&font, &title_font, &metrics, bg_color, text_color,
-                                      active_tab_colors, sidebar_width);
+            self.build_agents_section(&font, &title_font, &metrics, palette, bg_color,
+                                      text_color, active_tab_colors, sidebar_width);
 
         let tabs_min_height =
             window_height - button_height - agents_height - 3.; // 3px top padding
