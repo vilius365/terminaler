@@ -776,7 +776,14 @@ impl TermWindow {
 
         // Initially we have only a single tab, so take that into account
         // for the tab bar state.
-        let show_tab_bar = config.enable_tab_bar && !config.hide_tab_bar_if_only_one_tab;
+        //
+        // The vertical sidebar already lists the tabs, so the horizontal bar
+        // has nothing left to draw when it is enabled: it reserved a row of
+        // empty space between the window titlebar and the terminal. Treat the
+        // sidebar as replacing the horizontal bar rather than stacking with it.
+        let show_tab_bar = config.enable_tab_bar
+            && !config.tab_sidebar_enabled
+            && !config.hide_tab_bar_if_only_one_tab;
         let tab_bar_height = if show_tab_bar {
             Self::tab_bar_pixel_height_impl(&config, &fontconfig, &render_metrics)? as usize
         } else {
@@ -1882,9 +1889,11 @@ impl TermWindow {
             _ => return,
         };
         if window.len() == 1 {
-            self.show_tab_bar = config.enable_tab_bar && !config.hide_tab_bar_if_only_one_tab;
+            self.show_tab_bar = config.enable_tab_bar
+                && !config.tab_sidebar_enabled
+                && !config.hide_tab_bar_if_only_one_tab;
         } else {
-            self.show_tab_bar = config.enable_tab_bar;
+            self.show_tab_bar = config.enable_tab_bar && !config.tab_sidebar_enabled;
         }
         *self.cursor_blink_state.borrow_mut() = ColorEase::new(
             config.cursor_blink_rate,
@@ -2151,9 +2160,11 @@ impl TermWindow {
             window.set_title(&title);
 
             let show_tab_bar = if num_tabs == 1 {
-                self.config.enable_tab_bar && !self.config.hide_tab_bar_if_only_one_tab
-            } else {
                 self.config.enable_tab_bar
+                    && !self.config.tab_sidebar_enabled
+                    && !self.config.hide_tab_bar_if_only_one_tab
+            } else {
+                self.config.enable_tab_bar && !self.config.tab_sidebar_enabled
             };
 
             // If the number of tabs changed and caused the tab bar to
