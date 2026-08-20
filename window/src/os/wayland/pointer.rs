@@ -231,16 +231,24 @@ impl WaylandState {
                     PointerEventKind::Leave { .. } => {
                         inner.window_frame.click_point_left();
                     }
-                    PointerEventKind::Motion { .. } => {
+                    PointerEventKind::Motion { time } => {
                         inner.window_frame.click_point_moved(
-                            Duration::ZERO,
+                            Duration::from_millis(time as u64),
                             &evt.surface.id(),
                             x,
                             y,
                         );
                     }
-                    PointerEventKind::Press { button, serial, .. }
-                    | PointerEventKind::Release { button, serial, .. } => {
+                    PointerEventKind::Press {
+                        button,
+                        serial,
+                        time,
+                    }
+                    | PointerEventKind::Release {
+                        button,
+                        serial,
+                        time,
+                    } => {
                         let pressed = if matches!(evt.kind, PointerEventKind::Press { .. }) {
                             true
                         } else {
@@ -251,9 +259,18 @@ impl WaylandState {
                             0x111 => FrameClick::Alternate,
                             _ => continue,
                         };
-                        if let Some(action) =
-                            inner.window_frame.on_click(Duration::ZERO, click, pressed)
-                        {
+                        // The frame compares successive click timestamps to
+                        // spot a double click. Passing Duration::ZERO made every
+                        // click look like it arrived 0ms after the previous one,
+                        // so a single click on the titlebar was treated as a
+                        // double click and maximized the window instead of
+                        // starting a drag. `time` is the event's own millisecond
+                        // clock, which is what the comparison expects.
+                        if let Some(action) = inner.window_frame.on_click(
+                            Duration::from_millis(time as u64),
+                            click,
+                            pressed,
+                        ) {
                             inner.frame_action(pointer, serial, action);
                         }
                     }
