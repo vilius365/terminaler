@@ -2,7 +2,7 @@ use crate::customglyph::*;
 use crate::termwindow::box_model::*;
 use crate::termwindow::{SidebarTabInfo, TabSidebarItem, UIItem, UIItemType};
 use crate::utilsprites::RenderMetrics;
-use config::{Dimension, TabBarColors, TabSidebarPosition};
+use config::{Dimension, TabBarColor, TabBarColors, TabSidebarPosition};
 use mux::pane::CachePolicy;
 use mux::tab::TabId;
 use mux::Mux;
@@ -186,6 +186,124 @@ impl crate::TermWindow {
             }
         }
         false
+    }
+
+    /// Build the AGENTS section listing discovered Claude agents / tmux
+    /// sessions, returning it with the vertical space it needs so the caller
+    /// can reserve room for it.
+    ///
+    /// Returns (None, 0.) when the feature is off or nothing was discovered,
+    /// so the sidebar keeps its previous layout exactly.
+    fn build_agents_section(
+        &self,
+        font: &Rc<LoadedFont>,
+        title_font: &Rc<LoadedFont>,
+        metrics: &RenderMetrics,
+        bg_color: LinearRgba,
+        text_color: LinearRgba,
+        active_tab_colors: TabBarColor,
+        sidebar_width: f32,
+    ) -> (Option<Element>, f32) {
+        if !self.config.tmux.as_ref().map_or(false, |t| t.enabled) {
+            return (None, 0.);
+        }
+
+        let snaps = crate::tmux_discovery::snapshot();
+        let row_count: usize = snaps.iter().map(|s| s.sessions.len()).sum();
+        if row_count == 0 {
+            return (None, 0.);
+        }
+
+        let dim_text = LinearRgba::with_components(
+            text_color.0 * 0.65,
+            text_color.1 * 0.65,
+            text_color.2 * 0.65,
+            text_color.3,
+        );
+
+        let mut children = vec![Element::new(
+            title_font,
+            ElementContent::Text("AGENTS".to_string()),
+        )
+        .display(DisplayType::Block)
+        .line_height(Some(1.4))
+        .padding(BoxDimension {
+            left: Dimension::Pixels(6.),
+            right: Dimension::Pixels(6.),
+            top: Dimension::Pixels(4.),
+            bottom: Dimension::Pixels(2.),
+        })
+        .colors(ElementColors {
+            border: BorderColor::default(),
+            bg: bg_color.into(),
+            text: dim_text.into(),
+        })];
+
+        for snap in &snaps {
+            for session in &snap.sessions {
+                // ⇄ marks an interconnect instance name, matching the
+                // statusline and the WebView sidebar's convention.
+                let label = match session.agent.as_deref() {
+                    Some(agent) if session.agent_is_instance => {
+                        format!("⇄ {}  {}:{}", agent, snap.box_name, session.session)
+                    }
+                    Some(agent) => format!("{}  {}:{}", agent, snap.box_name, session.session),
+                    None => format!("{}:{}", snap.box_name, session.session),
+                };
+
+                // Registry-only entries have no transport to attach through,
+                // so they are dimmed and inert rather than clickable.
+                let row_text = if session.attachable { text_color } else { dim_text };
+
+                let mut row = Element::new(font, ElementContent::Text(label))
+                    .display(DisplayType::Block)
+                    .line_height(Some(1.1))
+                    .padding(BoxDimension {
+                        left: Dimension::Pixels(8.),
+                        right: Dimension::Pixels(6.),
+                        top: Dimension::Pixels(1.),
+                        bottom: Dimension::Pixels(1.),
+                    })
+                    .colors(ElementColors {
+                        border: BorderColor::default(),
+                        bg: bg_color.into(),
+                        text: row_text.into(),
+                    });
+
+                if session.attachable {
+                    row = row
+                        .item_type(UIItemType::TabSidebar(TabSidebarItem::TmuxSession {
+                            box_name: snap.box_name.clone(),
+                            session: session.session.clone(),
+                        }))
+                        .hover_colors(Some(ElementColors {
+                            border: BorderColor::default(),
+                            bg: active_tab_colors.bg_color.to_linear().into(),
+                            text: active_tab_colors.fg_color.to_linear().into(),
+                        }));
+                }
+
+                children.push(row);
+            }
+        }
+
+        // Height estimate mirrors the line heights and padding above: the
+        // header plus one row per session. compute_element would give an exact
+        // figure, but it needs a LayoutContext that does not exist yet at the
+        // point the caller has to reserve this space.
+        let cell_h = metrics.cell_size.height as f32;
+        let height = (cell_h * 1.4 + 6.) + (row_count as f32) * (cell_h * 1.1 + 2.);
+
+        let section = Element::new(font, ElementContent::Children(children))
+            .display(DisplayType::Block)
+            .colors(ElementColors {
+                border: BorderColor::default(),
+                bg: bg_color.into(),
+                text: text_color.into(),
+            })
+            .min_width(Some(Dimension::Pixels(sidebar_width)));
+
+        (Some(section), height)
     }
 
     pub fn build_tab_sidebar(
@@ -782,7 +900,24 @@ impl crate::TermWindow {
 
         // Wrap tab entries in a container with min_height to push + button to bottom
         let button_height = metrics.cell_size.height as f32 + 16.; // button + padding
-        let tabs_min_height = window_height - button_height - 3.; // 3px top padding
+        // Claude agents / tmux sessions.
+        //
+        // The WebView sidebar renders this from serialize_sidebar_state(), but
+        // that path is Windows-only (WebView2), so on every other platform the
+        // section did not exist at all. Build it natively from the same
+        // discovery snapshot the Ctrl+Shift+S picker reads, which already
+        // covers every machine in the interconnect registry.
+        //
+        // Built here, before tabs_min_height, because the tabs container is
+        // stretched to push the new-tab button to the bottom of the sidebar:
+        // its height has to account for this section or the agent rows land
+        // below the visible area.
+        let (agents_section, agents_height) =
+            self.build_agents_section(&font, &title_font, &metrics, bg_color, text_color,
+                                      active_tab_colors, sidebar_width);
+
+        let tabs_min_height =
+            window_height - button_height - agents_height - 3.; // 3px top padding
         let tabs_container = Element::new(&font, ElementContent::Children(tab_elements))
             .display(DisplayType::Block)
             .min_height(Some(Dimension::Pixels(tabs_min_height.max(0.))))
@@ -840,108 +975,9 @@ impl crate::TermWindow {
         }))
         .min_width(Some(Dimension::Pixels(sidebar_width)));
 
-        // Claude agents / tmux sessions.
-        //
-        // The WebView sidebar renders this from serialize_sidebar_state(), but
-        // that whole path is Windows-only (WebView2), so on every other platform
-        // the section simply did not exist. Build it natively from the same
-        // discovery snapshot the Ctrl+Shift+S picker uses, which already covers
-        // every machine in the interconnect registry, not just configured boxes.
         let mut sidebar_children = vec![tabs_container, new_tab_button];
-        if self.config.tmux.as_ref().map_or(false, |t| t.enabled) {
-            let snaps = crate::tmux_discovery::snapshot();
-            if !snaps.is_empty() {
-                let dim_text = LinearRgba::with_components(
-                    text_color.0 * 0.65,
-                    text_color.1 * 0.65,
-                    text_color.2 * 0.65,
-                    text_color.3,
-                );
-
-                let mut agent_children = vec![Element::new(
-                    &title_font,
-                    ElementContent::Text("AGENTS".to_string()),
-                )
-                .display(DisplayType::Block)
-                .line_height(Some(1.4))
-                .padding(BoxDimension {
-                    left: Dimension::Pixels(6.),
-                    right: Dimension::Pixels(6.),
-                    top: Dimension::Pixels(4.),
-                    bottom: Dimension::Pixels(2.),
-                })
-                .colors(ElementColors {
-                    border: BorderColor::default(),
-                    bg: bg_color.into(),
-                    text: dim_text.into(),
-                })];
-
-                for snap in &snaps {
-                    for session in &snap.sessions {
-                        // ⇄ marks an interconnect instance name, matching the
-                        // statusline and the WebView sidebar's convention.
-                        let label = match session.agent.as_deref() {
-                            Some(agent) if session.agent_is_instance => {
-                                format!("⇄ {}  {}:{}", agent, snap.box_name, session.session)
-                            }
-                            Some(agent) => {
-                                format!("{}  {}:{}", agent, snap.box_name, session.session)
-                            }
-                            None => format!("{}:{}", snap.box_name, session.session),
-                        };
-
-                        // Non-attachable entries come from the registry alone
-                        // (no transport configured), so they are shown dimmed
-                        // and are not clickable.
-                        let row_text = if session.attachable {
-                            text_color
-                        } else {
-                            dim_text
-                        };
-
-                        let mut row = Element::new(&font, ElementContent::Text(label))
-                            .display(DisplayType::Block)
-                            .line_height(Some(1.1))
-                            .padding(BoxDimension {
-                                left: Dimension::Pixels(8.),
-                                right: Dimension::Pixels(6.),
-                                top: Dimension::Pixels(1.),
-                                bottom: Dimension::Pixels(1.),
-                            })
-                            .colors(ElementColors {
-                                border: BorderColor::default(),
-                                bg: bg_color.into(),
-                                text: row_text.into(),
-                            });
-
-                        if session.attachable {
-                            row = row
-                                .item_type(UIItemType::TabSidebar(TabSidebarItem::TmuxSession {
-                                    box_name: snap.box_name.clone(),
-                                    session: session.session.clone(),
-                                }))
-                                .hover_colors(Some(ElementColors {
-                                    border: BorderColor::default(),
-                                    bg: active_tab_colors.bg_color.to_linear().into(),
-                                    text: active_tab_colors.fg_color.to_linear().into(),
-                                }));
-                        }
-
-                        agent_children.push(row);
-                    }
-                }
-
-                sidebar_children.push(
-                    Element::new(&font, ElementContent::Children(agent_children))
-                        .display(DisplayType::Block)
-                        .colors(ElementColors {
-                            border: BorderColor::default(),
-                            bg: bg_color.into(),
-                            text: text_color.into(),
-                        })
-                        .min_width(Some(Dimension::Pixels(sidebar_width))),
-                );
-            }
+        if let Some(section) = agents_section {
+            sidebar_children.push(section);
         }
 
         // Root container
