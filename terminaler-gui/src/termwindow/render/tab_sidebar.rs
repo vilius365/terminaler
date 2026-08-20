@@ -306,11 +306,17 @@ impl crate::TermWindow {
         let bg_base = rgb(0x12, 0x12, 0x12);
 
         // How many character cells fit inside a row card: the sidebar minus the
-        // row's margins (10+6), padding (6+6) and border (1+1). Derived rather
-        // than hardcoded so a resized sidebar re-flows the columns.
+        // row's margins (10+6), padding (6+6) and border (1+1), and a further
+        // 10px of slack. Derived rather than hardcoded so a resized sidebar
+        // re-flows the columns.
+        //
+        // The slack is what keeps the floated agent badge inside the card.
+        // Float::Right anchors to the content extent, which knows nothing about
+        // the row's padding and border, so without it the badge overhung the
+        // right edge and was clipped by the sidebar.
         let cell_w = metrics.cell_size.width as f32;
         let row_cols = if cell_w > 0. {
-            (((sidebar_width - 30.) / cell_w).floor() as usize).max(12)
+            (((sidebar_width - 40.) / cell_w).floor() as usize).max(12)
         } else {
             24
         };
@@ -349,44 +355,14 @@ impl crate::TermWindow {
                 crate::tmux_discovery::BoxStatus::Unreachable(_) => rgb(0xf8, 0x51, 0x49),
                 _ => text_tertiary,
             };
-            children.push(
-                Element::new(
-                    font,
-                    ElementContent::Children(vec![
-                        Element::new(font, ElementContent::Text("\u{25cf} ".to_string()))
-                            .display(DisplayType::Inline)
-                            .colors(ElementColors {
-                                border: BorderColor::default(),
-                                bg: InheritableColor::Inherited,
-                                text: dot_color.into(),
-                            }),
-                        Element::new(
-                            font,
-                            ElementContent::Text(truncate_str(&snap.box_name, 18)),
-                        )
-                        .display(DisplayType::Inline)
-                        .colors(ElementColors {
-                            border: BorderColor::default(),
-                            bg: InheritableColor::Inherited,
-                            text: text_secondary.into(),
-                        }),
-                    ]),
-                )
-                .display(DisplayType::Block)
-                .line_height(Some(1.3))
-                .padding(BoxDimension {
-                    left: Dimension::Pixels(8.),
-                    right: Dimension::Pixels(6.),
-                    top: Dimension::Pixels(5.),
-                    bottom: Dimension::Pixels(2.),
-                })
-                .colors(ElementColors {
-                    border: BorderColor::default(),
-                    bg: bg_color.into(),
-                    text: text_secondary.into(),
-                })
-                .min_width(Some(Dimension::Pixels(sidebar_width))),
-            );
+            children.push(machine_header(
+                font,
+                &snap.box_name,
+                Some(dot_color),
+                text_secondary,
+                bg_color,
+                sidebar_width,
+            ));
 
             for session in &snap.sessions {
                 // Already open as a pane in this window: the local row is the
@@ -666,6 +642,24 @@ impl crate::TermWindow {
         let notif_color = LinearRgba::with_components(0.973, 0.318, 0.286, 1.0);
 
         let mut tab_elements = vec![];
+
+        // Head this window's own panes with a group heading, matching the box
+        // headings the discovered machines get below. Without it the pane list
+        // reads as an unlabelled list that happens to sit above the machines,
+        // which is what made the sidebar look like two competing lists. No
+        // status dot: these panes are live mux state, with no poller behind
+        // them whose reachability could be reported.
+        //
+        // Uses the same muted grey as the box headings rather than the sidebar's
+        // text colour, so the two headings carry equal weight.
+        tab_elements.push(machine_header(
+            &font,
+            "local",
+            None,
+            header_text_color(),
+            bg_color,
+            sidebar_width,
+        ));
 
         for (tab_idx, tab) in mux_window.iter().enumerate() {
             let tab_id = tab.tab_id();
@@ -1948,6 +1942,85 @@ fn find_git_branch_uncached(path: &str) -> Option<String> {
 }
 
 /// Truncate a string to max_chars, appending "..." if truncated.
+/// The muted grey both sidebar group headings use, matching the WebView
+/// sidebar's --text-secondary. Defined once so the local heading and the box
+/// headings cannot drift apart.
+fn header_text_color() -> LinearRgba {
+    fn srgb_to_linear(c: f32) -> f32 {
+        if c <= 0.04045 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    }
+    let c = srgb_to_linear(0x99 as f32 / 255.);
+    LinearRgba::with_components(c, c, c, 1.)
+}
+
+/// A group heading in the sidebar: an optional status dot and a machine name.
+///
+/// Shared by the discovered boxes and by the local pane list so the two read as
+/// one grouped system rather than two lists that happen to sit above each other.
+/// `dot` is None for the local group, which has no poller and so nothing to
+/// report a reachability status for.
+fn machine_header(
+    font: &Rc<LoadedFont>,
+    name: &str,
+    dot: Option<LinearRgba>,
+    text_color: LinearRgba,
+    bg_color: LinearRgba,
+    sidebar_width: f32,
+) -> Element {
+    let mut parts = vec![];
+    if let Some(dot_color) = dot {
+        parts.push(
+            Element::new(font, ElementContent::Text("\u{25cf} ".to_string()))
+                .display(DisplayType::Inline)
+                .colors(ElementColors {
+                    border: BorderColor::default(),
+                    bg: InheritableColor::Inherited,
+                    text: dot_color.into(),
+                }),
+        );
+    } else {
+        // Keep the name aligned with the dotted headers below it.
+        parts.push(
+            Element::new(font, ElementContent::Text("  ".to_string()))
+                .display(DisplayType::Inline)
+                .colors(ElementColors {
+                    border: BorderColor::default(),
+                    bg: InheritableColor::Inherited,
+                    text: text_color.into(),
+                }),
+        );
+    }
+    parts.push(
+        Element::new(font, ElementContent::Text(truncate_str(name, 18)))
+            .display(DisplayType::Inline)
+            .colors(ElementColors {
+                border: BorderColor::default(),
+                bg: InheritableColor::Inherited,
+                text: text_color.into(),
+            }),
+    );
+
+    Element::new(font, ElementContent::Children(parts))
+        .display(DisplayType::Block)
+        .line_height(Some(1.3))
+        .padding(BoxDimension {
+            left: Dimension::Pixels(8.),
+            right: Dimension::Pixels(6.),
+            top: Dimension::Pixels(5.),
+            bottom: Dimension::Pixels(2.),
+        })
+        .colors(ElementColors {
+            border: BorderColor::default(),
+            bg: bg_color.into(),
+            text: text_color.into(),
+        })
+        .min_width(Some(Dimension::Pixels(sidebar_width)))
+}
+
 fn truncate_str(s: &str, max_chars: usize) -> String {
     if s.chars().count() <= max_chars {
         s.to_string()
