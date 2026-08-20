@@ -304,6 +304,18 @@ impl TabBarState {
         line: &mut Line,
         colors: &TabBarColors,
     ) {
+        // Only draw our own minimise/maximise/close when we actually own the
+        // title bar. With INTEGRATED_BUTTONS absent — e.g. "TITLE | RESIZE",
+        // where the compositor decorates the window — the desktop already
+        // provides real controls, and drawing ours too gave two sets of
+        // buttons and looked like an override of the native ones.
+        if !config
+            .window_decorations
+            .contains(::window::WindowDecorations::INTEGRATED_BUTTONS)
+        {
+            return;
+        }
+
         let default_cell = if config.use_fancy_tab_bar {
             CellAttributes::default()
         } else {

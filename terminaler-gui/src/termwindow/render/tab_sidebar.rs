@@ -1,5 +1,9 @@
 use crate::customglyph::*;
 use crate::termwindow::box_model::*;
+use crate::termwindow::render::corners::{
+    BOTTOM_LEFT_ROUNDED_CORNER, BOTTOM_RIGHT_ROUNDED_CORNER, TOP_LEFT_ROUNDED_CORNER,
+    TOP_RIGHT_ROUNDED_CORNER,
+};
 use crate::termwindow::{SidebarTabInfo, TabSidebarItem, UIItem, UIItemType};
 use crate::utilsprites::RenderMetrics;
 use config::{Dimension, TabBarColor, TabBarColors, TabSidebarPosition};
@@ -358,8 +362,11 @@ impl crate::TermWindow {
                         (border_subtle, accent_orange)
                     };
                     row_children.push(
+                        // title_font is the window-frame font, a size down from
+                        // the terminal font: the badge is supporting detail, so
+                        // it should not compete with the project name.
                         Element::new(
-                            font,
+                            title_font,
                             ElementContent::Text(format!(
                                 " {:<width$} ",
                                 truncate_str(agent, badge_cols),
@@ -414,6 +421,29 @@ impl crate::TermWindow {
                         bg: border_subtle.into(),
                         text: text_primary.into(),
                     })
+                    // Rounded card, matching .tmux-session-row's border-radius.
+                    .border_corners(Some(Corners {
+                        top_left: SizedPoly {
+                            width: Dimension::Cells(0.3),
+                            height: Dimension::Cells(0.3),
+                            poly: TOP_LEFT_ROUNDED_CORNER,
+                        },
+                        top_right: SizedPoly {
+                            width: Dimension::Cells(0.3),
+                            height: Dimension::Cells(0.3),
+                            poly: TOP_RIGHT_ROUNDED_CORNER,
+                        },
+                        bottom_left: SizedPoly {
+                            width: Dimension::Cells(0.3),
+                            height: Dimension::Cells(0.3),
+                            poly: BOTTOM_LEFT_ROUNDED_CORNER,
+                        },
+                        bottom_right: SizedPoly {
+                            width: Dimension::Cells(0.3),
+                            height: Dimension::Cells(0.3),
+                            poly: BOTTOM_RIGHT_ROUNDED_CORNER,
+                        },
+                    }))
                     // Cards are uniform: the row spans the sidebar minus its
                     // own margins, padding and border, so text length changes
                     // what a row says, never its shape.
