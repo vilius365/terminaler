@@ -408,7 +408,6 @@ impl TabBarState {
         config: &ConfigHandle,
         left_status: &str,
         right_status: &str,
-        remote_address: Option<&str>,
     ) -> Self {
         let colors = colors.cloned().unwrap_or_else(TabBarColors::default);
 
@@ -622,22 +621,6 @@ impl TabBarState {
             x += dropdown_w;
         }
 
-        // Compute remote button dimensions for right-aligned placement
-        let remote_active = remote_address.is_some();
-        let remote_label = match remote_address {
-            Some(addr) => format!(" Remote ON \u{00b7} {} ", addr),
-            None => " Remote ".to_string(),
-        };
-        let remote_line = parse_status_text(
-            &remote_label,
-            if config.use_fancy_tab_bar {
-                CellAttributes::default()
-            } else {
-                new_tab_attrs.clone()
-            },
-        );
-        let remote_width = remote_line.len();
-
         // Reserve place for integrated title buttons
         let title_width = if use_integrated_title_buttons
             && config.integrated_title_button_style != IntegratedTitleButtonStyle::MacOsNative
@@ -682,9 +665,9 @@ impl TabBarState {
                 width_to_reserve += button_len;
             }
 
-            title_width.saturating_sub(width_to_reserve + remote_width)
+            title_width.saturating_sub(width_to_reserve)
         } else {
-            title_width.saturating_sub(remote_width)
+            title_width
         };
 
         let status_space_available = title_width.saturating_sub(x);
@@ -706,17 +689,6 @@ impl TabBarState {
             line.insert_cell(x, black_cell.clone(), title_width, SEQ_ZERO);
         }
 
-        // Remote access button (right-aligned, before window buttons)
-        {
-            let button_start = line.len();
-            line.append_line(remote_line.clone(), SEQ_ZERO);
-            items.push(TabEntry {
-                item: TabBarItem::RemoteAccess { active: remote_active },
-                title: remote_line,
-                x: button_start,
-                width: remote_width,
-            });
-        }
 
         if use_integrated_title_buttons
             && config.integrated_title_button_style != IntegratedTitleButtonStyle::MacOsNative

@@ -2113,7 +2113,6 @@ impl TermWindow {
             &self.config,
             &self.left_status,
             &self.right_status,
-            self.web_server_handle.as_ref().map(|h| h.bind_address()),
         );
         if new_tab_bar != self.tab_bar {
             self.tab_bar = new_tab_bar;
