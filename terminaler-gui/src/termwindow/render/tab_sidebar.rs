@@ -193,11 +193,11 @@ impl crate::TermWindow {
     }
 
     /// Build the AGENTS section listing discovered Claude agents / tmux
-    /// sessions, returning it with the vertical space it needs so the caller
-    /// can reserve room for it.
+    /// sessions. The caller measures the result with compute_element to learn
+    /// how much vertical space to reserve for it.
     ///
-    /// Returns (None, 0.) when the feature is off or nothing was discovered,
-    /// so the sidebar keeps its previous layout exactly.
+    /// Returns None when the feature is off or nothing was discovered, so the
+    /// sidebar keeps its previous layout exactly.
     fn build_agents_section(
         &self,
         font: &Rc<LoadedFont>,
@@ -208,15 +208,16 @@ impl crate::TermWindow {
         text_color: LinearRgba,
         active_tab_colors: TabBarColor,
         sidebar_width: f32,
-    ) -> (Option<Element>, f32) {
+        row_budget: usize,
+    ) -> Option<Element> {
         if !self.config.tmux.as_ref().map_or(false, |t| t.enabled) {
-            return (None, 0.);
+            return None;
         }
 
         let snaps = crate::tmux_discovery::snapshot();
         let row_count: usize = snaps.iter().map(|s| s.sessions.len()).sum();
         if row_count == 0 {
-            return (None, 0.);
+            return None;
         }
 
         // Palette matches the WebView sidebar's CSS variables so the two
@@ -260,9 +261,16 @@ impl crate::TermWindow {
         };
 
         let mut children = vec![];
+        let mut rows_emitted = 0usize;
+        let mut rows_hidden = 0usize;
 
         for snap in &snaps {
             if snap.sessions.is_empty() {
+                continue;
+            }
+            // Each box header costs a row's worth of budget too.
+            if rows_emitted + 1 >= row_budget {
+                rows_hidden += snap.sessions.len();
                 continue;
             }
 
@@ -313,6 +321,10 @@ impl crate::TermWindow {
             );
 
             for session in &snap.sessions {
+                if rows_emitted >= row_budget {
+                    rows_hidden += 1;
+                    continue;
+                }
                 // Columns are sized from the sidebar width rather than fixed,
                 // and share it by priority: the project directory (the tmux
                 // session name) is what identifies a row, so it takes the slack
@@ -465,21 +477,41 @@ impl crate::TermWindow {
                 }
 
                 children.push(row);
+                rows_emitted += 1;
             }
         }
 
         if children.is_empty() {
-            return (None, 0.);
+            return None;
         }
 
-        // Height estimate mirrors the line heights and padding above: separator,
-        // header, then one row per session. compute_element would be exact, but
-        // it needs a LayoutContext that does not exist where the caller has to
-        // reserve this space.
-        let cell_h = metrics.cell_size.height as f32;
-        let box_count = snaps.iter().filter(|s| !s.sessions.is_empty()).count() as f32;
-        let height = box_count * (cell_h * 1.3 + 7.)
-            + (row_count as f32) * (cell_h * 1.2 + 10.);
+        // Say what is not shown, so a truncated list never reads as the whole
+        // picture.
+        if rows_hidden > 0 {
+            children.push(
+                Element::new(
+                    title_font,
+                    ElementContent::Text(format!(
+                        "  +{} more (ctrl+shift+s)",
+                        rows_hidden
+                    )),
+                )
+                .display(DisplayType::Block)
+                .line_height(Some(1.2))
+                .padding(BoxDimension {
+                    left: Dimension::Pixels(8.),
+                    right: Dimension::Pixels(6.),
+                    top: Dimension::Pixels(1.),
+                    bottom: Dimension::Pixels(3.),
+                })
+                .colors(ElementColors {
+                    border: BorderColor::default(),
+                    bg: bg_color.into(),
+                    text: text_tertiary.into(),
+                })
+                .min_width(Some(Dimension::Pixels(sidebar_width))),
+            );
+        }
 
         let section = Element::new(font, ElementContent::Children(children))
             .display(DisplayType::Block)
@@ -490,7 +522,7 @@ impl crate::TermWindow {
             })
             .min_width(Some(Dimension::Pixels(sidebar_width)));
 
-        (Some(section), height)
+        Some(section)
     }
 
     pub fn build_tab_sidebar(
@@ -1099,9 +1131,51 @@ impl crate::TermWindow {
         // stretched to push the new-tab button to the bottom of the sidebar:
         // its height has to account for this section or the agent rows land
         // below the visible area.
-        let (agents_section, agents_height) =
+        // Cap the section at half the sidebar so the tab and pane tree, which
+        // is the primary content, cannot be squeezed out by a machine running
+        // many agents. Rows beyond the budget are summarised rather than
+        // silently dropped, and Ctrl+Shift+S still lists every session.
+        let row_budget = {
+            let avail = ((window_height - button_height) * 0.5).max(0.);
+            let row_h = metrics.cell_size.height as f32 * 1.2 + 10.;
+            if row_h > 0. { (avail / row_h) as usize } else { usize::MAX }
+        };
+        let agents_section =
             self.build_agents_section(&font, &title_font, &metrics, palette, bg_color,
-                                      text_color, active_tab_colors, sidebar_width);
+                                      text_color, active_tab_colors, sidebar_width,
+                                      row_budget);
+
+        let dpi = self.dimensions.dpi as f32;
+        let context = LayoutContext {
+            width: config::DimensionContext {
+                dpi,
+                pixel_max: sidebar_width,
+                pixel_cell: metrics.cell_size.width as f32,
+            },
+            height: config::DimensionContext {
+                dpi,
+                pixel_max: window_height,
+                pixel_cell: metrics.cell_size.height as f32,
+            },
+            bounds: euclid::rect(0., 0., sidebar_width, window_height),
+            metrics: &metrics,
+            gl_state: self.render_state.as_ref().unwrap(),
+            zindex: 10,
+        };
+
+        // Measure the section instead of estimating it. A hand-computed guess
+        // has to match what layout actually produces to the pixel; when it came
+        // up short the tabs container over-reserved and pushed the agent rows
+        // off the bottom of the window, which a maximized window made obvious
+        // because it fits more rows.
+        let agents_height = match agents_section.as_ref() {
+            Some(section) => self
+                .compute_element(&context, section)
+                .map(|c| c.bounds.height())
+                .unwrap_or(0.),
+            None => 0.,
+        };
+
 
         let tabs_min_height =
             window_height - button_height - agents_height - 3.; // 3px top padding
@@ -1185,24 +1259,6 @@ impl crate::TermWindow {
             text: text_color.into(),
         })
         .min_width(Some(Dimension::Pixels(sidebar_width)));
-
-        let dpi = self.dimensions.dpi as f32;
-        let context = LayoutContext {
-            width: config::DimensionContext {
-                dpi,
-                pixel_max: sidebar_width,
-                pixel_cell: metrics.cell_size.width as f32,
-            },
-            height: config::DimensionContext {
-                dpi,
-                pixel_max: window_height,
-                pixel_cell: metrics.cell_size.height as f32,
-            },
-            bounds: euclid::rect(0., 0., sidebar_width, window_height),
-            metrics: &metrics,
-            gl_state: self.render_state.as_ref().unwrap(),
-            zindex: 10,
-        };
 
         let mut computed = self.compute_element(&context, &root)?;
 
