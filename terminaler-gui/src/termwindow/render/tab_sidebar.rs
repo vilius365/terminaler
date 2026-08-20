@@ -329,19 +329,16 @@ impl crate::TermWindow {
                 // and share it by priority: the project directory (the tmux
                 // session name) is what identifies a row, so it takes the slack
                 // and is the last thing to be truncated; the agent badge takes
-                // only what it needs; the window count is a fixed tail. Every
-                // row still pads to the same totals, so widening the sidebar
-                // reveals more of the name without changing the row's shape.
-                let meta_cols = 4; // "  1w"
+                // only what it needs. Every row still pads to the same totals,
+                // so widening the sidebar reveals more of the name without
+                // changing the row's shape.
                 let badge_cols = session
                     .agent
                     .as_deref()
                     .map(|a| a.chars().count().min(12))
                     .unwrap_or(0);
                 let badge_field = if badge_cols > 0 { badge_cols + 2 } else { 0 };
-                let name_cols = row_cols
-                    .saturating_sub(meta_cols + badge_field)
-                    .max(6);
+                let name_cols = row_cols.saturating_sub(badge_field).max(6);
 
                 let mut row_children = vec![Element::new(
                     font,
@@ -393,17 +390,6 @@ impl crate::TermWindow {
                         }),
                     );
                 }
-
-                // Window count, quiet like .tmux-session-meta.
-                row_children.push(
-                    Element::new(font, ElementContent::Text(format!("  {}w", session.windows)))
-                        .display(DisplayType::Inline)
-                        .colors(ElementColors {
-                            border: BorderColor::default(),
-                            bg: InheritableColor::Inherited,
-                            text: text_tertiary.into(),
-                        }),
-                );
 
                 // Indented card with a subtle border, hovering to orange —
                 // .tmux-session-row and its :hover rule.
