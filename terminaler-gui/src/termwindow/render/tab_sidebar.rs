@@ -325,6 +325,31 @@ impl crate::TermWindow {
         let mut rows_emitted = 0usize;
         let mut rows_hidden = 0usize;
 
+        // Section heading, mirroring .stats-title: uppercase, orange, tracked
+        // out. The WebView sidebar labels this block and the GPU one did not,
+        // so on Linux the machine headers ran straight on from the pane tree
+        // with nothing to say what they were.
+        children.push(
+            Element::new(
+                title_font,
+                ElementContent::Text("  TMUX SESSIONS".to_string()),
+            )
+            .display(DisplayType::Block)
+            .line_height(Some(1.4))
+            .padding(BoxDimension {
+                left: Dimension::Pixels(8.),
+                right: Dimension::Pixels(6.),
+                top: Dimension::Pixels(6.),
+                bottom: Dimension::Pixels(3.),
+            })
+            .colors(ElementColors {
+                border: BorderColor::default(),
+                bg: bg_color.into(),
+                text: accent_orange.into(),
+            })
+            .min_width(Some(Dimension::Pixels(sidebar_width))),
+        );
+
         // Sessions this window already hosts in a pane. Their rows are folded
         // away rather than listed a second time; see locally_attached_sessions.
         let folded = self.locally_attached_sessions();
@@ -482,7 +507,14 @@ impl crate::TermWindow {
                     })
                     .colors(ElementColors {
                         border: BorderColor::new(border_subtle),
-                        bg: border_subtle.into(),
+                        // Unfilled, like the WebView row. .tmux-session-row
+                        // asks for var(--bg-hover), which :root never defines,
+                        // so on Windows it resolves to transparent: sampling
+                        // the screenshot inside a row gives #1a1a1a, the same
+                        // value as the gap between rows. Filling with
+                        // border_subtle here made the Linux rows read as solid
+                        // blocks instead of outlines.
+                        bg: InheritableColor::Inherited,
                         text: text_primary.into(),
                     })
                     // Rounded card, matching .tmux-session-row's border-radius.
@@ -521,6 +553,10 @@ impl crate::TermWindow {
                             box_name: snap.box_name.clone(),
                             session: session.session.clone(),
                         }))
+                        // Hover lights the border orange, as .tmux-session-row
+                        // :hover does. The fill lifts to border_subtle here to
+                        // give the pointer some feedback, since the resting
+                        // row is now unfilled.
                         .hover_colors(Some(ElementColors {
                             border: BorderColor::new(accent_orange),
                             bg: border_subtle.into(),
