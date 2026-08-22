@@ -2109,12 +2109,17 @@ impl super::TermWindow {
         event: MouseEvent,
         context: &dyn WindowOps,
     ) {
-        let mx = event.coords.x as f32;
+        // Delta-based: absolute math (window_width - mouse_x) inflated the
+        // width by the window border plus the grab offset inside the handle's
+        // hit strip, so the first press jumped the width — and, since the rail
+        // font scales live with it, visibly jumped the type.
+        let start_width = *self
+            .sidebar_resize_start_width
+            .get_or_insert(self.tab_sidebar_width);
+        let delta = event.coords.x as f32 - start_event.coords.x as f32;
         let new_width = match self.config.tab_sidebar_position {
-            config::TabSidebarPosition::Left => mx as u16,
-            config::TabSidebarPosition::Right => {
-                (self.dimensions.pixel_width as f32 - mx) as u16
-            }
+            config::TabSidebarPosition::Left => (start_width as f32 + delta).max(0.) as u16,
+            config::TabSidebarPosition::Right => (start_width as f32 - delta).max(0.) as u16,
         };
         // Clamp between 100 and 600 pixels — the responsive tiles stay
         // legible down to ~100 (font floors at 8pt).
@@ -2135,6 +2140,7 @@ impl super::TermWindow {
     }
 
     fn finish_sidebar_resize(&mut self) {
+        self.sidebar_resize_start_width = None;
         if let Some(window) = self.window.as_ref().map(|w| w.clone()) {
             self.apply_dimensions(&self.dimensions.clone(), None, &window);
             window.invalidate();

@@ -554,6 +554,10 @@ pub struct TermWindow {
     /// Where the open flyout was painted last frame (x, y, w, h) — used by the
     /// mouse keep-open logic, which must not depend on pixel-perfect adjacency.
     pub sidebar_flyout_rect: Option<(f32, f32, f32, f32)>,
+    /// Sidebar width when a resize drag began — the drag applies mouse deltas
+    /// to this, so grabbing anywhere in the handle's hit strip cannot jump the
+    /// width (and with it the live-scaled rail font) on the first press.
+    sidebar_resize_start_width: Option<u16>,
     last_sidebar_info_poll: Instant,
     /// Number of Claude agent panes in `waiting_input` across all windows,
     /// shown as a tab-bar badge. Refreshed on a throttled poll.
@@ -954,6 +958,7 @@ impl TermWindow {
             tab_sidebar_info: HashMap::new(),
             sidebar_flyout: None,
             sidebar_flyout_rect: None,
+            sidebar_resize_start_width: None,
             last_sidebar_info_poll: Instant::now(),
             agents_waiting: 0,
             last_agents_poll: Instant::now(),
