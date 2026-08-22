@@ -760,6 +760,12 @@ impl TermWindow {
             self.is_click_to_focus_window = false;
             self.tab_drag = None;
             self.pane_long_press = None;
+            // A sidebar resize drag must not survive focus loss: with the
+            // button released elsewhere, the next plain Move would resume a
+            // phantom drag against the stale press baseline and jump the rail
+            // width (and its live-scaled font).
+            self.dragging = None;
+            self.sidebar_resize_start_width = None;
 
             for state in self.pane_state.borrow_mut().values_mut() {
                 state.mouse_terminal_coords.take();
@@ -4791,6 +4797,12 @@ impl TermWindow {
         // While the JS flyout is open the host grows toward the terminal by
         // the requested width; terminal cell layout derives from
         // tab_sidebar_width alone, so nothing shifts underneath.
+        //
+        // Known trade-off: the widened child HWND covers the parent-side
+        // resize-handle strip, so sidebar drag-resize is unavailable while a
+        // click-drawer stays open — the attempt lands on the scrim, which
+        // dismisses the drawer; the next drag then works. Deliberate: keeping
+        // the strip exposed would require splitting the host rect.
         let flyout = self.webview_flyout_width as u32;
         let sidebar_width =
             (self.tab_sidebar_width as u32).saturating_sub(handle_width) + flyout;

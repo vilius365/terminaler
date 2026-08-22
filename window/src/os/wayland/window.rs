@@ -309,9 +309,19 @@ impl WaylandWindow {
         let (x, y) = window_frame.location();
         let surface_width = dimensions.pixels_to_surface(dimensions.pixel_width as i32);
         let surface_height = dimensions.pixels_to_surface(dimensions.pixel_height as i32);
+        // Geometry describes the whole window: with a visible client-side
+        // frame the borders have to be added here just like in the configure
+        // path, or a compositor that honors client geometry before the first
+        // sized configure opens the window one titlebar short.
+        let (geo_width, geo_height) = if window_frame.is_hidden() {
+            (surface_width, surface_height)
+        } else {
+            let (fw, fh) = window_frame.add_borders(surface_width as u32, surface_height as u32);
+            (fw as i32, fh as i32)
+        };
         window
             .xdg_surface()
-            .set_window_geometry(x, y, surface_width, surface_height);
+            .set_window_geometry(x, y, geo_width, geo_height);
         window.commit();
 
         let copy_and_paste = CopyAndPaste::create();
@@ -1175,6 +1185,16 @@ impl WaylandWindowInner {
         // so we're going to fake one up, otherwise the window
         // contents don't reflect the real size until eg:
         // the focus is changed.
+        //
+        // A real configure describes the WHOLE window, and the handler
+        // subtracts the client-side frame from it — so the synthetic one must
+        // add the frame first, or the requested content size gets a titlebar
+        // shaved off on the way through.
+        let (surface_width, surface_height) = if self.window_frame.is_hidden() {
+            (surface_width, surface_height)
+        } else {
+            self.window_frame.add_borders(surface_width, surface_height)
+        };
         self.pending_event
             .lock()
             .unwrap()

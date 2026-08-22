@@ -396,7 +396,13 @@ impl crate::TermWindow {
 
         let snaps = crate::tmux_discovery::snapshot();
         let row_count: usize = snaps.iter().map(|s| s.sessions.len()).sum();
-        if row_count == 0 {
+        let any_trouble = snaps
+            .iter()
+            .any(|s| !matches!(s.status, crate::tmux_discovery::BoxStatus::Ok));
+        // A section with zero sessions still exists if any box is in trouble:
+        // otherwise a Pending/Unreachable box is indistinguishable from an
+        // unconfigured one (the exact symptom the fingerprint fix targeted).
+        if row_count == 0 && !any_trouble {
             return None;
         }
 
@@ -436,14 +442,53 @@ impl crate::TermWindow {
         let folded = self.locally_attached_sessions();
 
         for snap in &snaps {
+            // A box with no sessions comes FIRST: the folded check below is
+            // vacuously true on an empty list and used to swallow these boxes
+            // entirely — so a box whose probe was Pending/Unreachable rendered
+            // nothing on the rail (the WebView shows its eyebrow + error).
+            if snap.sessions.is_empty() {
+                if matches!(snap.status, crate::tmux_discovery::BoxStatus::Ok) {
+                    continue;
+                }
+                if px_used + eyebrow_px * 2. > px_budget {
+                    continue;
+                }
+                let (dot_color, _) = match snap.status {
+                    crate::tmux_discovery::BoxStatus::Unreachable(_) => (theme.accent_red, ()),
+                    _ => (theme.text_tertiary, ()),
+                };
+                children.push(sidebar_eyebrow(
+                    title_font,
+                    &snap.box_name,
+                    Some(dot_color),
+                    theme,
+                    sidebar_width,
+                    true,
+                ));
+                px_used += eyebrow_px;
+                if let crate::tmux_discovery::BoxStatus::Unreachable(ref err) = snap.status {
+                    children.push(
+                        Element::new(title_font, ElementContent::Text(truncate_str(err, 24)))
+                            .display(DisplayType::Block)
+                            .line_height(Some(1.1))
+                            .padding(BoxDimension {
+                                left: Dimension::Pixels(12.),
+                                right: Dimension::Pixels(4.),
+                                top: Dimension::Pixels(0.),
+                                bottom: Dimension::Pixels(2.),
+                            })
+                            .colors(text_only(theme.text_tertiary))
+                            .min_width(Some(Dimension::Pixels(sidebar_width))),
+                    );
+                    px_used += eyebrow_px;
+                }
+                continue;
+            }
             if snap
                 .sessions
                 .iter()
                 .all(|s| folded.contains(&(snap.box_name.clone(), s.session.clone())))
             {
-                continue;
-            }
-            if snap.sessions.is_empty() {
                 continue;
             }
             // The eyebrow plus at least one tile must fit, or the whole box
@@ -822,9 +867,57 @@ impl crate::TermWindow {
         // Layout context used to compute the final tree.
         let context_probe = self.sidebar_layout_ctx(&metrics, sidebar_width, window_height, 10);
 
-        // Tmux tile budget from the height that actually remains after the
-        // local section and the dock — a fixed half-window guess let a short
-        // window push the dock and the "+N" summary off the bottom entirely.
+        // Measure the dock rather than reserving a guess for it.
+        let dock = build_widget_dock(&font, &title_font, &theme, sidebar_width);
+        let dock_h = self
+            .compute_element(&context_probe, &dock)
+            .map(|c| c.bounds.height() + DOCK_TOP_MARGIN)
+            .unwrap_or(40.);
+
+        // The tabs section is bounded too: enough tabs (or split panes) would
+        // otherwise starve the tmux section to nothing and push the dock
+        // off-screen — the clip class the measured budgeting exists to
+        // prevent. Per-element heights are measured individually (block
+        // children stack, and the per-tile bottom margin is TILE_GAP; adding
+        // it to marginless rows only overestimates, the safe direction), and
+        // trailing elements fold into a summary row.
+        let tabs_avail = (window_height - dock_h - 40.).max(60.);
+        let el_heights: Vec<f32> = tab_elements
+            .iter()
+            .map(|el| {
+                self.compute_element(&context_probe, el)
+                    .map(|c| c.bounds.height())
+                    .unwrap_or(0.)
+                    + TILE_GAP
+            })
+            .collect();
+        let mut used: f32 = el_heights.iter().sum();
+        let mut keep = tab_elements.len();
+        while keep > 1 && used > tabs_avail {
+            keep -= 1;
+            used -= el_heights[keep];
+        }
+        if keep < tab_elements.len() {
+            let hidden = tab_elements.len() - keep;
+            tab_elements.truncate(keep);
+            tab_elements.push(
+                Element::new(
+                    &title_font,
+                    ElementContent::Text(format!("+{} more", hidden)),
+                )
+                .display(DisplayType::Block)
+                .line_height(Some(1.2))
+                .padding(BoxDimension {
+                    left: Dimension::Pixels(10.),
+                    right: Dimension::Pixels(4.),
+                    top: Dimension::Pixels(1.),
+                    bottom: Dimension::Pixels(3.),
+                })
+                .colors(text_only(theme.text_tertiary))
+                .min_width(Some(Dimension::Pixels(sidebar_width))),
+            );
+        }
+
         // compute_element only borrows, so the same container that gets
         // measured is later pushed into the tree — no clone.
         let tabs_container = Element::new(&font, ElementContent::Children(tab_elements))
@@ -838,12 +931,6 @@ impl crate::TermWindow {
             .compute_element(&context_probe, &tabs_container)
             .map(|c| c.bounds.height())
             .unwrap_or(0.);
-        // Measure the dock rather than reserving a guess for it.
-        let dock = build_widget_dock(&font, &title_font, &theme, sidebar_width);
-        let dock_h = self
-            .compute_element(&context_probe, &dock)
-            .map(|c| c.bounds.height() + DOCK_TOP_MARGIN)
-            .unwrap_or(40.);
         let px_budget = (window_height - tabs_height - dock_h).max(0.);
         let agents_section = self.build_agents_section(
             &font,
@@ -1084,7 +1171,14 @@ impl crate::TermWindow {
 
         let element = match self.build_sidebar_flyout(&fly.item, &font, &title_font, &theme) {
             Some(e) => e,
-            None => return Ok(()),
+            None => {
+                // The anchor no longer resolves (tab closed, session gone):
+                // clear the state and painted rect, or the keep-open zone
+                // lingers as an invisible dead area over the terminal.
+                self.sidebar_flyout = None;
+                self.sidebar_flyout_rect = None;
+                return Ok(());
+            }
         };
 
         let window_w = self.dimensions.pixel_width as f32;
@@ -1203,8 +1297,7 @@ impl crate::TermWindow {
                         pane_cwd.as_deref(),
                         font,
                         title_font,
-                        theme.text_secondary,
-                        theme.accent_red,
+                        theme,
                     );
                 } else {
                     // Plain shell: full cwd + git branch.
@@ -1440,38 +1533,19 @@ fn build_claude_card_children(
     pane_cwd: Option<&str>,
     font: &Rc<LoadedFont>,
     detail_font: &Rc<LoadedFont>,
-    dimmed_color: LinearRgba,
-    notif_color: LinearRgba,
+    theme: &SidebarTheme,
 ) {
     use crate::termwindow::ClaudeStatus;
+    let dimmed_color = theme.text_secondary;
 
-    // Status indicator
-    let (status_icon, status_text, status_color) = match claude.status {
-        Some(ClaudeStatus::Working) => (
-            "\u{25b6}",  // ▶
-            "working",
-            LinearRgba::with_components(0.247, 0.725, 0.314, 1.0),
-        ),
-        Some(ClaudeStatus::WaitingInput) => (
-            "\u{25cf}",  // ●
-            "awaiting input",
-            LinearRgba::with_components(0.824, 0.600, 0.133, 1.0),
-        ),
-        Some(ClaudeStatus::Idle) => (
-            "\u{2714}",  // ✔
-            "idle",
-            LinearRgba::with_components(0.4, 0.4, 0.4, 1.0),
-        ),
-        Some(ClaudeStatus::Error) => (
-            "\u{2717}",  // ✗
-            "error",
-            notif_color,
-        ),
-        None => (
-            "\u{2714}",  // ✔
-            "idle",
-            LinearRgba::with_components(0.4, 0.4, 0.4, 1.0),
-        ),
+    // Status indicator: same status_color mapping as the rail dot and tile
+    // border — this used to carry its own hardcoded (and differently encoded)
+    // copy of the palette, so the flyout greens/yellows never quite matched.
+    let (status_icon, status_text) = match claude.status {
+        Some(ClaudeStatus::Working) => ("\u{25b6}", "working"), // ▶
+        Some(ClaudeStatus::WaitingInput) => ("\u{25cf}", "awaiting input"), // ●
+        Some(ClaudeStatus::Error) => ("\u{2717}", "error"), // ✗
+        Some(ClaudeStatus::Idle) | None => ("\u{2714}", "idle"), // ✔
     };
     children.push(
         Element::new(
@@ -1480,11 +1554,7 @@ fn build_claude_card_children(
         )
         .display(DisplayType::Block)
         .line_height(Some(0.9))
-        .colors(ElementColors {
-            border: BorderColor::default(),
-            bg: InheritableColor::Inherited,
-            text: status_color.into(),
-        }),
+        .colors(text_only(status_color(claude, theme))),
     );
 
     // Worktree/project + branch — prefer per-pane CWD over tab-level
@@ -1546,9 +1616,9 @@ fn build_claude_card_children(
         let bar: String = "\u{2588}".repeat(filled) + &"\u{2591}".repeat(empty);
         let bar_text = format!("{} {}%", bar, pct);
         let bar_color = if pct >= 90 {
-            notif_color
+            theme.accent_red
         } else if pct >= 70 {
-            LinearRgba::with_components(0.824, 0.600, 0.133, 1.0)
+            theme.accent_yellow
         } else {
             dimmed_color
         };
@@ -1601,8 +1671,8 @@ fn build_claude_card_children(
         if has_line_stats {
             let added = claude.lines_added.unwrap_or(0);
             let removed = claude.lines_removed.unwrap_or(0);
-            let green = LinearRgba::with_components(0.247, 0.725, 0.314, 1.0);
-            let red = LinearRgba::with_components(0.973, 0.318, 0.286, 1.0);
+            let green = theme.accent_green;
+            let red = theme.accent_red;
             if added > 0 {
                 stat_children.push(
                     Element::new(

@@ -99,6 +99,17 @@ mod inner {
                     if let Ok(mut q) = queue_clone.lock() {
                         q.push(msg.body().to_string());
                     }
+                    // The queue drains from the parent's paint loop, so an
+                    // idle window would otherwise sit on the message — e.g. a
+                    // set_flyout close leaving the widened host as a dark
+                    // column over the terminal until something else painted.
+                    unsafe {
+                        winapi::um::winuser::InvalidateRect(
+                            parent_hwnd as _,
+                            std::ptr::null(),
+                            0,
+                        );
+                    }
                 })
                 .with_html(html)
                 .build_as_child(&parent)

@@ -491,6 +491,14 @@ function closeFlyout() {
 
 // Hover plumbing: info flyouts open after a delay; moving into the flyout
 // keeps them; leaving both closes. Drawers (theme/stats) are click-toggled.
+// Any rail click completes the interaction: cancel a pending hover open and
+// close an open info flyout (drawers are click-toggled and manage themselves).
+// Mirrors the GPU side, which closes the flyout on any left press.
+function railClick() {
+  clearTimeout(_hoverTimer);
+  if (_flyout && _flyout.kind !== 'drawer') closeFlyout();
+}
+
 function armHover(el, buildDesc) {
   el.addEventListener('mouseenter', function () {
     clearTimeout(_hoverTimer);
@@ -746,6 +754,10 @@ function renderSidebar(state) {
   _state = state;
   var container = document.getElementById('tab-list');
   if (!container) return;
+  // The re-render replaces every row node, so an armed hover timer would fire
+  // against a removed node's stale closure — its mouseleave (the only other
+  // clearTimeout) never comes.
+  clearTimeout(_hoverTimer);
   container.innerHTML = '';
 
   document.body.classList.toggle('pos-left', state.sidebarPosition === 'left');
@@ -779,7 +791,10 @@ function renderSidebar(state) {
       html += '<div class="tile-ctx"><i class="' + ctxClass(claude.contextPct) + '" style="width:' + claude.contextPct + '%"></i></div>';
     }
     tile.innerHTML = html;
-    tile.addEventListener('click', function () { sendAction({ type: 'activate_tab', tabIdx: tab.tabIdx }); });
+    tile.addEventListener('click', function () {
+      railClick();
+      sendAction({ type: 'activate_tab', tabIdx: tab.tabIdx });
+    });
     armHover(tile, tabFlyoutDesc(tab));
     container.appendChild(tile);
 
@@ -800,6 +815,7 @@ function renderSidebar(state) {
           + (pst ? '<span class="t-dot ' + pst + '"></span>' : '') + '</div>';
         sub.innerHTML = line;
         sub.addEventListener('click', function () {
+          railClick();
           if (pane.isHidden) sendAction({ type: 'unhide_pane', paneId: pane.paneId });
           else sendAction({ type: 'activate_pane', tabIdx: tab.tabIdx, paneIdx: pane.paneIdx });
         });
@@ -853,6 +869,7 @@ function renderSidebar(state) {
       tile.innerHTML = line1 + '<div class="tile-label">' + escHtml(s.name) + '</div>';
       tile.title = 'Attach in a split pane';
       tile.addEventListener('click', function () {
+        railClick();
         sendAction({ type: 'attach_tmux_session', box: box.box, session: s.name, mode: 'split' });
       });
       armHover(tile, tmuxFlyoutDesc(box, s));

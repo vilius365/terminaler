@@ -988,6 +988,10 @@ impl FontConfigInner {
         self.fonts.borrow_mut().clear();
         self.metrics.borrow_mut().take();
         self.title_font.borrow_mut().take();
+        // The sidebar font cache is keyed on point size alone while DPI is
+        // baked into the LoadedFont — without this, a monitor/scale change
+        // left the rail rendering stale-DPI glyphs until a config reload.
+        self.sidebar_font.borrow_mut().take();
 
         (prior_font, prior_dpi)
     }

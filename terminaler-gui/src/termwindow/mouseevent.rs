@@ -647,6 +647,13 @@ impl super::TermWindow {
         event: MouseEvent,
         context: &dyn WindowOps,
     ) {
+        // The tab flyout's close chip routes here (UIItemType::CloseTab), which
+        // bypasses the TabSidebar press arm that normally clears the flyout —
+        // without this, the open flyout re-resolves to whichever tab shifts
+        // into the closed tab's index.
+        if self.sidebar_flyout.take().is_some() {
+            self.sidebar_flyout_rect = None;
+        }
         match event.kind {
             WMEK::Press(MousePress::Left) => {
                 log::debug!("Should close tab {}", idx);
