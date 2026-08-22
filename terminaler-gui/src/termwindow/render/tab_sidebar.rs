@@ -343,7 +343,7 @@ impl crate::TermWindow {
         metrics: &RenderMetrics,
         theme: &SidebarTheme,
         sidebar_width: f32,
-        tile_budget: usize,
+        px_budget: f32,
     ) -> Option<Element> {
         if !self.config.tmux.as_ref().map_or(false, |t| t.enabled) {
             return None;
@@ -356,8 +356,16 @@ impl crate::TermWindow {
         }
 
         let mut children = vec![];
-        let mut tiles_emitted = 0usize;
         let mut tiles_hidden = 0usize;
+
+        // Pixel accounting from live font metrics: the TILE_H constant
+        // drifted from real tile height once the rail font began tracking
+        // the terminal size, and a count-based budget clipped mid-tile.
+        let label_metrics = RenderMetrics::with_font_metrics(&title_font.metrics());
+        let label_h = label_metrics.cell_size.height as f32;
+        let tile_px = metrics.cell_size.height as f32 * 1.1 + label_h + 14. + TILE_GAP;
+        let eyebrow_px = label_h * 1.3 + 10.;
+        let mut px_used = 0f32;
 
         // Sessions this window already hosts in a pane fold away rather than
         // listing the same thing twice; see locally_attached_sessions.
@@ -374,7 +382,9 @@ impl crate::TermWindow {
             if snap.sessions.is_empty() {
                 continue;
             }
-            if tiles_emitted + 1 >= tile_budget {
+            // The eyebrow plus at least one tile must fit, or the whole box
+            // moves to the +N summary.
+            if px_used + eyebrow_px + tile_px > px_budget {
                 tiles_hidden += snap.sessions.len();
                 continue;
             }
@@ -392,6 +402,7 @@ impl crate::TermWindow {
                 sidebar_width,
                 stale,
             ));
+            px_used += eyebrow_px;
 
             // An unreachable box's error is worth a dim one-liner; the old
             // layout had this and the tiles must not silently drop it.
@@ -416,13 +427,14 @@ impl crate::TermWindow {
                     })
                     .min_width(Some(Dimension::Pixels(sidebar_width))),
                 );
+                px_used += label_h * 1.1;
             }
 
             for session in &snap.sessions {
                 if folded.contains(&(snap.box_name.clone(), session.session.clone())) {
                     continue;
                 }
-                if tiles_emitted >= tile_budget {
+                if px_used + tile_px > px_budget {
                     tiles_hidden += 1;
                     continue;
                 }
@@ -479,7 +491,7 @@ impl crate::TermWindow {
                     tile.hover_border = Some(theme.accent_orange);
                 }
                 children.push(build_tile(tile));
-                tiles_emitted += 1;
+                px_used += tile_px;
             }
         }
 
@@ -770,18 +782,15 @@ impl crate::TermWindow {
             .compute_element(&context_probe, &tabs_probe)
             .map(|c| c.bounds.height())
             .unwrap_or(0.);
-        let dock_reserve = 36.;
-        let tile_budget = {
-            let avail = (window_height - tabs_height - dock_reserve).max(0.);
-            (avail / (TILE_H + TILE_GAP)) as usize
-        };
+        let dock_reserve = 40.;
+        let px_budget = (window_height - tabs_height - dock_reserve).max(0.);
         let agents_section = self.build_agents_section(
             &font,
             &title_font,
             &metrics,
             &theme,
             sidebar_width,
-            tile_budget,
+            px_budget,
         );
 
         // Everything flows in document order; nothing is stretched to pin a
