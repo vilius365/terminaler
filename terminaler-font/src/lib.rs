@@ -458,6 +458,8 @@ enum Entity {
     CommandPalette,
     CharSelect,
     PaneSelect,
+    /// Compact sidebar rail: labels, eyebrows, hints. Smaller than Title.
+    Sidebar,
 }
 
 struct FontConfigInner {
@@ -473,6 +475,7 @@ struct FontConfigInner {
     pane_select_font: RefCell<Option<Rc<LoadedFont>>>,
     char_select_font: RefCell<Option<Rc<LoadedFont>>>,
     command_palette_font: RefCell<Option<Rc<LoadedFont>>>,
+    sidebar_font: RefCell<Option<Rc<LoadedFont>>>,
     fallback_channel: RefCell<Option<Sender<FallbackResolveInfo>>>,
 }
 
@@ -494,6 +497,7 @@ impl FontConfigInner {
             pane_select_font: RefCell::new(None),
             char_select_font: RefCell::new(None),
             command_palette_font: RefCell::new(None),
+            sidebar_font: RefCell::new(None),
             font_scale: RefCell::new(1.0),
             dpi: RefCell::new(dpi),
             config: RefCell::new(config.clone()),
@@ -512,6 +516,7 @@ impl FontConfigInner {
         self.pane_select_font.borrow_mut().take();
         self.char_select_font.borrow_mut().take();
         self.command_palette_font.borrow_mut().take();
+        self.sidebar_font.borrow_mut().take();
         self.metrics.borrow_mut().take();
         *self.font_dirs.borrow_mut() = Arc::new(FontDatabase::with_font_dirs(config)?);
         Ok(())
@@ -598,7 +603,7 @@ impl FontConfigInner {
         entity: Entity,
     ) -> anyhow::Result<Rc<LoadedFont>> {
         let config = self.config.borrow();
-        let make_bold = entity != Entity::CommandPalette;
+        let make_bold = !matches!(entity, Entity::CommandPalette | Entity::Sidebar);
         let (sys_font, sys_size) = self.compute_title_font(&config, make_bold);
 
         let (font_size, text_style) = match entity {
@@ -615,6 +620,9 @@ impl FontConfigInner {
                 config.pane_select_font_size,
                 config.pane_select_font.as_ref(),
             ),
+            // The 90px rail needs a size below the window-frame font; the V2
+            // Tiles spec labels sit around 9pt.
+            Entity::Sidebar => (9.0, None),
         };
 
         let text_style =
@@ -663,6 +671,20 @@ impl FontConfigInner {
         let loaded = self.make_entity_font_impl(myself, Entity::Title)?;
 
         title_font.replace(Rc::clone(&loaded));
+
+        Ok(loaded)
+    }
+
+    fn sidebar_font(&self, myself: &Rc<Self>) -> anyhow::Result<Rc<LoadedFont>> {
+        let mut sidebar_font = self.sidebar_font.borrow_mut();
+
+        if let Some(entry) = sidebar_font.as_ref() {
+            return Ok(Rc::clone(entry));
+        }
+
+        let loaded = self.make_entity_font_impl(myself, Entity::Sidebar)?;
+
+        sidebar_font.replace(Rc::clone(&loaded));
 
         Ok(loaded)
     }
@@ -1069,6 +1091,10 @@ impl FontConfiguration {
 
     pub fn command_palette_font(&self) -> anyhow::Result<Rc<LoadedFont>> {
         self.inner.command_palette_font(&self.inner)
+    }
+
+    pub fn sidebar_font(&self) -> anyhow::Result<Rc<LoadedFont>> {
+        self.inner.sidebar_font(&self.inner)
     }
 
     pub fn pane_select_font(&self) -> anyhow::Result<Rc<LoadedFont>> {

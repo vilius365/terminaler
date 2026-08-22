@@ -453,13 +453,14 @@ impl crate::TermWindow {
                     )
                 };
 
-                // Window count (plus a dot when another client is attached)
-                // sits where a status dot would: tmux sessions have no claude
-                // state of their own on the rail.
-                let count = if session.attached {
-                    format!("{}\u{25cf}", session.windows.min(9))
-                } else {
-                    format!("{} ", session.windows.min(9))
+                // Window count only when it says something (n>1), plus a dot
+                // when another client is attached — a "1" on every tile was
+                // pure noise (user feedback, 2026-08-22).
+                let count = match (session.windows > 1, session.attached) {
+                    (true, true) => Some(format!("{}\u{25cf}", session.windows.min(9))),
+                    (true, false) => Some(format!("{} ", session.windows.min(9))),
+                    (false, true) => Some("\u{25cf}".to_string()),
+                    (false, false) => None,
                 };
 
                 let dimf = if stale || session.attached { 0.55 } else { 1.0 };
@@ -468,7 +469,7 @@ impl crate::TermWindow {
                 tile.icon_color = dim(icon_color, dimf);
                 tile.label = label;
                 tile.label_color = dim(label_color, dimf);
-                tile.right_hint = Some((count, dim(theme.text_tertiary, dimf)));
+                tile.right_hint = count.map(|c| (c, dim(theme.text_tertiary, dimf)));
                 tile.border_color = dim(theme.border_subtle, dimf);
                 if session.attachable {
                     tile.item = Some(TabSidebarItem::TmuxSession {
@@ -528,7 +529,9 @@ impl crate::TermWindow {
         _palette: &ColorPalette,
     ) -> anyhow::Result<ComputedElement> {
         let font = self.fonts.default_font()?;
-        let title_font = self.fonts.title_font()?;
+        // Dedicated 9pt rail font (Entity::Sidebar): the 12pt title font was
+        // visibly too large at 90px — labels ellipsized at 5-6 chars.
+        let title_font = self.fonts.sidebar_font()?;
         let metrics = RenderMetrics::with_font_metrics(&font.metrics());
         let sidebar_width = self.tab_sidebar_width as f32;
         let border = self.get_os_border();
@@ -1000,7 +1003,7 @@ impl crate::TermWindow {
         }
 
         let font = self.fonts.default_font()?;
-        let title_font = self.fonts.title_font()?;
+        let title_font = self.fonts.sidebar_font()?;
         let metrics = RenderMetrics::with_font_metrics(&font.metrics());
         let theme = SidebarTheme::load();
 
@@ -2100,8 +2103,8 @@ fn sidebar_eyebrow(
         .display(DisplayType::Block)
         .line_height(Some(1.3))
         .padding(BoxDimension {
-            left: Dimension::Pixels(8.),
-            right: Dimension::Pixels(4.),
+            left: Dimension::Pixels(6.),
+            right: Dimension::Pixels(2.),
             top: Dimension::Pixels(7.),
             bottom: Dimension::Pixels(3.),
         })
@@ -2144,7 +2147,7 @@ fn build_widget_dock(
         chip("\u{25d0}", TabSidebarItem::ThemePickerButton), // ◐
     ];
     if tmux_enabled {
-        chips.push(chip("\u{27f3}", TabSidebarItem::TmuxRefreshButton)); // ⟳
+        chips.push(chip("\u{21bb}", TabSidebarItem::TmuxRefreshButton)); // ↻
     }
 
     Element::new(font, ElementContent::Children(chips))

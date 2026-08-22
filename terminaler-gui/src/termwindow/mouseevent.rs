@@ -2034,7 +2034,7 @@ impl super::TermWindow {
                 | TabSidebarItem::Pane { .. } => {
                     context.set_cursor(Some(MouseCursor::Hand));
                     // Hovering a rail row arms (or swaps) the detail flyout.
-                    self.sidebar_flyout_hover(&item, &sidebar_item);
+                    self.sidebar_flyout_hover(&item, &sidebar_item, context);
                 }
                 TabSidebarItem::NewTabButton
                 | TabSidebarItem::ClosePane { .. }
@@ -2054,7 +2054,12 @@ impl super::TermWindow {
     /// Arm (or re-arm) the sidebar hover flyout for a rail row. The flyout
     /// itself opens in paint once SIDEBAR_FLYOUT_DELAY has elapsed; the frame
     /// that opens it is scheduled here so no further mouse motion is needed.
-    fn sidebar_flyout_hover(&mut self, item: &UIItem, sidebar_item: &TabSidebarItem) {
+    fn sidebar_flyout_hover(
+        &mut self,
+        item: &UIItem,
+        sidebar_item: &TabSidebarItem,
+        context: &dyn WindowOps,
+    ) {
         let rearm = match &self.sidebar_flyout {
             Some(f) => f.item != *sidebar_item,
             None => true,
@@ -2065,9 +2070,15 @@ impl super::TermWindow {
                 anchor_y: item.y as f32,
                 hover_since: Instant::now(),
             });
+            // update_next_frame_time only stores a deadline that the FRAME
+            // scheduler consumes during a paint — with no paint pending it
+            // never fires (this is why the flyout originally never opened).
+            // Invalidate to force one paint now; paint_sidebar_flyout then
+            // schedules the frame that opens the flyout after the delay.
             self.update_next_frame_time(Some(
                 Instant::now() + crate::termwindow::SIDEBAR_FLYOUT_DELAY,
             ));
+            context.invalidate();
         }
     }
 
