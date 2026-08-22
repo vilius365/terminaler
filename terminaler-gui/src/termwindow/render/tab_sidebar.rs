@@ -21,16 +21,16 @@ use window::color::LinearRgba;
 /// block is the single source of truth and the two are kept in sync BY HAND.
 ///
 /// Spec table (both renderers):
-///   rail width          90 px  (config tab_sidebar_width)
-///   tile                68 px wide, 1 px status-tint border, rounded, 6 px gap
-///   pane sub-tile       62 px wide, single line
+///   rail width          180 px (config tab_sidebar_width)
+///   tile                160 px wide, 1 px status-tint border, rounded, 6 px gap
+///   pane sub-tile       148 px wide, single line
 ///   status dot          INSIDE the tile, right end of the icon line
 ///   notification badge  red count, left end of the icon line
 ///   context bar         thin strip inside the tile bottom
 ///   flyout              264 px wide, opens after 200 ms hover
 ///   label               centered under the icon, truncated with …
-pub(crate) const TILE_W: f32 = 80.;
-pub(crate) const TILE_HALF_W: f32 = 72.;
+pub(crate) const TILE_W: f32 = 160.;
+pub(crate) const TILE_HALF_W: f32 = 148.;
 pub(crate) const TILE_H: f32 = 48.;
 pub(crate) const TILE_GAP: f32 = 6.;
 pub(crate) const FLYOUT_W: f32 = 264.;
@@ -2027,7 +2027,7 @@ fn build_tile(a: TileArgs) -> Element {
         segs.push(
             Element::new(
                 a.label_font,
-                ElementContent::Text(truncate_str(&a.label, 9)),
+                ElementContent::Text(truncate_str(&a.label, 20)),
             )
             .display(DisplayType::Inline)
             .colors(text_only(a.label_color)),
@@ -2050,7 +2050,7 @@ fn build_tile(a: TileArgs) -> Element {
         segs.push(
             Element::new(
                 a.label_font,
-                ElementContent::Text(truncate_str(itext, 9)),
+                ElementContent::Text(truncate_str(itext, 18)),
             )
             .display(DisplayType::Inline)
             .colors(text_only(*icolor)),
@@ -2075,7 +2075,7 @@ fn build_tile(a: TileArgs) -> Element {
         let label_metrics = RenderMetrics::with_font_metrics(&a.label_font.metrics());
         let lcell = label_metrics.cell_size.width as f32;
         let label_cols = if lcell > 0. {
-            ((inner_w / (lcell * 0.55)) as usize).clamp(6, 16)
+            ((inner_w / (lcell * 0.55)) as usize).clamp(6, 28)
         } else {
             12
         };
@@ -2125,7 +2125,7 @@ fn build_tile(a: TileArgs) -> Element {
         // glyphs run ~55% of it. Dividing by the full cell halved the label
         // budget ("homep…" at 6 chars in an 80px tile).
         let label_cols = if lcell > 0. {
-            ((inner_w / (lcell * 0.55)) as usize).clamp(6, 16)
+            ((inner_w / (lcell * 0.55)) as usize).clamp(6, 28)
         } else {
             12
         };
