@@ -476,6 +476,9 @@ struct FontConfigInner {
     char_select_font: RefCell<Option<Rc<LoadedFont>>>,
     command_palette_font: RefCell<Option<Rc<LoadedFont>>>,
     sidebar_font: RefCell<Option<Rc<LoadedFont>>>,
+    /// Live sidebar width in px; overrides config.tab_sidebar_width for the
+    /// Sidebar entity so drag-resizing rescales the rail font immediately.
+    sidebar_width_hint: RefCell<Option<u16>>,
     fallback_channel: RefCell<Option<Sender<FallbackResolveInfo>>>,
 }
 
@@ -498,6 +501,7 @@ impl FontConfigInner {
             char_select_font: RefCell::new(None),
             command_palette_font: RefCell::new(None),
             sidebar_font: RefCell::new(None),
+            sidebar_width_hint: RefCell::new(None),
             font_scale: RefCell::new(1.0),
             dpi: RefCell::new(dpi),
             config: RefCell::new(config.clone()),
@@ -620,16 +624,21 @@ impl FontConfigInner {
                 config.pane_select_font_size,
                 config.pane_select_font.as_ref(),
             ),
-            // Derived from the user's terminal font size AND the configured
-            // sidebar width, so a wider rail gets proportionally larger type
-            // (tiles stretch with the rail; 180px is the reference width).
-            // Runtime drag-resize does not reload config, so the size follows
-            // the configured width only — drag removal is planned anyway.
-            Entity::Sidebar => (
-                (config.font_size * 0.8 * (config.tab_sidebar_width as f64 / 180.0))
-                    .clamp(8.0, 16.0),
-                None,
-            ),
+            // Derived from the user's terminal font size AND the sidebar
+            // width, so a wider rail gets proportionally larger type (tiles
+            // stretch with the rail; 180px is the reference width). The live
+            // width hint, updated on drag-resize, takes precedence over the
+            // configured width.
+            Entity::Sidebar => {
+                let width = self
+                    .sidebar_width_hint
+                    .borrow()
+                    .unwrap_or(config.tab_sidebar_width);
+                (
+                    (config.font_size * 0.8 * (width as f64 / 180.0)).clamp(8.0, 16.0),
+                    None,
+                )
+            }
         };
 
         let text_style =
@@ -1102,6 +1111,24 @@ impl FontConfiguration {
 
     pub fn sidebar_font(&self) -> anyhow::Result<Rc<LoadedFont>> {
         self.inner.sidebar_font(&self.inner)
+    }
+
+    /// Update the live sidebar width the Sidebar entity sizes itself from.
+    /// Invalidates the cached sidebar font when the width actually changes,
+    /// so the next sidebar_font() call reloads at the new size.
+    pub fn set_sidebar_width_hint(&self, width: u16) {
+        let changed = {
+            let mut hint = self.inner.sidebar_width_hint.borrow_mut();
+            if *hint == Some(width) {
+                false
+            } else {
+                *hint = Some(width);
+                true
+            }
+        };
+        if changed {
+            self.inner.sidebar_font.borrow_mut().take();
+        }
     }
 
     pub fn pane_select_font(&self) -> anyhow::Result<Rc<LoadedFont>> {

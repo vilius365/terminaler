@@ -2120,6 +2120,9 @@ impl super::TermWindow {
         let new_width = new_width.max(120).min(600);
         if new_width != self.tab_sidebar_width {
             self.tab_sidebar_width = new_width;
+            // The rail font scales with the width; feed the live value so the
+            // type rescales during the drag, not only after a config reload.
+            self.fonts.set_sidebar_width_hint(new_width);
             self.invalidate_tab_sidebar();
             self.invalidate_fancy_tab_bar();
             if let Some(window) = self.window.as_ref().map(|w| w.clone()) {

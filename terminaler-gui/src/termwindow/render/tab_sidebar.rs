@@ -72,10 +72,17 @@ impl SidebarTheme {
                 1.,
             )
         }
+        fn rgba(r: u8, g: u8, b: u8, a: f32) -> LinearRgba {
+            let c = rgb(r, g, b);
+            LinearRgba::with_components(c.0, c.1, c.2, a)
+        }
+        // Panel surfaces sit at 80% opacity so a translucent terminal setup
+        // shows through the rail as well (user feedback: fully opaque panel
+        // was too heavy). The flyout re-opaques bg_elevated for readability.
         Self {
-            bg_base: rgb(0x12, 0x12, 0x12),
-            bg_surface: rgb(0x1a, 0x1a, 0x1a),
-            bg_elevated: rgb(0x22, 0x22, 0x22),
+            bg_base: rgba(0x12, 0x12, 0x12, 0.8),
+            bg_surface: rgba(0x1a, 0x1a, 0x1a, 0.8),
+            bg_elevated: rgba(0x22, 0x22, 0x22, 0.8),
             border_subtle: rgb(0x2e, 0x2e, 0x2e),
             border_default: rgb(0x3a, 0x3a, 0x3a),
             text_primary: rgb(0xe0, 0xe0, 0xe0),
@@ -1426,7 +1433,15 @@ impl crate::TermWindow {
                         // status color on the rail-facing side.
                         right: accent,
                     },
-                    bg: theme.bg_elevated.into(),
+                    // Opaque, unlike the 80% panel surfaces: the flyout sits
+                    // over live terminal text and must stay readable.
+                    bg: LinearRgba::with_components(
+                        theme.bg_elevated.0,
+                        theme.bg_elevated.1,
+                        theme.bg_elevated.2,
+                        1.,
+                    )
+                    .into(),
                     text: theme.text_primary.into(),
                 })
                 .min_width(Some(Dimension::Pixels(content_w)))
