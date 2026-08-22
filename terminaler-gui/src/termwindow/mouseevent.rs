@@ -2116,8 +2116,9 @@ impl super::TermWindow {
                 (self.dimensions.pixel_width as f32 - mx) as u16
             }
         };
-        // Clamp between 120 and 600 pixels
-        let new_width = new_width.max(120).min(600);
+        // Clamp between 100 and 600 pixels — the responsive tiles stay
+        // legible down to ~100 (font floors at 8pt).
+        let new_width = new_width.max(100).min(600);
         if new_width != self.tab_sidebar_width {
             self.tab_sidebar_width = new_width;
             // The rail font scales with the width; feed the live value so the
