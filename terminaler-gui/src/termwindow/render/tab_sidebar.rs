@@ -310,10 +310,11 @@ impl crate::TermWindow {
         // 10px of slack. Derived rather than hardcoded so a resized sidebar
         // re-flows the columns.
         //
-        // The slack is what keeps the floated agent badge inside the card.
-        // Float::Right anchors to the content extent, which knows nothing about
-        // the row's padding and border, so without it the badge overhung the
-        // right edge and was clipped by the sidebar.
+        // The slack here only sizes the NAME text. It does not position the
+        // floated agent badge: that is clamped to the row's max_width, set
+        // explicitly on the row below. An earlier comment claimed this slack
+        // kept the badge inside the card, which measurement disproved —
+        // changing it moves the text and leaves the badge where it was.
         let cell_w = metrics.cell_size.width as f32;
         let row_cols = if cell_w > 0. {
             (((sidebar_width - 40.) / cell_w).floor() as usize).max(12)
@@ -543,16 +544,22 @@ impl crate::TermWindow {
                     // Cards are uniform: the row spans the sidebar minus its
                     // own margins, padding and border, so text length changes
                     // what a row says, never its shape.
-                    // The floated badge is placed against this content box's
-                    // right boundary (box_model float_max_x), not against the
-                    // card's border, so anything this width fails to subtract
-                    // is width the badge paints over. Take off the margins
-                    // (10+6), padding (6+6) and border (1+1) — measured on a
-                    // real render, an 8px shortfall here put every badged row
-                    // flush with the sidebar edge while unbadged rows stopped
-                    // 8px short, burying the card's right border and corner.
                     .min_width(Some(Dimension::Pixels(
-                        (sidebar_width - 16. - 12. - 2. - 8.).max(0.),
+                        (sidebar_width - 16. - 12. - 2.).max(0.),
+                    )))
+                    // The floated badge is clamped to max_width, NOT to this
+                    // row's min_width: box_model computes
+                    // `float_max_x = (max_x + float_width).min(max_width)`, and
+                    // an element that sets no max_width inherits the parent's
+                    // full bounds. The row therefore let the badge sit at the
+                    // sidebar's edge, painting over the card's right border and
+                    // rounded corner, and neither shortening the name nor
+                    // shrinking min_width moved it — measured, the badge's
+                    // right edge stayed at the same x while the card moved 10px
+                    // left. Bound the row explicitly so the clamp lands on the
+                    // card's content edge instead.
+                    .max_width(Some(Dimension::Pixels(
+                        (sidebar_width - 16. - 12. - 2.).max(0.),
                     )));
 
                 if session.attachable {
