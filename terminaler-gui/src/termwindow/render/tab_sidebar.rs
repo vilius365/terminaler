@@ -435,6 +435,21 @@ impl crate::TermWindow {
             .unwrap_or(label_h * 1.3 + 10.);
         // The trailing sync row is always emitted; reserve its height up front.
         let px_budget = (px_budget - eyebrow_px).max(0.);
+        // A troubled box's eyebrow + error row outrank healthy session tiles:
+        // without this reserve, height pressure folded an erroring box away
+        // with no visible trace while healthy tiles kept their space
+        // (validation finding). Troubled boxes spend from the full budget;
+        // everything else spends from what remains after the reserve.
+        let error_reserve = snaps
+            .iter()
+            .filter(|s| {
+                s.sessions.is_empty()
+                    && !matches!(s.status, crate::tmux_discovery::BoxStatus::Ok)
+            })
+            .count() as f32
+            * eyebrow_px
+            * 2.;
+        let tile_budget_px = (px_budget - error_reserve).max(0.);
         let mut px_used = 0f32;
 
         // Sessions this window already hosts in a pane fold away rather than
@@ -493,7 +508,7 @@ impl crate::TermWindow {
             }
             // The eyebrow plus at least one tile must fit, or the whole box
             // moves to the +N summary.
-            if px_used + eyebrow_px + tile_px > px_budget {
+            if px_used + eyebrow_px + tile_px > tile_budget_px {
                 tiles_hidden += snap.sessions.len();
                 continue;
             }
@@ -539,7 +554,7 @@ impl crate::TermWindow {
                 if folded.contains(&(snap.box_name.clone(), session.session.clone())) {
                     continue;
                 }
-                if px_used + tile_px > px_budget {
+                if px_used + tile_px > tile_budget_px {
                     tiles_hidden += 1;
                     continue;
                 }
