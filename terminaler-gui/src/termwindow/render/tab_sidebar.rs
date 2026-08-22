@@ -29,8 +29,8 @@ use window::color::LinearRgba;
 ///   context bar         thin strip inside the tile bottom
 ///   flyout              264 px wide, opens after 200 ms hover
 ///   label               centered under the icon, truncated with …
-pub(crate) const TILE_W: f32 = 68.;
-pub(crate) const TILE_HALF_W: f32 = 62.;
+pub(crate) const TILE_W: f32 = 80.;
+pub(crate) const TILE_HALF_W: f32 = 72.;
 pub(crate) const TILE_H: f32 = 48.;
 pub(crate) const TILE_GAP: f32 = 6.;
 pub(crate) const FLYOUT_W: f32 = 264.;
@@ -1034,9 +1034,18 @@ impl crate::TermWindow {
         let mut computed = self.compute_element(&context, &element)?;
 
         let sidebar_width = self.tab_sidebar_width as f32;
+        // Fuse the flyout to the TILE edge, not the rail edge: tiles are inset
+        // by margin, and a dead strip between tile and flyout would make the
+        // pointer resolve to no UI item on the way over — which closes the
+        // flyout before it can be reached (user-reported). The flyout overlaps
+        // the rail margin at zindex 50, and its accent border lands exactly on
+        // the tile border.
+        let tile_margin = ((sidebar_width - TILE_W) / 2.).max(2.);
         let x = match self.config.tab_sidebar_position {
-            TabSidebarPosition::Right => (rail_x - FLYOUT_W - 1.).max(0.),
-            TabSidebarPosition::Left => (rail_x + sidebar_width + 1.).min(window_w - FLYOUT_W),
+            TabSidebarPosition::Right => (rail_x + tile_margin - FLYOUT_W).max(0.),
+            TabSidebarPosition::Left => {
+                (rail_x + sidebar_width - tile_margin).min(window_w - FLYOUT_W)
+            }
         };
         let h = computed.bounds.height();
         let y = fly.anchor_y.min(window_h - h - 8.).max(rail_y);
@@ -1902,7 +1911,7 @@ fn build_tile(a: TileArgs) -> Element {
     let tile_w = if a.half { TILE_HALF_W } else { TILE_W };
     let margin_x = ((a.sidebar_width - tile_w) / 2.).max(2.);
     let cell_w = a.metrics.cell_size.width as f32;
-    let inner_w = tile_w - 2. - 6.;
+    let inner_w = tile_w - 2. - 4.;
     let cols = if cell_w > 0. {
         ((inner_w / cell_w) as usize).max(4)
     } else {
@@ -2037,8 +2046,8 @@ fn build_tile(a: TileArgs) -> Element {
             bottom: Dimension::Pixels(TILE_GAP),
         })
         .padding(BoxDimension {
-            left: Dimension::Pixels(3.),
-            right: Dimension::Pixels(3.),
+            left: Dimension::Pixels(2.),
+            right: Dimension::Pixels(2.),
             top: Dimension::Pixels(vpad),
             bottom: Dimension::Pixels(vpad),
         })

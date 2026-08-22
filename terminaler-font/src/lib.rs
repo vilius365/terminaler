@@ -620,9 +620,9 @@ impl FontConfigInner {
                 config.pane_select_font_size,
                 config.pane_select_font.as_ref(),
             ),
-            // The 90px rail needs a size below the window-frame font; the V2
-            // Tiles spec labels sit around 9pt.
-            Entity::Sidebar => (9.0, None),
+            // The 90px rail needs a size well below the window-frame font;
+            // 9pt still truncated real project names (user feedback).
+            Entity::Sidebar => (8.0, None),
         };
 
         let text_style =
