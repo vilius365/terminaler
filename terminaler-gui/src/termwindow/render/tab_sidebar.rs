@@ -1111,10 +1111,13 @@ impl crate::TermWindow {
         let window_w = self.dimensions.pixel_width as f32;
         let window_h = self.dimensions.pixel_height as f32;
         let dpi = self.dimensions.dpi as f32;
+        // Generous layout bounds: the element's own min/max width sizes the
+        // box (it grows with the flyout font), so the context must not cap it
+        // at the reference FLYOUT_W.
         let context = LayoutContext {
             width: config::DimensionContext {
                 dpi,
-                pixel_max: FLYOUT_W,
+                pixel_max: window_w,
                 pixel_cell: metrics.cell_size.width as f32,
             },
             height: config::DimensionContext {
@@ -1122,7 +1125,7 @@ impl crate::TermWindow {
                 pixel_max: window_h,
                 pixel_cell: metrics.cell_size.height as f32,
             },
-            bounds: euclid::rect(0., 0., FLYOUT_W, window_h),
+            bounds: euclid::rect(0., 0., window_w, window_h),
             metrics: &metrics,
             gl_state: self.render_state.as_ref().unwrap(),
             zindex: 50,
@@ -1406,7 +1409,12 @@ impl crate::TermWindow {
             _ => return None,
         }
 
-        let content_w = FLYOUT_W - 4. - 22.;
+        // Width follows the flyout font: ~38 average characters of the
+        // detail face, floored at the reference FLYOUT_W. A fixed width
+        // cramped the text as soon as the rail font scaled up.
+        let fly_metrics = RenderMetrics::with_font_metrics(&title_font.metrics());
+        let content_w =
+            (fly_metrics.cell_size.width as f32 * 0.55 * 38.).max(FLYOUT_W - 26.);
         Some(
             Element::new(font, ElementContent::Children(children))
                 .display(DisplayType::Block)

@@ -634,10 +634,11 @@ impl FontConfigInner {
                     .sidebar_width_hint
                     .borrow()
                     .unwrap_or(config.tab_sidebar_width);
-                (
-                    (config.font_size * 0.8 * (width as f64 / 180.0)).clamp(8.0, 16.0),
-                    None,
-                )
+                // Growth caps at 1.15x the 180px reference: past that point a
+                // wider rail should fit MORE information into the tile, not
+                // bigger letters (user feedback).
+                let factor = (width as f64 / 180.0).min(1.15);
+                ((config.font_size * 0.8 * factor).clamp(8.0, 16.0), None)
             }
         };
 
