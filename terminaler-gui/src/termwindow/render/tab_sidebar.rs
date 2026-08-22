@@ -315,8 +315,19 @@ impl crate::TermWindow {
         // the row's padding and border, so without it the badge overhung the
         // right edge and was clipped by the sidebar.
         let cell_w = metrics.cell_size.width as f32;
+        // Margins (10+6), padding (6+6) and border (1+1) come off the sidebar
+        // before any text fits, plus slack for the floated badge.
+        //
+        // Float::Right anchors the badge to the row's CONTENT extent, which
+        // knows nothing about the padding and border to its right, so the badge
+        // is drawn that much further right than the text box implies. Without
+        // enough slack it covers the card's right border and rounded corner:
+        // measured on a real render, rows carrying a badge reached the very
+        // edge of the sidebar while unbadged rows stopped 8px short. Reserve
+        // the row's own chrome so the badge lands inside the card.
+        const ROW_CHROME: f32 = 10. + 6. + 6. + 6. + 1. + 1.;
         let row_cols = if cell_w > 0. {
-            (((sidebar_width - 40.) / cell_w).floor() as usize).max(12)
+            (((sidebar_width - ROW_CHROME - 12.) / cell_w).floor() as usize).max(12)
         } else {
             24
         };
@@ -1470,6 +1481,23 @@ impl crate::TermWindow {
         if self.config.tmux.as_ref().map_or(false, |t| t.enabled) {
             let mut fingerprint = String::new();
             for snap in crate::tmux_discovery::snapshot() {
+                // The box itself, before its sessions. A box whose probe has
+                // not answered yet has no sessions to iterate, so keying only
+                // on sessions made "box present but empty" indistinguishable
+                // from "box absent" — a newly configured box stayed invisible
+                // until something else happened to invalidate the sidebar, and
+                // a box going unreachable kept painting its old rows. The
+                // status matters for the same reason: it drives the header dot
+                // and the error line, neither of which is a session.
+                fingerprint.push_str(&snap.box_name);
+                fingerprint.push('#');
+                fingerprint.push_str(match snap.status {
+                    crate::tmux_discovery::BoxStatus::Ok => "ok",
+                    crate::tmux_discovery::BoxStatus::Pending => "pending",
+                    crate::tmux_discovery::BoxStatus::RegistryOnly => "registry",
+                    crate::tmux_discovery::BoxStatus::Unreachable(_) => "unreachable",
+                });
+                fingerprint.push('\n');
                 for session in &snap.sessions {
                     fingerprint.push_str(&snap.box_name);
                     fingerprint.push(':');
