@@ -13,7 +13,6 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 use terminaler_font::LoadedFont;
-use terminaler_term::color::ColorPalette;
 use window::color::LinearRgba;
 
 /// ── Shared visual spec (V2 "Tiles") ─────────────────────────────────────────
@@ -36,7 +35,18 @@ pub(crate) const TILE_MARGIN: f32 = 6.;
 pub(crate) const TILE_SUB_INDENT: f32 = 12.;
 pub(crate) const TILE_GAP: f32 = 6.;
 pub(crate) const FLYOUT_W: f32 = 264.;
+/// Average proportional-glyph advance as a fraction of the metrics reference
+/// cell (the widest advance). NOTE: sidebar.html's 0.62 is a DIFFERENT base
+/// (fraction of the font-size in px) — do not "sync" one number onto the other.
+const AVG_ADVANCE_FRAC: f32 = 0.55;
+/// Flyout horizontal chrome: padding (10 + 12) + border (1 + 3) from the
+/// flyout container element below — keep in step with it.
+const FLYOUT_CHROME: f32 = 26.;
+/// Gap the dock keeps above itself (its margin-top); also reserved when
+/// budgeting the section heights.
+const DOCK_TOP_MARGIN: f32 = 8.;
 
+#[derive(Clone, Copy)]
 pub(crate) struct SidebarTheme {
     pub bg_base: LinearRgba,
     pub bg_surface: LinearRgba,
@@ -53,28 +63,20 @@ pub(crate) struct SidebarTheme {
     pub accent_orange: LinearRgba,
 }
 
+static SIDEBAR_THEME: std::sync::OnceLock<SidebarTheme> = std::sync::OnceLock::new();
+
 impl SidebarTheme {
+    /// Cached: the theme is a pure constant, and load() is called per paint.
     pub fn load() -> Self {
-        // sRGB -> linear, the same transfer function SrgbaTuple::to_linear
-        // applies; inlined to keep this dependency-free.
-        fn srgb_to_linear(c: f32) -> f32 {
-            if c <= 0.04045 {
-                c / 12.92
-            } else {
-                ((c + 0.055) / 1.055).powf(2.4)
-            }
-        }
+        *SIDEBAR_THEME.get_or_init(Self::compute)
+    }
+
+    fn compute() -> Self {
         fn rgb(r: u8, g: u8, b: u8) -> LinearRgba {
-            LinearRgba::with_components(
-                srgb_to_linear(r as f32 / 255.),
-                srgb_to_linear(g as f32 / 255.),
-                srgb_to_linear(b as f32 / 255.),
-                1.,
-            )
+            LinearRgba::with_srgba(r, g, b, 255)
         }
         fn rgba(r: u8, g: u8, b: u8, a: f32) -> LinearRgba {
-            let c = rgb(r, g, b);
-            LinearRgba::with_components(c.0, c.1, c.2, a)
+            rgb(r, g, b).mul_alpha(a)
         }
         // Panel surfaces sit at 80% opacity so a translucent terminal setup
         // shows through the rail as well (user feedback: fully opaque panel
@@ -97,11 +99,6 @@ impl SidebarTheme {
     }
 }
 
-/// Fade a color by scaling its alpha — used for stale boxes and inactive tints.
-fn dim(c: LinearRgba, f: f32) -> LinearRgba {
-    LinearRgba::with_components(c.0, c.1, c.2, c.3 * f)
-}
-
 /// Status color for a claude session (dot, flyout edge).
 fn status_color(
     claude: &crate::termwindow::ClaudeSessionInfo,
@@ -122,10 +119,45 @@ fn status_border(
     claude: &crate::termwindow::ClaudeSessionInfo,
     theme: &SidebarTheme,
 ) -> LinearRgba {
-    dim(status_color(claude, theme), 0.6)
+    status_color(claude, theme).mul_alpha(0.6)
 }
 
 impl crate::TermWindow {
+    /// Rail font size: the user's terminal size scaled by the rail width.
+    /// Growth caps at 1.15x the 180px reference — past that point a wider
+    /// rail fits MORE text into the tiles, not bigger letters (user feedback).
+    pub(crate) fn rail_font_size(&self) -> f64 {
+        let factor = (self.tab_sidebar_width as f64 / 180.0).min(1.15);
+        (self.config.font_size * 0.8 * factor).clamp(8.0, 16.0)
+    }
+
+    /// Layout context for computing/probing sidebar elements.
+    fn sidebar_layout_ctx<'a>(
+        &'a self,
+        metrics: &'a RenderMetrics,
+        max_w: f32,
+        max_h: f32,
+        zindex: i8,
+    ) -> LayoutContext<'a> {
+        let dpi = self.dimensions.dpi as f32;
+        LayoutContext {
+            width: config::DimensionContext {
+                dpi,
+                pixel_max: max_w,
+                pixel_cell: metrics.cell_size.width as f32,
+            },
+            height: config::DimensionContext {
+                dpi,
+                pixel_max: max_h,
+                pixel_cell: metrics.cell_size.height as f32,
+            },
+            bounds: euclid::rect(0., 0., max_w, max_h),
+            metrics,
+            gl_state: self.render_state.as_ref().unwrap(),
+            zindex,
+        }
+    }
+
     pub fn invalidate_tab_sidebar(&mut self) {
         self.tab_sidebar.take();
     }
@@ -300,6 +332,10 @@ impl crate::TermWindow {
             None => return found,
         };
 
+        // One snapshot for the whole scan — it deep-clones the discovery
+        // state, and it used to be taken per matching pane per box.
+        let snaps = crate::tmux_discovery::snapshot();
+
         for tab in window.iter() {
             for pos in tab.iter_panes_ignoring_zoom() {
                 let info = match pos
@@ -319,7 +355,7 @@ impl crate::TermWindow {
                     if !tokens.is_empty() && !tokens.iter().any(|t| argv.contains(t.as_str())) {
                         continue;
                     }
-                    for snap in crate::tmux_discovery::snapshot() {
+                    for snap in &snaps {
                         if &snap.box_name != box_name {
                             continue;
                         }
@@ -371,28 +407,12 @@ impl crate::TermWindow {
         // tile height from font metrics both undercounted and clipped
         // mid-tile, so probe-compute a representative tile and eyebrow
         // through the real layout instead.
-        let dpi = self.dimensions.dpi as f32;
         let window_height = self.dimensions.pixel_height as f32;
-        let probe_ctx = LayoutContext {
-            width: config::DimensionContext {
-                dpi,
-                pixel_max: sidebar_width,
-                pixel_cell: metrics.cell_size.width as f32,
-            },
-            height: config::DimensionContext {
-                dpi,
-                pixel_max: window_height,
-                pixel_cell: metrics.cell_size.height as f32,
-            },
-            bounds: euclid::rect(0., 0., sidebar_width, window_height),
-            metrics,
-            gl_state: self.render_state.as_ref().unwrap(),
-            zindex: 10,
-        };
+        let probe_ctx = self.sidebar_layout_ctx(metrics, sidebar_width, window_height, 10);
         let label_metrics = RenderMetrics::with_font_metrics(&title_font.metrics());
         let label_h = label_metrics.cell_size.height as f32;
         let tile_px = {
-            let mut probe = TileArgs::new(font, title_font, metrics, theme, sidebar_width);
+            let mut probe = TileArgs::new(font, title_font, metrics, &label_metrics, theme, sidebar_width);
             probe.icon = "\u{21c4}".to_string();
             probe.label = "probe".to_string();
             self.compute_element(&probe_ctx, &build_tile(probe))
@@ -464,11 +484,7 @@ impl crate::TermWindow {
                         top: Dimension::Pixels(0.),
                         bottom: Dimension::Pixels(2.),
                     })
-                    .colors(ElementColors {
-                        border: BorderColor::default(),
-                        bg: InheritableColor::Inherited,
-                        text: theme.text_tertiary.into(),
-                    })
+                    .colors(text_only(theme.text_tertiary))
                     .min_width(Some(Dimension::Pixels(sidebar_width))),
                 );
                 px_used += eyebrow_px;
@@ -509,20 +525,20 @@ impl crate::TermWindow {
                 // pure noise (user feedback, 2026-08-22).
                 let count = match (session.windows > 1, session.attached) {
                     (true, true) => Some(format!("{}\u{25cf}", session.windows.min(9))),
-                    (true, false) => Some(format!("{} ", session.windows.min(9))),
+                    (true, false) => Some(session.windows.min(9).to_string()),
                     (false, true) => Some("\u{25cf}".to_string()),
                     (false, false) => None,
                 };
 
                 let dimf = if stale || session.attached { 0.55 } else { 1.0 };
-                let mut tile = TileArgs::new(font, title_font, metrics, theme, sidebar_width);
+                let mut tile = TileArgs::new(font, title_font, metrics, &label_metrics, theme, sidebar_width);
                 tile.icon = icon.to_string();
-                tile.icon_color = dim(icon_color, dimf);
-                tile.icon_label = agent_line.map(|(t, c)| (t, dim(c, dimf)));
+                tile.icon_color = icon_color.mul_alpha(dimf);
+                tile.icon_label = agent_line.map(|(t, c)| (t, c.mul_alpha(dimf)));
                 tile.label = label;
-                tile.label_color = dim(label_color, dimf);
-                tile.right_hint = count.map(|c| (c, dim(theme.text_tertiary, dimf)));
-                tile.border_color = dim(theme.border_subtle, dimf);
+                tile.label_color = label_color.mul_alpha(dimf);
+                tile.right_hint = count.map(|c| (c, theme.text_tertiary.mul_alpha(dimf)));
+                tile.border_color = theme.border_subtle.mul_alpha(dimf);
                 if session.attachable {
                     tile.item = Some(TabSidebarItem::TmuxSession {
                         box_name: snap.box_name.clone(),
@@ -555,11 +571,7 @@ impl crate::TermWindow {
                     top: Dimension::Pixels(1.),
                     bottom: Dimension::Pixels(3.),
                 })
-                .colors(ElementColors {
-                    border: BorderColor::default(),
-                    bg: InheritableColor::Inherited,
-                    text: theme.text_tertiary.into(),
-                })
+                .colors(text_only(theme.text_tertiary))
                 .min_width(Some(Dimension::Pixels(sidebar_width))),
             );
         }
@@ -598,14 +610,11 @@ impl crate::TermWindow {
         Some(section)
     }
 
-    pub fn build_tab_sidebar(
-        &self,
-        _palette: &ColorPalette,
-    ) -> anyhow::Result<ComputedElement> {
+    pub fn build_tab_sidebar(&self) -> anyhow::Result<ComputedElement> {
         let font = self.fonts.default_font()?;
-        // Dedicated 9pt rail font (Entity::Sidebar): the 12pt title font was
-        // visibly too large at 90px — labels ellipsized at 5-6 chars.
-        let title_font = self.fonts.sidebar_font()?;
+        // Dedicated rail font (Entity::Sidebar), sized by rail_font_size —
+        // the 12pt title font was visibly too large on the rail.
+        let title_font = self.fonts.sidebar_font_at(self.rail_font_size())?;
         let metrics = RenderMetrics::with_font_metrics(&font.metrics());
         let sidebar_width = self.tab_sidebar_width as f32;
         let border = self.get_os_border();
@@ -632,6 +641,8 @@ impl crate::TermWindow {
             .get_active_tab_for_window(self.mux_window_id)
             .map(|t| t.tab_id());
 
+        let label_metrics = RenderMetrics::with_font_metrics(&title_font.metrics());
+
         let mut tab_elements = vec![];
 
         // Group heading for this window's own panes, matching the box eyebrows
@@ -654,16 +665,13 @@ impl crate::TermWindow {
             let panes = tab.iter_panes_ignoring_zoom();
             let has_multiple_panes = panes.len() > 1;
 
-            let (has_notification, notif_count, notif_elapsed) = match self
-                .pane_state_for_tab(tab_id)
-            {
+            let (notif_count, notif_elapsed) = match self.pane_state_for_tab(tab_id) {
                 Some(ps) => (
-                    ps.notification_start.is_some(),
                     ps.notification_count,
                     ps.notification_start
                         .map(|s| Instant::now().duration_since(s).as_secs_f32()),
                 ),
-                None => (false, 0, None),
+                None => (0, None),
             };
 
             let has_any_claude = info.map_or(false, |i| !i.pane_claude_info.is_empty());
@@ -709,7 +717,7 @@ impl crate::TermWindow {
                 theme.bg_base
             };
             let bg = match notif_elapsed {
-                Some(elapsed) if has_notification => {
+                Some(elapsed) => {
                     let period = 1.5_f32;
                     let t = ((elapsed * std::f32::consts::TAU / period).sin() + 1.0) / 2.0;
                     let blend = t * 0.35;
@@ -723,7 +731,7 @@ impl crate::TermWindow {
                 _ => base_bg,
             };
 
-            let mut tile = TileArgs::new(&font, &title_font, &metrics, &theme, sidebar_width);
+            let mut tile = TileArgs::new(&font, &title_font, &metrics, &label_metrics, &theme, sidebar_width);
             tile.icon = icon.to_string();
             tile.icon_color = icon_color;
             tile.label = label;
@@ -732,7 +740,7 @@ impl crate::TermWindow {
             } else {
                 theme.text_secondary
             };
-            if has_notification && notif_count > 0 {
+            if notif_elapsed.is_some() && notif_count > 0 {
                 tile.left_hint = Some((format!("{}", notif_count.min(9)), theme.accent_red));
             }
             if let Some(c) = claude_for_accent {
@@ -772,7 +780,7 @@ impl crate::TermWindow {
                         .map(last_path_component)
                         .unwrap_or_else(|| pane_title.clone());
 
-                    let mut sub = TileArgs::new(&font, &title_font, &metrics, &theme, sidebar_width);
+                    let mut sub = TileArgs::new(&font, &title_font, &metrics, &label_metrics, &theme, sidebar_width);
                     sub.half = true;
                     if pane_claude.is_some() {
                         sub.icon = "\u{2733}".to_string();
@@ -812,28 +820,14 @@ impl crate::TermWindow {
         }
 
         // Layout context used to compute the final tree.
-        let dpi = self.dimensions.dpi as f32;
-        let context_probe = LayoutContext {
-            width: config::DimensionContext {
-                dpi,
-                pixel_max: sidebar_width,
-                pixel_cell: metrics.cell_size.width as f32,
-            },
-            height: config::DimensionContext {
-                dpi,
-                pixel_max: window_height,
-                pixel_cell: metrics.cell_size.height as f32,
-            },
-            bounds: euclid::rect(0., 0., sidebar_width, window_height),
-            metrics: &metrics,
-            gl_state: self.render_state.as_ref().unwrap(),
-            zindex: 10,
-        };
+        let context_probe = self.sidebar_layout_ctx(&metrics, sidebar_width, window_height, 10);
 
         // Tmux tile budget from the height that actually remains after the
         // local section and the dock — a fixed half-window guess let a short
         // window push the dock and the "+N" summary off the bottom entirely.
-        let tabs_probe = Element::new(&font, ElementContent::Children(tab_elements.clone()))
+        // compute_element only borrows, so the same container that gets
+        // measured is later pushed into the tree — no clone.
+        let tabs_container = Element::new(&font, ElementContent::Children(tab_elements))
             .display(DisplayType::Block)
             .colors(ElementColors {
                 border: BorderColor::default(),
@@ -841,14 +835,14 @@ impl crate::TermWindow {
                 text: InheritableColor::Inherited,
             });
         let tabs_height = self
-            .compute_element(&context_probe, &tabs_probe)
+            .compute_element(&context_probe, &tabs_container)
             .map(|c| c.bounds.height())
             .unwrap_or(0.);
         // Measure the dock rather than reserving a guess for it.
         let dock = build_widget_dock(&font, &title_font, &theme, sidebar_width);
         let dock_h = self
             .compute_element(&context_probe, &dock)
-            .map(|c| c.bounds.height() + 8.)
+            .map(|c| c.bounds.height() + DOCK_TOP_MARGIN)
             .unwrap_or(40.);
         let px_budget = (window_height - tabs_height - dock_h).max(0.);
         let agents_section = self.build_agents_section(
@@ -863,14 +857,6 @@ impl crate::TermWindow {
         // Everything flows in document order; nothing is stretched to pin a
         // child to the window's bottom edge (a height prediction the layout is
         // free to exceed pushed the old new-tab button off-screen).
-        let tabs_container = Element::new(&font, ElementContent::Children(tab_elements))
-            .display(DisplayType::Block)
-            .colors(ElementColors {
-                border: BorderColor::default(),
-                bg: InheritableColor::Inherited,
-                text: InheritableColor::Inherited,
-            });
-
         let mut sidebar_children = vec![tabs_container];
         if let Some(section) = agents_section {
             sidebar_children.push(section);
@@ -989,21 +975,15 @@ impl crate::TermWindow {
             self.update_next_frame_time(Some(Instant::now() + Duration::from_millis(32)));
         }
 
-        // Fallback fonts for the rail's glyph icons load asynchronously; an
-        // element cached before they arrive keeps its blank shapes forever
-        // (nothing re-shapes a cached element, so the ClearShapeCache heal
-        // never fires for it) — tiles rendered as tall empty boxes until a
-        // resize invalidated the cache. Rebuild every paint for the first
-        // moments after window creation so late glyphs land on their own.
-        if self.created.elapsed() < Duration::from_secs(3) {
-            self.tab_sidebar.take();
-            self.update_next_frame_time(Some(Instant::now() + Duration::from_millis(250)));
-        }
-
         // The sidebar is cached until invalidated, so a poll that discovers new
-        // agents would otherwise never reach the screen. Compare a cheap
-        // fingerprint of the discovery snapshot and rebuild when it moves.
-        if self.config.tmux.as_ref().map_or(false, |t| t.enabled) {
+        // agents would otherwise never reach the screen. Compare a fingerprint
+        // of the discovery snapshot and rebuild when it moves. Throttled: the
+        // fingerprint clones the snapshot and scans pane argv, which is too
+        // much to repeat per paint; 250ms of detach lag is imperceptible.
+        if self.config.tmux.as_ref().map_or(false, |t| t.enabled)
+            && self.last_tmux_fingerprint_poll.elapsed() >= Duration::from_millis(250)
+        {
+            self.last_tmux_fingerprint_poll = Instant::now();
             let mut fingerprint = String::new();
             for snap in crate::tmux_discovery::snapshot() {
                 // The box itself, before its sessions. A box whose probe has
@@ -1059,8 +1039,7 @@ impl crate::TermWindow {
         }
 
         if self.tab_sidebar.is_none() {
-            let palette = self.palette().clone();
-            let sidebar = self.build_tab_sidebar(&palette)?;
+            let sidebar = self.build_tab_sidebar()?;
             self.tab_sidebar.replace(sidebar);
         }
 
@@ -1099,7 +1078,7 @@ impl crate::TermWindow {
         }
 
         let font = self.fonts.default_font()?;
-        let title_font = self.fonts.sidebar_font()?;
+        let title_font = self.fonts.sidebar_font_at(self.rail_font_size())?;
         let metrics = RenderMetrics::with_font_metrics(&font.metrics());
         let theme = SidebarTheme::load();
 
@@ -1110,26 +1089,10 @@ impl crate::TermWindow {
 
         let window_w = self.dimensions.pixel_width as f32;
         let window_h = self.dimensions.pixel_height as f32;
-        let dpi = self.dimensions.dpi as f32;
         // Generous layout bounds: the element's own min/max width sizes the
         // box (it grows with the flyout font), so the context must not cap it
         // at the reference FLYOUT_W.
-        let context = LayoutContext {
-            width: config::DimensionContext {
-                dpi,
-                pixel_max: window_w,
-                pixel_cell: metrics.cell_size.width as f32,
-            },
-            height: config::DimensionContext {
-                dpi,
-                pixel_max: window_h,
-                pixel_cell: metrics.cell_size.height as f32,
-            },
-            bounds: euclid::rect(0., 0., window_w, window_h),
-            metrics: &metrics,
-            gl_state: self.render_state.as_ref().unwrap(),
-            zindex: 50,
-        };
+        let context = self.sidebar_layout_ctx(&metrics, window_w, window_h, 50);
         let mut computed = self.compute_element(&context, &element)?;
 
         let sidebar_width = self.tab_sidebar_width as f32;
@@ -1228,11 +1191,7 @@ impl crate::TermWindow {
                     Element::new(font, ElementContent::Text(truncate_str(&title_text, 28)))
                         .display(DisplayType::Block)
                         .line_height(Some(1.2))
-                        .colors(ElementColors {
-                            border: BorderColor::default(),
-                            bg: InheritableColor::Inherited,
-                            text: title_color.into(),
-                        }),
+                        .colors(text_only(title_color)),
                 );
 
                 if let Some(c) = claude {
@@ -1347,11 +1306,7 @@ impl crate::TermWindow {
                     Element::new(font, ElementContent::Text(truncate_str(session, 28)))
                         .display(DisplayType::Block)
                         .line_height(Some(1.2))
-                        .colors(ElementColors {
-                            border: BorderColor::default(),
-                            bg: InheritableColor::Inherited,
-                            text: name_color.into(),
-                        }),
+                        .colors(text_only(name_color)),
                 );
 
                 let status_text = match snap.status {
@@ -1414,7 +1369,7 @@ impl crate::TermWindow {
         // cramped the text as soon as the rail font scaled up.
         let fly_metrics = RenderMetrics::with_font_metrics(&title_font.metrics());
         let content_w =
-            (fly_metrics.cell_size.width as f32 * 0.55 * 38.).max(FLYOUT_W - 26.);
+            (fly_metrics.cell_size.width as f32 * AVG_ADVANCE_FRAC * 38.).max(FLYOUT_W - FLYOUT_CHROME);
         Some(
             Element::new(font, ElementContent::Children(children))
                 .display(DisplayType::Block)
@@ -1699,23 +1654,6 @@ fn build_claude_card_children(
     }
 }
 
-/// Get the accent color for a Claude session based on its status.
-fn claude_status_accent(claude: &crate::termwindow::ClaudeSessionInfo, active: bool) -> LinearRgba {
-    use crate::termwindow::ClaudeStatus;
-    let base = match claude.status {
-        Some(ClaudeStatus::Working) => LinearRgba::with_components(0.247, 0.725, 0.314, 1.0),      // green
-        Some(ClaudeStatus::WaitingInput) => LinearRgba::with_components(0.824, 0.600, 0.133, 1.0),  // yellow
-        Some(ClaudeStatus::Idle) => LinearRgba::with_components(0.4, 0.4, 0.4, 1.0),          // gray
-        Some(ClaudeStatus::Error) => LinearRgba::with_components(0.973, 0.318, 0.286, 1.0),         // red
-        None => LinearRgba::with_components(0.4, 0.4, 0.4, 1.0),                                     // gray (idle default)
-    };
-    if active {
-        base
-    } else {
-        LinearRgba::with_components(base.0 * 0.7, base.1 * 0.7, base.2 * 0.7, 0.6)
-    }
-}
-
 impl crate::TermWindow {
     /// Push sidebar state to the WebView if data has changed,
     /// reposition the WebView if geometry changed, and drain IPC queue.
@@ -1969,6 +1907,9 @@ struct TileArgs<'a> {
     font: &'a Rc<LoadedFont>,
     label_font: &'a Rc<LoadedFont>,
     metrics: &'a RenderMetrics,
+    /// Metrics of label_font, computed once per rebuild by the caller (they
+    /// were being recomputed per tile).
+    label_metrics: &'a RenderMetrics,
     theme: &'a SidebarTheme,
     sidebar_width: f32,
     icon: String,
@@ -1998,6 +1939,7 @@ impl<'a> TileArgs<'a> {
         font: &'a Rc<LoadedFont>,
         label_font: &'a Rc<LoadedFont>,
         metrics: &'a RenderMetrics,
+        label_metrics: &'a RenderMetrics,
         theme: &'a SidebarTheme,
         sidebar_width: f32,
     ) -> Self {
@@ -2005,6 +1947,7 @@ impl<'a> TileArgs<'a> {
             font,
             label_font,
             metrics,
+            label_metrics,
             theme,
             sidebar_width,
             icon: String::new(),
@@ -2084,7 +2027,7 @@ fn build_tile(a: TileArgs) -> Element {
             segs.push(
                 Element::new(
                     a.label_font,
-                    ElementContent::Text(format!(" {}", rt.trim_end())),
+                    ElementContent::Text(format!(" {}", rt)),
                 )
                 .display(DisplayType::Inline)
                 .colors(text_only(*rc)),
@@ -2094,28 +2037,6 @@ fn build_tile(a: TileArgs) -> Element {
             Element::new(a.font, ElementContent::Children(segs))
                 .display(DisplayType::Block)
                 .line_height(Some(1.1)),
-        );
-
-        // Label line identical to the centered-icon branch below.
-        let label_metrics = RenderMetrics::with_font_metrics(&a.label_font.metrics());
-        let lcell = label_metrics.cell_size.width as f32;
-        let label_cols = if lcell > 0. {
-            ((inner_w / (lcell * 0.55)) as usize).clamp(6, 28)
-        } else {
-            12
-        };
-        lines.push(
-            Element::new(
-                a.label_font,
-                ElementContent::Text(format!(
-                    "{:^w$}",
-                    truncate_str(&a.label, label_cols),
-                    w = label_cols
-                )),
-            )
-            .display(DisplayType::Block)
-            .line_height(Some(1.0))
-            .colors(text_only(a.label_color)),
         );
     } else {
         // Icon line: [hint][centered icon][hint] in fixed mono columns.
@@ -2139,18 +2060,18 @@ fn build_tile(a: TileArgs) -> Element {
                 .display(DisplayType::Block)
                 .line_height(Some(1.1)),
         );
+    }
 
-        // Label line, approximately centered in label-font columns. The label
-        // font is proportional, so `{:^}` centering is approximate — close
-        // enough at 9-ish glyphs, and exact centering would need pixel
-        // measurement the box model does not expose.
-        let label_metrics = RenderMetrics::with_font_metrics(&a.label_font.metrics());
-        let lcell = label_metrics.cell_size.width as f32;
-        // The metrics cell is the widest reference advance; average Roboto
-        // glyphs run ~55% of it. Dividing by the full cell halved the label
-        // budget ("homep…" at 6 chars in an 80px tile).
+    // Shared by the icon_label and centered-icon layouts (it used to be
+    // duplicated in both branches): the centered project label, then the
+    // context strip.
+    if !a.half {
+        // The label font is proportional, so `{:^}` centering is approximate —
+        // close enough, and exact centering would need pixel measurement the
+        // box model does not expose.
+        let lcell = a.label_metrics.cell_size.width as f32;
         let label_cols = if lcell > 0. {
-            ((inner_w / (lcell * 0.55)) as usize).clamp(6, 28)
+            ((inner_w / (lcell * AVG_ADVANCE_FRAC)) as usize).clamp(6, 28)
         } else {
             12
         };
@@ -2270,7 +2191,7 @@ fn sidebar_eyebrow(
         parts.push(
             Element::new(label_font, ElementContent::Text("\u{25cf} ".to_string()))
                 .display(DisplayType::Inline)
-                .colors(text_only(dim(dot_color, dimf))),
+                .colors(text_only(dot_color.mul_alpha(dimf))),
         );
     }
     parts.push(
@@ -2279,7 +2200,7 @@ fn sidebar_eyebrow(
             ElementContent::Text(truncate_str(&name.to_uppercase(), 10)),
         )
         .display(DisplayType::Inline)
-        .colors(text_only(dim(theme.text_tertiary, dimf))),
+        .colors(text_only(theme.text_tertiary.mul_alpha(dimf))),
     );
 
     Element::new(label_font, ElementContent::Children(parts))
@@ -2291,11 +2212,7 @@ fn sidebar_eyebrow(
             top: Dimension::Pixels(7.),
             bottom: Dimension::Pixels(3.),
         })
-        .colors(ElementColors {
-            border: BorderColor::default(),
-            bg: InheritableColor::Inherited,
-            text: dim(theme.text_tertiary, dimf).into(),
-        })
+        .colors(text_only(theme.text_tertiary.mul_alpha(dimf)))
         .min_width(Some(Dimension::Pixels(sidebar_width)))
 }
 

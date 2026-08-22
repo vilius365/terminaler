@@ -373,6 +373,20 @@ pub struct SidebarFlyoutState {
 
 pub const SIDEBAR_FLYOUT_DELAY: Duration = Duration::from_millis(200);
 
+impl TabSidebarItem {
+    /// Widget-dock buttons: hovering them closes the flyout rather than
+    /// keeping it open. New dock chips must land here or the flyout logic
+    /// won't know about them.
+    pub fn is_dock(&self) -> bool {
+        matches!(
+            self,
+            TabSidebarItem::NewTabButton
+                | TabSidebarItem::ThemePickerButton
+                | TabSidebarItem::TmuxRefreshButton
+        )
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum UIItemType {
     TabBar(TabBarItem),
@@ -558,6 +572,9 @@ pub struct TermWindow {
     /// to this, so grabbing anywhere in the handle's hit strip cannot jump the
     /// width (and with it the live-scaled rail font) on the first press.
     sidebar_resize_start_width: Option<u16>,
+    /// Last run of the tmux fingerprint check in paint_tab_sidebar — the check
+    /// clones the discovery snapshot and scans pane argv, so it is throttled.
+    last_tmux_fingerprint_poll: Instant,
     last_sidebar_info_poll: Instant,
     /// Number of Claude agent panes in `waiting_input` across all windows,
     /// shown as a tab-bar badge. Refreshed on a throttled poll.
@@ -959,6 +976,7 @@ impl TermWindow {
             sidebar_flyout: None,
             sidebar_flyout_rect: None,
             sidebar_resize_start_width: None,
+            last_tmux_fingerprint_poll: Instant::now(),
             last_sidebar_info_poll: Instant::now(),
             agents_waiting: 0,
             last_agents_poll: Instant::now(),
@@ -1383,6 +1401,12 @@ impl TermWindow {
                 self.shape_generation += 1;
                 self.shape_cache.borrow_mut().clear();
                 self.invalidate_modal();
+                // Cached element trees shaped before async fallback fonts
+                // arrived hold blank glyphs forever unless re-shaped — the
+                // sidebar tiles rendered as empty boxes on first launch until
+                // this subscription replaced a rebuild-for-3s bandaid.
+                self.invalidate_tab_sidebar();
+                self.invalidate_fancy_tab_bar();
                 window.invalidate();
             }
             TermWindowNotif::PerformAssignment {
@@ -4876,7 +4900,13 @@ impl TermWindow {
                 // JS-side debounce for the same reason a quick open/close pair
                 // must not be swallowed.
                 let open = action["open"].as_bool().unwrap_or(false);
-                let width = action["width"].as_u64().unwrap_or(0) as u16;
+                // Clamp at the trust boundary: the value feeds host geometry,
+                // where an oversized width would drive the x origin negative.
+                let width = action["width"]
+                    .as_u64()
+                    .unwrap_or(0)
+                    .min(self.dimensions.pixel_width as u64 / 2)
+                    as u16;
                 self.webview_flyout_width = if open { width } else { 0 };
             }
             "reset_zoom" => {

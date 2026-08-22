@@ -10,7 +10,7 @@ use ::window::{
 use config::keyassignment::{KeyAssignment, MouseEventTrigger, SpawnTabDomain};
 use config::MouseEventAltScreen;
 use mux::pane::{Pane, WithPaneLines};
-use mux::tab::{SplitDirection, SplitRequest, SplitSize, TabId};
+use mux::tab::{SplitDirection, SplitRequest, SplitSize};
 use mux::Mux;
 use std::convert::TryInto;
 use std::time::Instant;
@@ -417,11 +417,7 @@ impl super::TermWindow {
         if self.sidebar_flyout.is_some() {
             let on_dock = matches!(
                 ui_item.as_ref().map(|i| &i.item_type),
-                Some(UIItemType::TabSidebar(
-                    TabSidebarItem::NewTabButton
-                        | TabSidebarItem::ThemePickerButton
-                        | TabSidebarItem::TmuxRefreshButton
-                ))
+                Some(UIItemType::TabSidebar(si)) if si.is_dock()
             );
             let in_zone = self.sidebar_flyout_zone_contains(
                 event.coords.x as f32,
@@ -2000,13 +1996,13 @@ impl super::TermWindow {
                     )
                     .ok();
                 }
-                TabSidebarItem::Flyout => {}
-                TabSidebarItem::ThemePickerButton => {
-                    self.show_color_scheme_picker();
-                }
-                TabSidebarItem::TmuxRefreshButton => {
-                    crate::tmux_discovery::request_refresh();
-                }
+                    TabSidebarItem::Flyout => {}
+                    TabSidebarItem::ThemePickerButton => {
+                        self.show_color_scheme_picker();
+                    }
+                    TabSidebarItem::TmuxRefreshButton => {
+                        crate::tmux_discovery::request_refresh();
+                    }
                 }
             }
             WMEK::Press(MousePress::Middle) => match sidebar_item {
@@ -2126,9 +2122,9 @@ impl super::TermWindow {
         let new_width = new_width.max(100).min(600);
         if new_width != self.tab_sidebar_width {
             self.tab_sidebar_width = new_width;
-            // The rail font scales with the width; feed the live value so the
-            // type rescales during the drag, not only after a config reload.
-            self.fonts.set_sidebar_width_hint(new_width);
+            // invalidate_tab_sidebar is enough for live font rescale: the
+            // rebuild asks for sidebar_font_at(rail_font_size()), which only
+            // reloads when the derived size actually changed.
             self.invalidate_tab_sidebar();
             self.invalidate_fancy_tab_bar();
             if let Some(window) = self.window.as_ref().map(|w| w.clone()) {
