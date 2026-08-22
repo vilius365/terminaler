@@ -756,12 +756,24 @@ impl crate::TermWindow {
             zindex: 10,
         };
 
-        // Tmux tile groups, capped at roughly half the sidebar so the local
-        // tiles (the primary content) cannot be squeezed out. Hidden tiles are
-        // summarised; Ctrl+Shift+S still lists every session.
+        // Tmux tile budget from the height that actually remains after the
+        // local section and the dock — a fixed half-window guess let a short
+        // window push the dock and the "+N" summary off the bottom entirely.
+        let tabs_probe = Element::new(&font, ElementContent::Children(tab_elements.clone()))
+            .display(DisplayType::Block)
+            .colors(ElementColors {
+                border: BorderColor::default(),
+                bg: InheritableColor::Inherited,
+                text: InheritableColor::Inherited,
+            });
+        let tabs_height = self
+            .compute_element(&context_probe, &tabs_probe)
+            .map(|c| c.bounds.height())
+            .unwrap_or(0.);
+        let dock_reserve = 36.;
         let tile_budget = {
-            let avail = (window_height * 0.5).max(0.);
-            ((avail / (TILE_H + TILE_GAP)) as usize).max(2)
+            let avail = (window_height - tabs_height - dock_reserve).max(0.);
+            (avail / (TILE_H + TILE_GAP)) as usize
         };
         let agents_section = self.build_agents_section(
             &font,
@@ -1995,10 +2007,13 @@ fn build_tile(a: TileArgs) -> Element {
         // measurement the box model does not expose.
         let label_metrics = RenderMetrics::with_font_metrics(&a.label_font.metrics());
         let lcell = label_metrics.cell_size.width as f32;
+        // The metrics cell is the widest reference advance; average Roboto
+        // glyphs run ~55% of it. Dividing by the full cell halved the label
+        // budget ("homep…" at 6 chars in an 80px tile).
         let label_cols = if lcell > 0. {
-            ((inner_w / lcell) as usize).max(6)
+            ((inner_w / (lcell * 0.55)) as usize).clamp(6, 16)
         } else {
-            9
+            12
         };
         lines.push(
             Element::new(
@@ -2145,24 +2160,24 @@ fn sidebar_eyebrow(
         .min_width(Some(Dimension::Pixels(sidebar_width)))
 }
 
-/// Bottom widget dock: new terminal, theme picker, tmux refresh.
+/// Bottom widget dock: new terminal, theme picker, tmux refresh. Text labels
+/// in the rail font rather than icon glyphs: two different refresh glyphs
+/// (U+27F3, U+21BB) failed to shape in the field, and at this size words read
+/// better than symbols anyway.
 fn build_widget_dock(
     font: &Rc<LoadedFont>,
-    _title_font: &Rc<LoadedFont>,
+    label_font: &Rc<LoadedFont>,
     theme: &SidebarTheme,
     sidebar_width: f32,
     tmux_enabled: bool,
 ) -> Element {
-    // No space wrappers and slim padding: three chips at mono size overflowed
-    // the 90px dock line, and inline overflow clips trailing children — the
-    // theme and refresh chips were silently missing from the dock.
-    let chip = |icon: &str, item: TabSidebarItem| {
-        Element::new(font, ElementContent::Text(icon.to_string()))
+    let chip = |label: &str, item: TabSidebarItem| {
+        Element::new(label_font, ElementContent::Text(label.to_string()))
             .display(DisplayType::Inline)
             .item_type(UIItemType::TabSidebar(item))
             .padding(BoxDimension {
-                left: Dimension::Pixels(5.),
-                right: Dimension::Pixels(5.),
+                left: Dimension::Pixels(4.),
+                right: Dimension::Pixels(4.),
                 top: Dimension::Pixels(2.),
                 bottom: Dimension::Pixels(2.),
             })
@@ -2176,10 +2191,10 @@ fn build_widget_dock(
 
     let mut chips = vec![
         chip("+", TabSidebarItem::NewTabButton),
-        chip("\u{25d0}", TabSidebarItem::ThemePickerButton), // ◐
+        chip("theme", TabSidebarItem::ThemePickerButton),
     ];
     if tmux_enabled {
-        chips.push(chip("\u{21bb}", TabSidebarItem::TmuxRefreshButton)); // ↻
+        chips.push(chip("sync", TabSidebarItem::TmuxRefreshButton));
     }
 
     Element::new(font, ElementContent::Children(chips))
