@@ -620,10 +620,16 @@ impl FontConfigInner {
                 config.pane_select_font_size,
                 config.pane_select_font.as_ref(),
             ),
-            // Derived from the user's terminal font size so it tracks their
-            // chosen scale and DPI: fixed 12pt was too big at 90px, fixed 8pt
-            // unreadable on hidpi (user feedback, both directions).
-            Entity::Sidebar => ((config.font_size * 0.8).max(8.0), None),
+            // Derived from the user's terminal font size AND the configured
+            // sidebar width, so a wider rail gets proportionally larger type
+            // (tiles stretch with the rail; 180px is the reference width).
+            // Runtime drag-resize does not reload config, so the size follows
+            // the configured width only — drag removal is planned anyway.
+            Entity::Sidebar => (
+                (config.font_size * 0.8 * (config.tab_sidebar_width as f64 / 180.0))
+                    .clamp(8.0, 16.0),
+                None,
+            ),
         };
 
         let text_style =

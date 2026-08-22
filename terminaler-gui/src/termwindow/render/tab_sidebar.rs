@@ -21,17 +21,19 @@ use window::color::LinearRgba;
 /// block is the single source of truth and the two are kept in sync BY HAND.
 ///
 /// Spec table (both renderers):
-///   rail width          180 px (config tab_sidebar_width)
-///   tile                160 px wide, 1 px status-tint border, rounded, 6 px gap
-///   pane sub-tile       148 px wide, single line
+///   rail width          config tab_sidebar_width (180 default target)
+///   tile                anchored to both rail edges: width = rail - 2x6 px
+///   pane sub-tile       indented 12 px further on the left, single line
 ///   status dot          INSIDE the tile, right end of the icon line
 ///   notification badge  red count, left end of the icon line
 ///   context bar         thin strip inside the tile bottom
 ///   flyout              264 px wide, opens after 200 ms hover
 ///   label               centered under the icon, truncated with …
-pub(crate) const TILE_W: f32 = 160.;
-pub(crate) const TILE_HALF_W: f32 = 148.;
-pub(crate) const TILE_H: f32 = 48.;
+/// Fixed side margin between a tile and the rail edge; tiles stretch to fill
+/// the rest, so widening the sidebar widens every tile.
+pub(crate) const TILE_MARGIN: f32 = 6.;
+/// Extra left indent for pane sub-tiles.
+pub(crate) const TILE_SUB_INDENT: f32 = 12.;
 pub(crate) const TILE_GAP: f32 = 6.;
 pub(crate) const FLYOUT_W: f32 = 264.;
 
@@ -1127,7 +1129,7 @@ impl crate::TermWindow {
         // flyout before it can be reached (user-reported). The flyout overlaps
         // the rail margin at zindex 50, and its accent border lands exactly on
         // the tile border.
-        let tile_margin = ((sidebar_width - TILE_W) / 2.).max(2.);
+        let tile_margin = TILE_MARGIN;
         // Position from the flyout's ACTUAL painted width: the layout does not
         // honor min_width on this root element (it painted ~90px instead of
         // 264, leaving exactly that much gap when positioned by FLYOUT_W).
@@ -2006,8 +2008,8 @@ impl<'a> TileArgs<'a> {
 /// Float::Right/max_width clamp trap cannot reappear here.
 fn build_tile(a: TileArgs) -> Element {
     let theme = a.theme;
-    let tile_w = if a.half { TILE_HALF_W } else { TILE_W };
-    let margin_x = ((a.sidebar_width - tile_w) / 2.).max(2.);
+    let indent = if a.half { TILE_SUB_INDENT } else { 0. };
+    let tile_w = (a.sidebar_width - 2. * TILE_MARGIN - indent).max(40.);
     let cell_w = a.metrics.cell_size.width as f32;
     let inner_w = tile_w - 2. - 4.;
     let cols = if cell_w > 0. {
@@ -2189,8 +2191,8 @@ fn build_tile(a: TileArgs) -> Element {
     let mut tile = Element::new(a.font, ElementContent::Children(lines))
         .display(DisplayType::Block)
         .margin(BoxDimension {
-            left: Dimension::Pixels(margin_x),
-            right: Dimension::Pixels(margin_x),
+            left: Dimension::Pixels(TILE_MARGIN + indent),
+            right: Dimension::Pixels(TILE_MARGIN),
             top: Dimension::Pixels(0.),
             bottom: Dimension::Pixels(TILE_GAP),
         })
