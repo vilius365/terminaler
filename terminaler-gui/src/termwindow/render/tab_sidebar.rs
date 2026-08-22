@@ -398,6 +398,8 @@ impl crate::TermWindow {
             )
             .map(|c| c.bounds.height())
             .unwrap_or(label_h * 1.3 + 10.);
+        // The trailing sync row is always emitted; reserve its height up front.
+        let px_budget = (px_budget - eyebrow_px).max(0.);
         let mut px_used = 0f32;
 
         // Sessions this window already hosts in a pane fold away rather than
@@ -556,6 +558,28 @@ impl crate::TermWindow {
                 .min_width(Some(Dimension::Pixels(sidebar_width))),
             );
         }
+
+        // Manual re-poll of the discovery snapshot. A full-width row, so it
+        // can never clip the way a third dock chip did.
+        children.push(
+            Element::new(title_font, ElementContent::Text("sync".to_string()))
+                .display(DisplayType::Block)
+                .line_height(Some(1.2))
+                .item_type(UIItemType::TabSidebar(TabSidebarItem::TmuxRefreshButton))
+                .padding(BoxDimension {
+                    left: Dimension::Pixels(10.),
+                    right: Dimension::Pixels(4.),
+                    top: Dimension::Pixels(2.),
+                    bottom: Dimension::Pixels(2.),
+                })
+                .colors(text_only(theme.text_tertiary))
+                .hover_colors(Some(ElementColors {
+                    border: BorderColor::default(),
+                    bg: theme.bg_elevated.into(),
+                    text: theme.text_primary.into(),
+                }))
+                .min_width(Some(Dimension::Pixels(sidebar_width))),
+        );
 
         let section = Element::new(font, ElementContent::Children(children))
             .display(DisplayType::Block)
@@ -816,13 +840,7 @@ impl crate::TermWindow {
             .map(|c| c.bounds.height())
             .unwrap_or(0.);
         // Measure the dock rather than reserving a guess for it.
-        let dock = build_widget_dock(
-            &font,
-            &title_font,
-            &theme,
-            sidebar_width,
-            self.config.tmux.as_ref().map_or(false, |t| t.enabled),
-        );
+        let dock = build_widget_dock(&font, &title_font, &theme, sidebar_width);
         let dock_h = self
             .compute_element(&context_probe, &dock)
             .map(|c| c.bounds.height() + 8.)
@@ -2207,16 +2225,16 @@ fn sidebar_eyebrow(
         .min_width(Some(Dimension::Pixels(sidebar_width)))
 }
 
-/// Bottom widget dock: new terminal, theme picker, tmux refresh. Text labels
-/// in the rail font rather than icon glyphs: two different refresh glyphs
-/// (U+27F3, U+21BB) failed to shape in the field, and at this size words read
-/// better than symbols anyway.
+/// Bottom widget dock: new terminal and theme picker. Text labels in the rail
+/// font rather than icon glyphs: two different refresh glyphs (U+27F3,
+/// U+21BB) failed to shape in the field, and at this size words read better
+/// than symbols anyway. Three text chips overflow 90px ("sync" clipped to
+/// "sy"), so the tmux refresh lives as a row in the tmux section instead.
 fn build_widget_dock(
     font: &Rc<LoadedFont>,
     label_font: &Rc<LoadedFont>,
     theme: &SidebarTheme,
     sidebar_width: f32,
-    tmux_enabled: bool,
 ) -> Element {
     let chip = |label: &str, item: TabSidebarItem| {
         Element::new(label_font, ElementContent::Text(label.to_string()))
@@ -2236,13 +2254,10 @@ fn build_widget_dock(
             }))
     };
 
-    let mut chips = vec![
+    let chips = vec![
         chip("+", TabSidebarItem::NewTabButton),
         chip("theme", TabSidebarItem::ThemePickerButton),
     ];
-    if tmux_enabled {
-        chips.push(chip("sync", TabSidebarItem::TmuxRefreshButton));
-    }
 
     Element::new(font, ElementContent::Children(chips))
         .display(DisplayType::Block)
