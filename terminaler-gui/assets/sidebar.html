@@ -5,6 +5,23 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Terminaler Sidebar</title>
 <style>
+  /* ── Shared visual spec (V2 Tiles) ──────────────────────────────────────
+     This :root block is the single source of truth for BOTH renderers; the
+     GPU side mirrors it in SidebarTheme (tab_sidebar.rs). Keep in sync BY
+     HAND.  Spec table:
+       rail width   config tab_sidebar_width (180 reference)
+       tile         anchored to both rail edges, width = rail - 2x6px
+       sub-tile     indented 12px further left, single line
+       status dot   INSIDE the tile, right end of the icon line
+       notif badge  red count, left end of the icon line
+       context bar  thin strip inside the tile bottom
+       flyout       width follows the detail font (~38 avg chars), 200ms hover
+       type scale   font_size x 0.8 x min(width/180, 1.15) — past ~207px the
+                    rail fits MORE text, not bigger letters
+     NOTE on opacity: the GPU rail runs its panel surfaces at 80% alpha. The
+     WebView host is opaque (transparency needs the with_transparent spike),
+     so alpha here would composite against white and wash out — colors stay
+     solid until that spike lands. */
   :root {
     --bg-base: #121212;
     --bg-surface: #1a1a1a;
@@ -26,13 +43,18 @@
     --radius-sm: 4px;
     --radius-md: 6px;
     --transition: 150ms ease;
+
+    /* JS sets --scale = min(railWidth/180, 1.15) on resize. */
+    --scale: 1;
+    --fs-label: calc(11px * var(--scale));
+    --fs-eyebrow: calc(9px * var(--scale));
+    --fs-icon: calc(14px * var(--scale));
+    --fs-detail: calc(11px * var(--scale));
+
+    --tile-margin: 6px;
   }
 
-  *, *::before, *::after {
-    box-sizing: border-box;
-    margin: 0;
-    padding: 0;
-  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
   html, body {
     width: 100%;
@@ -46,1269 +68,813 @@
     cursor: default;
   }
 
-  .sidebar {
+  /* Host layout: the flyout area takes whatever width Rust granted beyond the
+     rail (set_flyout widens the host); the rail itself keeps its width. */
+  body { display: flex; }
+  .flyout-area { flex: 1; position: relative; min-width: 0; }
+  .rail {
+    width: var(--rail-w, 100%);
+    flex: none;
     display: flex;
     flex-direction: column;
     height: 100%;
     overflow: hidden;
-  }
-
-  .sidebar-scroll {
-    flex: 1;
-    overflow-y: auto;
-    padding: 8px;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-
-  .sidebar-scroll::-webkit-scrollbar { width: 4px; }
-  .sidebar-scroll::-webkit-scrollbar-track { background: transparent; }
-  .sidebar-scroll::-webkit-scrollbar-thumb {
-    background: var(--border-default);
-    border-radius: 2px;
-  }
-
-  .sidebar-bottom {
-    padding: 8px;
-    border-top: 1px solid var(--border-subtle);
-  }
-
-  .btn-new-tab {
-    width: 100%;
-    height: 32px;
-    border: 1px dashed var(--border-default);
-    border-radius: var(--radius-md);
-    background: transparent;
-    color: var(--text-secondary);
-    font-family: var(--font-ui);
-    font-size: 12px;
-    cursor: pointer;
-    transition: border-color var(--transition), color var(--transition), background var(--transition);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 6px;
-  }
-
-  .btn-new-tab:hover {
-    border-color: var(--text-secondary);
-    color: var(--text-primary);
-    background: rgba(255,255,255,0.02);
-  }
-
-  /* ── Theme picker ── */
-  .theme-picker { margin-bottom: 6px; }
-  .btn-theme {
-    width: 100%;
-    height: 32px;
-    border: 1px solid var(--border-default);
-    border-radius: var(--radius-md);
-    background: var(--bg-elevated);
-    color: var(--text-secondary);
-    font-family: var(--font-ui);
-    font-size: 12px;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 6px;
-    padding: 0 10px;
-    transition: border-color var(--transition), color var(--transition);
-  }
-  .btn-theme:hover { border-color: var(--text-secondary); color: var(--text-primary); }
-  .btn-theme-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .btn-theme-caret { color: var(--text-tertiary); flex: 0 0 auto; }
-  .theme-panel {
-    margin-top: 4px;
-    max-height: 45vh;
-    overflow-y: auto;
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-md);
     background: var(--bg-surface);
   }
-  .theme-panel::-webkit-scrollbar { width: 4px; }
-  .theme-panel::-webkit-scrollbar-track { background: transparent; }
-  .theme-panel::-webkit-scrollbar-thumb { background: var(--border-default); border-radius: 2px; }
-  .theme-row {
-    padding: 6px 10px;
-    font-size: 12px;
-    color: var(--text-secondary);
-    cursor: pointer;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    border-bottom: 1px solid var(--border-subtle);
-  }
-  .theme-row:hover { background: var(--bg-elevated); color: var(--text-primary); }
-  .theme-row.active { color: var(--accent-orange); font-weight: 600; }
-  .theme-row.active::before { content: '● '; }
-  .theme-row-search {
-    color: var(--accent-blue);
-    position: sticky;
-    top: 0;
-    background: var(--bg-surface);
-    border-bottom: 1px solid var(--border-default);
-  }
-  .theme-row-search:hover { background: var(--bg-elevated); color: var(--accent-blue); }
+  body.flyout-open .rail { border-left: 1px solid var(--border-subtle); }
+  body.pos-left { flex-direction: row-reverse; }
+  body.pos-left.flyout-open .rail { border-left: none; border-right: 1px solid var(--border-subtle); }
 
-  /* ── Cards ── */
-  .card {
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-md);
-    padding: 10px 12px;
-    cursor: pointer;
-    transition: background var(--transition), border-color var(--transition);
-    position: relative;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.3);
-  }
-
-  .card:hover {
-    background: var(--bg-elevated);
-  }
-
-  .card:hover .card-close { opacity: 1; }
-
-  .card.active {
-    background: var(--bg-elevated);
-  }
-
-  .card.flashing {
-    animation: flash-pulse 1.5s ease-in-out infinite;
-  }
-
-  @keyframes flash-pulse {
-    0%, 100% { background: var(--bg-surface); }
-    50% { background: rgba(248, 81, 73, 0.25); }
-  }
-
-  .card.active.flashing {
-    animation: flash-pulse-active 1.5s ease-in-out infinite;
-  }
-
-  @keyframes flash-pulse-active {
-    0%, 100% { background: var(--bg-elevated); }
-    50% { background: rgba(248, 81, 73, 0.25); }
-  }
-
-  /* Left accent stripe */
-  .card-accent {
-    position: absolute;
-    left: 0;
-    top: 6px;
-    bottom: 6px;
-    width: 3px;
-    border-radius: 0 2px 2px 0;
-  }
-
-  .card-accent-blue   { background: var(--accent-blue); }
-  .card-accent-orange  { background: var(--accent-orange); }
-  .card-accent-green   { background: var(--accent-green); }
-  .card-accent-yellow  { background: var(--accent-yellow); }
-  .card-accent-red     { background: var(--accent-red); }
-  .card-accent-gray    { background: var(--text-tertiary); }
-
-  .card-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 2px;
-  }
-
-  .card-title {
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--text-primary);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+  .rail-scroll {
     flex: 1;
-    min-width: 0;
+    overflow-y: auto;
+    padding: 6px 0;
   }
+  .rail-scroll::-webkit-scrollbar { width: 0; }
 
-  .card-title-inactive { color: var(--text-secondary); font-weight: 500; }
-  .card-title-claude   { color: var(--accent-orange); }
-
-  .card-close {
-    width: 16px;
-    height: 16px;
-    border-radius: 50%;
+  /* ── Eyebrows ── */
+  .eyebrow {
     display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 10px;
-    color: var(--text-tertiary);
-    opacity: 0;
-    transition: opacity var(--transition), background var(--transition), color var(--transition);
-    flex-shrink: 0;
-    line-height: 1;
-    border: none;
-    background: none;
-    cursor: pointer;
-    font-family: var(--font-ui);
-    margin-left: 6px;
-  }
-
-  .card-close:hover {
-    background: var(--accent-red);
-    color: #fff;
-    opacity: 1;
-  }
-  .card-hide {
-    width: 16px;
-    height: 16px;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 9px;
-    color: var(--text-tertiary);
-    opacity: 0;
-    transition: opacity var(--transition), background var(--transition), color var(--transition);
-    flex-shrink: 0;
-    line-height: 1;
-    border: none;
-    background: none;
-    cursor: pointer;
-    font-family: var(--font-ui);
-    margin-left: 2px;
-  }
-  .card:hover .card-hide { opacity: 0.7; }
-  .card-hide:hover {
-    background: var(--bg-tertiary);
-    color: var(--text-primary);
-    opacity: 1;
-  }
-  .card-unhide {
-    display: inline-flex;
     align-items: center;
     gap: 4px;
-    padding: 2px 8px;
-    border-radius: 4px;
-    font-size: 10px;
-    color: var(--text-secondary);
-    border: 1px solid var(--border);
-    background: none;
-    cursor: pointer;
-    font-family: var(--font-ui);
-    transition: background var(--transition), color var(--transition);
-    margin-left: auto;
+    padding: 7px 6px 3px 8px;
+    font-size: var(--fs-eyebrow);
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-tertiary);
+    white-space: nowrap;
+    overflow: hidden;
   }
-  .card-unhide:hover {
-    background: var(--bg-tertiary);
-    color: var(--text-primary);
-  }
-
-  .card-meta {
-    font-size: 11px;
-    color: var(--text-secondary);
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-bottom: 2px;
+  .eyebrow .dot { width: 5px; height: 5px; border-radius: 50%; flex: none; }
+  .dot-green { background: var(--accent-green); }
+  .dot-red { background: var(--accent-red); }
+  .dot-gray { background: var(--text-tertiary); }
+  .eyebrow.stale, .tile.stale { opacity: 0.55; }
+  .box-error {
+    font-size: calc(var(--fs-eyebrow) * 0.95);
+    color: var(--text-tertiary);
+    padding: 0 6px 2px 12px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
 
-  .card-meta-dim { color: var(--text-tertiary); }
-
-  .card-git {
-    display: inline-flex;
-    align-items: center;
-    gap: 3px;
-    color: var(--text-secondary);
-    flex-shrink: 0;
+  /* ── Tiles: anchored to both rail edges ── */
+  .tile {
+    margin: 0 var(--tile-margin) 6px var(--tile-margin);
+    padding: 4px 4px;
+    background: var(--bg-base);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: background var(--transition), border-color var(--transition);
+    overflow: hidden;
+  }
+  .tile:hover { background: var(--bg-elevated); }
+  .tile.active { background: var(--bg-elevated); border-color: var(--accent-blue); }
+  .tile.st-green  { border-color: rgba(63,185,80,0.6); }
+  .tile.st-yellow { border-color: rgba(210,153,34,0.6); }
+  .tile.st-red    { border-color: rgba(248,81,73,0.6); }
+  .tile.flashing { animation: flash-pulse 1.5s ease-in-out infinite; }
+  @keyframes flash-pulse {
+    0%, 100% { background: var(--bg-base); }
+    50% { background: rgba(248, 81, 73, 0.25); }
   }
 
-  .card-git svg {
-    width: 11px;
-    height: 11px;
-    fill: currentColor;
-    opacity: 0.7;
-  }
-
-  /* Per-session host/box badge (e.g. devbox, mcp, home) */
-  .card-host {
-    margin-left: auto;
-    display: inline-flex;
-    align-items: center;
-    gap: 3px;
-    flex-shrink: 0;
-    padding: 1px 5px;
-    border-radius: 3px;
-    font-size: 10px;
-    color: var(--text-secondary);
-    background: rgba(255,255,255,0.06);
-  }
-
-  .card-host .host-icon {
-    width: 10px;
-    height: 10px;
-    fill: currentColor;
-    opacity: 0.7;
-  }
-
-  /* Status */
-  .status-row {
+  .tile-iconline {
     display: flex;
     align-items: center;
-    gap: 6px;
-    font-size: 11px;
-    margin-top: 4px;
+    gap: 4px;
+    min-height: calc(var(--fs-icon) * 1.3);
+    font-size: var(--fs-icon);
+    line-height: 1.1;
   }
-
-  .status-dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    flex-shrink: 0;
+  .tile-iconline.centered { justify-content: center; }
+  .t-icon { color: var(--text-secondary); flex: none; line-height: 1; }
+  .t-icon.claude, .t-icon.instance { color: var(--accent-orange); }
+  /* Icons as CSS-mask SVGs: text glyphs beyond guaranteed font coverage
+     render as tofu (or worse, color emoji); masks tint via currentColor. */
+  .gi {
+    display: inline-block;
+    width: var(--fs-icon);
+    height: var(--fs-icon);
+    vertical-align: -0.12em;
+    background-color: currentColor;
+    -webkit-mask: var(--m) center/contain no-repeat;
+    mask: var(--m) center/contain no-repeat;
   }
-
-  .status-dot-green  { background: var(--accent-green); animation: pulse-green 2s ease-in-out infinite; }
-  .status-dot-yellow { background: var(--accent-yellow); animation: pulse-yellow 2s ease-in-out infinite; }
-  .status-dot-red    { background: var(--accent-red); }
-  .status-dot-gray   { background: var(--text-tertiary); }
-
+  .tile.sub .gi { width: var(--fs-label); height: var(--fs-label); }
+  .gi-prompt { --m: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M5 3l6 5-6 5" fill="none" stroke="black" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>'); }
+  .gi-spark { --m: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M8 1v14M2.2 4.5l11.6 7M13.8 4.5l-11.6 7" fill="none" stroke="black" stroke-width="2" stroke-linecap="round"/></svg>'); }
+  .gi-link { --m: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M2 5h10M9.5 2.5L12 5l-2.5 2.5M14 11H4m2.5-2.5L4 11l2.5 2.5" fill="none" stroke="black" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>'); }
+  .gi-grid { --m: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><rect x="2" y="2" width="12" height="12" rx="1.5" fill="none" stroke="black" stroke-width="1.8"/><rect x="5.5" y="5.5" width="5" height="5" fill="black"/></svg>'); }
+  .gi-elbow { --m: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M4 2v9h9" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>'); }
+  .t-agent {
+    font-size: var(--fs-label);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+  .t-agent.instance { color: var(--accent-orange); }
+  .t-agent.generic { color: var(--text-secondary); }
+  .t-count { font-size: var(--fs-eyebrow); color: var(--text-tertiary); flex: none; margin-left: auto; }
+  .t-notif {
+    flex: none;
+    min-width: calc(var(--fs-eyebrow) * 1.6);
+    padding: 0 3px;
+    border-radius: 999px;
+    background: var(--accent-red);
+    color: #fff;
+    font-size: var(--fs-eyebrow);
+    font-weight: 700;
+    text-align: center;
+  }
+  .t-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; margin-left: auto; }
+  .t-dot.working { background: var(--accent-green); animation: pulse-green 2s ease-in-out infinite; }
+  .t-dot.waiting_input { background: var(--accent-yellow); animation: pulse-yellow 2s ease-in-out infinite; }
+  .t-dot.error { background: var(--accent-red); }
+  .t-dot.idle { background: var(--text-tertiary); }
   @keyframes pulse-green {
     0%, 100% { box-shadow: 0 0 0 0 rgba(63,185,80,0.4); }
     50%      { box-shadow: 0 0 0 4px rgba(63,185,80,0); }
   }
-
   @keyframes pulse-yellow {
     0%, 100% { box-shadow: 0 0 0 0 rgba(210,153,34,0.4); }
     50%      { box-shadow: 0 0 0 4px rgba(210,153,34,0); }
   }
 
-  /* Context bar */
-  .context-bar {
-    height: 3px;
-    border-radius: 2px;
+  .tile-label {
+    text-align: center;
+    font-size: var(--fs-label);
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    padding-top: 1px;
+  }
+  .tile.active .tile-label { color: var(--text-primary); font-weight: 600; }
+
+  .tile-ctx {
+    height: 2px;
+    border-radius: 1px;
     background: var(--border-subtle);
-    margin-top: 6px;
+    margin-top: 3px;
     overflow: hidden;
   }
+  .tile-ctx i { display: block; height: 100%; }
+  .ctx-ok { background: var(--accent-orange); }
+  .ctx-warn { background: var(--accent-yellow); }
+  .ctx-crit { background: var(--accent-red); }
 
-  .context-bar-fill {
-    height: 100%;
-    border-radius: 2px;
-    background: linear-gradient(90deg, var(--accent-orange), rgba(219,139,11,0.3));
+  /* Pane sub-tiles: single line, extra left indent. */
+  .tile.sub {
+    margin-left: calc(var(--tile-margin) + 12px);
+    padding: 2px 4px;
   }
+  .tile.sub .tile-iconline { min-height: calc(var(--fs-label) * 1.4); font-size: var(--fs-label); }
+  .tile.sub .t-label-inline {
+    font-size: var(--fs-label);
+    color: var(--text-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+  .tile.sub.active .t-label-inline { color: var(--text-primary); font-weight: 600; }
+  .tile.sub.hidden-pane { opacity: 0.45; }
+  .tile.sub.hidden-pane .t-label-inline { font-style: italic; }
 
-  .card-stats {
-    font-size: 10px;
+  /* ── Overflow + sync rows ── */
+  .rail-row {
+    padding: 2px 6px 2px 10px;
+    font-size: var(--fs-eyebrow);
     color: var(--text-tertiary);
-    margin-top: 4px;
-    font-family: var(--font-mono);
-    letter-spacing: -0.02em;
+    white-space: nowrap;
+    overflow: hidden;
   }
+  .rail-row.actionable { cursor: pointer; }
+  .rail-row.actionable:hover { background: var(--bg-elevated); color: var(--text-primary); }
 
+  /* ── Dock ── */
+  .dock {
+    flex: none;
+    display: flex;
+    gap: 2px;
+    padding: 5px 4px 5px 6px;
+    border-top: 1px solid var(--border-subtle);
+    margin-top: 8px;
+  }
+  .dock button {
+    border: none;
+    background: transparent;
+    color: var(--text-tertiary);
+    font-family: var(--font-ui);
+    font-size: var(--fs-eyebrow);
+    padding: 2px 5px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: background var(--transition), color var(--transition);
+  }
+  .dock button:hover, .dock button.open { background: var(--bg-elevated); color: var(--text-primary); }
+
+  /* ── Flyout (info hover) and drawers (widget click) ── */
+  .scrim {
+    position: absolute;
+    inset: 0;
+    background: rgba(0,0,0,0.45);
+    display: none;
+  }
+  body.drawer-open .scrim { display: block; }
+
+  .flyout {
+    position: absolute;
+    right: 0;
+    display: none;
+    max-width: 100%;
+    max-height: calc(100% - 16px);
+    overflow-y: auto;
+    background: var(--bg-elevated);   /* opaque: overlays terminal content */
+    border: 1px solid var(--border-default);
+    border-right: 3px solid var(--accent-orange);
+    border-radius: var(--radius-md) 0 0 var(--radius-md);
+    box-shadow: -6px 4px 18px rgba(0,0,0,0.55);
+    padding: 8px 12px 8px 10px;
+    font-size: var(--fs-detail);
+  }
+  body.pos-left .flyout {
+    right: auto;
+    left: 0;
+    border-right: 1px solid var(--border-default);
+    border-left: 3px solid var(--accent-orange);
+    border-radius: 0 var(--radius-md) var(--radius-md) 0;
+    box-shadow: 6px 4px 18px rgba(0,0,0,0.55);
+  }
+  body.flyout-open .flyout, body.drawer-open .flyout { display: block; }
+  .flyout.acc-green { border-right-color: var(--accent-green); }
+  .flyout.acc-yellow { border-right-color: var(--accent-yellow); }
+  .flyout.acc-red { border-right-color: var(--accent-red); }
+  body.pos-left .flyout.acc-green { border-left-color: var(--accent-green); }
+  body.pos-left .flyout.acc-yellow { border-left-color: var(--accent-yellow); }
+  body.pos-left .flyout.acc-red { border-left-color: var(--accent-red); }
+
+  .fly-title {
+    font-size: calc(var(--fs-detail) * 1.2);
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .fly-title.claude { color: var(--accent-orange); }
+  .fly-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--text-secondary);
+    margin: 2px 0;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+  .fly-row .sdot { width: 6px; height: 6px; border-radius: 50%; flex: none; }
+  .fly-ctx { height: 3px; border-radius: 2px; background: var(--border-subtle); margin: 6px 0 2px; overflow: hidden; }
+  .fly-ctx i { display: block; height: 100%; background: linear-gradient(90deg, var(--accent-orange), rgba(219,139,11,0.3)); }
+  .fly-stats { color: var(--text-tertiary); font-family: var(--font-mono); font-size: calc(var(--fs-detail) * 0.92); margin-top: 4px; }
   .stat-add { color: var(--accent-green); }
   .stat-remove { color: var(--accent-red); }
-
-  /* Claude Stats summary card */
-  .claude-stats-card {
-    cursor: default;
-    margin-bottom: 8px;
-  }
-
-  .stats-header {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    margin-bottom: 6px;
-  }
-
-  .stats-title {
-    font-size: 10px;
-    font-weight: 700;
-    color: var(--accent-orange);
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-  }
-
-  .stats-badge {
-    font-size: 9px;
-    color: var(--text-tertiary);
-    font-weight: 400;
-  }
-
-  .stats-status-row {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    font-size: 10px;
-    color: var(--text-secondary);
-    margin-bottom: 6px;
-    flex-wrap: wrap;
-  }
-
-  .stats-status-item {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-  }
-
-  .stats-sep {
-    height: 1px;
-    background: var(--border-subtle);
-    margin: 6px 0;
-  }
-
-  .budget-row {
-    margin-bottom: 5px;
-  }
-
-  .budget-label {
-    display: flex;
-    justify-content: space-between;
-    font-size: 10px;
-    color: var(--text-secondary);
-    margin-bottom: 3px;
-  }
-
-  .budget-remaining {
-    color: var(--text-tertiary);
-  }
-
-  .budget-bar {
-    height: 4px;
-    border-radius: 2px;
-    background: var(--border-subtle);
-    overflow: hidden;
-  }
-
-  .budget-bar-fill {
-    height: 100%;
-    border-radius: 2px;
-    transition: width 0.3s ease;
-  }
-
-  .budget-fill-green  { background: var(--accent-green); }
-  .budget-fill-yellow { background: var(--accent-yellow); }
-  .budget-fill-red    { background: var(--accent-red); }
-
-  .stats-models {
-    font-size: 9px;
-    color: var(--text-tertiary);
-    font-family: var(--font-mono);
-    margin-top: 2px;
-  }
-
-  /* Notification badge */
-  .notif-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 3px;
-    color: var(--accent-red);
-    font-size: 11px;
-    margin-left: 6px;
-    flex-shrink: 0;
-  }
-
-  .card-controls {
-    display: flex;
-    gap: 4px;
-    margin-top: 4px;
-  }
-  .ctrl-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 3px;
-    font-size: 10px;
-    padding: 2px 6px;
+  .fly-chips { display: flex; gap: 4px; margin-top: 8px; flex-wrap: wrap; }
+  .fly-chips button {
     border: none;
     border-radius: 3px;
-    cursor: pointer;
-    background: rgba(255,255,255,0.06);
-    color: rgba(255,255,255,0.4);
-    font-family: inherit;
-    transition: background 0.15s, color 0.15s;
-  }
-  .ctrl-btn:hover {
-    background: rgba(255,255,255,0.14);
-    color: rgba(255,255,255,0.85);
-  }
-  .ctrl-btn.muted {
-    background: rgba(200,120,0,0.25);
-    color: #f0a030;
-  }
-  .ctrl-btn.muted:hover {
-    background: rgba(200,120,0,0.4);
-    color: #ffc050;
-  }
-  .ctrl-btn.zoom {
-    background: rgba(0,180,180,0.15);
-    color: #00cccc;
-    font-weight: 600;
-  }
-  .ctrl-btn.zoom:hover {
-    background: rgba(0,180,180,0.3);
-    color: #40ffff;
-  }
-
-  /* Pane tree */
-  .pane-tree {
-    margin-top: 6px;
-    font-size: 10px;
-    font-family: var(--font-mono);
-    color: var(--text-tertiary);
-    line-height: 1.6;
-  }
-
-  .pane-tree-line {
-    padding-left: 4px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    cursor: pointer;
-    border-radius: 3px;
-    padding: 1px 4px;
-    transition: background var(--transition);
-  }
-
-  .pane-tree-line:hover { background: rgba(255,255,255,0.04); }
-  .pane-tree-line.active { color: var(--text-secondary); }
-  .pane-tree-line .process { color: var(--text-secondary); }
-
-  .pane-tree-line .pane-close {
-    float: right;
-    opacity: 0;
-    cursor: pointer;
-    color: var(--text-tertiary);
-    font-size: 9px;
-    transition: opacity var(--transition), color var(--transition);
-  }
-
-  .pane-tree-line:hover .pane-close { opacity: 1; }
-  .pane-tree-line .pane-close:hover { color: var(--accent-red); }
-
-  /* Resize handle */
-  .resize-handle {
-    position: fixed;
-    top: 0;
-    width: 4px;
-    height: 100%;
-    cursor: col-resize;
-    z-index: 100;
-  }
-
-  .resize-handle.left  { right: 0; }
-  .resize-handle.right { left: 0; }
-
-  /* Git branch SVG path (reused) */
-  .git-icon { width: 11px; height: 11px; fill: currentColor; opacity: 0.7; }
-
-  /* Multibox tmux sessions card */
-  .tmux-card {
-    cursor: default;
-    margin-bottom: 8px;
-  }
-
-  .tmux-box-header {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 10px;
+    padding: 2px 8px;
+    background: rgba(255,255,255,0.08);
     color: var(--text-secondary);
-    margin: 6px 0 3px 0;
-  }
-
-  .tmux-box-header:first-of-type { margin-top: 0; }
-
-  .tmux-status-dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    flex: none;
-  }
-  .tmux-dot-ok          { background: var(--accent-green); }
-  .tmux-dot-unreachable { background: var(--accent-red); }
-  .tmux-dot-pending     { background: var(--text-tertiary); }
-
-  .tmux-box-error {
-    font-size: 9px;
-    color: var(--text-tertiary);
-    margin-left: 12px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .tmux-session-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 6px;
-    margin: 2px 0 2px 10px;
-    padding: 4px 6px;
-    font-size: 11px;
-    color: var(--text-primary);
-    background: var(--bg-hover);
-    border: 1px solid var(--border-subtle);
-    border-radius: 5px;
+    font-family: var(--font-ui);
+    font-size: calc(var(--fs-detail) * 0.92);
     cursor: pointer;
+    transition: background var(--transition), color var(--transition);
   }
+  .fly-chips button:hover { background: rgba(255,255,255,0.16); color: var(--text-primary); }
+  .fly-notif { margin-top: 6px; padding: 4px 8px; border-radius: var(--radius-sm); background: rgba(248,81,73,0.12); color: var(--text-secondary); }
+  .fly-notif b { color: var(--accent-red); }
 
-  .tmux-session-row:hover {
-    border-color: var(--accent-orange);
-  }
-
-  .tmux-session-row:active { transform: translateY(1px); }
-
-  .tmux-attach-tabs {
-    flex: none;
-    padding: 0 3px;
-    font-size: 11px;
-    color: var(--text-tertiary);
+  /* Theme drawer content */
+  .theme-list { max-height: 50vh; overflow-y: auto; margin-top: 4px; }
+  .theme-list::-webkit-scrollbar { width: 4px; }
+  .theme-list::-webkit-scrollbar-thumb { background: var(--border-default); border-radius: 2px; }
+  .theme-row {
+    padding: 5px 8px;
+    color: var(--text-secondary);
     border-radius: 3px;
-  }
-
-  .tmux-attach-tabs:hover {
-    color: var(--accent-orange);
-    background: var(--border-subtle);
-  }
-
-  /* The name absorbs the slack (and truncates) so the agent badge and the
-     window count stay visible however narrow the sidebar gets. */
-  .tmux-session-name {
-    flex: 1 1 auto;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .tmux-session-agent {
-    flex: none;
-    padding: 0 4px;
-    font-size: 9px;
-    line-height: 14px;
-    color: var(--accent-orange);
-    background: var(--border-subtle);
-    border-radius: 3px;
-    max-width: 72px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  /* A named interconnect instance is the more specific fact, so it gets the
-     stronger treatment; the generic agent type stays muted. */
-  /* Dark text on the orange badge: --bg-hover was never defined, so this
-     inherited the row's near-white --text-primary and read as unreadable
-     white-on-yellow. */
-  .tmux-session-agent-instance {
-    max-width: 92px;
-    color: var(--bg-base);
-    background: var(--accent-orange);
-    font-weight: 600;
-  }
-
-  .tmux-session-meta {
-    font-size: 9px;
-    color: var(--text-tertiary);
-    flex: none;
-  }
-
-  .tmux-stale { opacity: 0.55; }
-
-  .tmux-refresh {
-    margin-left: auto;
     cursor: pointer;
-    font-size: 10px;
-    color: var(--text-tertiary);
-    border: none;
-    background: none;
-    padding: 0 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
-  .tmux-refresh:hover { color: var(--text-primary); }
+  .theme-row:hover { background: var(--bg-surface); color: var(--text-primary); }
+  .theme-row.active { color: var(--accent-orange); font-weight: 600; }
+  .theme-row.search { color: var(--accent-blue); border-bottom: 1px solid var(--border-subtle); border-radius: 0; margin-bottom: 3px; position: sticky; top: 0; background: var(--bg-elevated); }
+
+  /* Stats drawer content (Windows-only data) */
+  .stats-line { display: flex; align-items: center; gap: 10px; color: var(--text-secondary); margin: 4px 0; flex-wrap: wrap; }
+  .stats-line .sdot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; }
+  .budget-label { display: flex; justify-content: space-between; color: var(--text-secondary); margin: 6px 0 3px; gap: 8px; }
+  .budget-bar { height: 4px; border-radius: 2px; background: var(--border-subtle); overflow: hidden; }
+  .budget-bar i { display: block; height: 100%; border-radius: 2px; transition: width 0.3s ease; }
+  .budget-green { background: var(--accent-green); }
+  .budget-yellow { background: var(--accent-yellow); }
+  .budget-red { background: var(--accent-red); }
 </style>
 </head>
 <body>
 
-<div class="sidebar" id="sidebar">
-  <div class="sidebar-scroll" id="tab-list"></div>
-  <div class="sidebar-bottom">
-    <div id="claude-stats-container" style="display:none"></div>
-    <div id="tmux-sessions-container" style="display:none"></div>
-    <div class="theme-picker">
-      <button class="btn-theme" onclick="toggleThemePanel()">
-        <span class="btn-theme-label" id="btn-theme-label">🎨 Theme</span>
-        <span class="btn-theme-caret">▾</span>
-      </button>
-      <div class="theme-panel" id="theme-panel" style="display:none"></div>
-    </div>
-    <button class="btn-new-tab" onclick="sendAction({type:'new_tab'})">+ New Tab</button>
+<div class="flyout-area" id="flyout-area">
+  <div class="scrim" id="scrim"></div>
+  <div class="flyout" id="flyout"></div>
+</div>
+<div class="rail" id="rail">
+  <div class="rail-scroll" id="tab-list"></div>
+  <div class="dock" id="dock">
+    <button onclick="sendAction({type:'new_tab'})">+</button>
+    <button id="btn-theme" onclick="toggleDrawer('theme')">theme</button>
+    <button id="btn-stats" style="display:none" onclick="toggleDrawer('stats')">$</button>
   </div>
 </div>
 
-<div class="resize-handle right" id="resize-handle"></div>
-
 <script>
-const GIT_ICON_SVG = '<svg class="git-icon" viewBox="0 0 16 16"><path d="M11.75 2.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5zm-2.25.75a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.5 2.5 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25zM4.25 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5zM3.5 3.25a.75.75 0 1 1 1.5 0 .75.75 0 0 1-1.5 0z"/></svg>';
-// Server/box icon for the per-session host badge.
-const HOST_ICON_SVG = '<svg class="host-icon" viewBox="0 0 16 16"><path d="M2 3.5A1.5 1.5 0 0 1 3.5 2h9A1.5 1.5 0 0 1 14 3.5v2A1.5 1.5 0 0 1 12.5 7h-9A1.5 1.5 0 0 1 2 5.5v-2zm1.5-.5a.5.5 0 0 0-.5.5v2a.5.5 0 0 0 .5.5h9a.5.5 0 0 0 .5-.5v-2a.5.5 0 0 0-.5-.5h-9zM2 10.5A1.5 1.5 0 0 1 3.5 9h9a1.5 1.5 0 0 1 1.5 1.5v2A1.5 1.5 0 0 1 12.5 14h-9A1.5 1.5 0 0 1 2 12.5v-2zm2 .5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5zM4 4a.75.75 0 1 0 0 1.5A.75.75 0 0 0 4 4z"/></svg>';
-
+// ── constants / state ──────────────────────────────────────────────────────
 // Populated at build time by the Rust side (WebViewSidebar::new), which
 // replaces the "[]" with the JSON array of available color-scheme names.
 var ALL_SCHEMES = [];
+var _state = null;
 var _currentScheme = null;
-var _themePanelBuilt = false;
-
-function updateThemeButton() {
-    var label = document.getElementById('btn-theme-label');
-    if (label) label.textContent = '🎨 ' + (_currentScheme || 'Theme');
+var _railWidth = window.innerWidth;   // rail width when no flyout is open
+var _flyout = null;                    // {kind:'tab'|'pane'|'tmux', ...} or {kind:'drawer', which}
+var _hoverTimer = null;
+var FLYOUT_DELAY = 200;
+// Flyout width follows the detail font: ~38 average characters (mirrors the
+// GPU side), floored at the 264px reference.
+function flyoutWidth() {
+  var scale = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--scale')) || 1;
+  return Math.max(264, Math.round(11 * scale * 0.62 * 38));
 }
 
-function updateActiveThemeRow() {
-    if (!_themePanelBuilt) return;
-    var panel = document.getElementById('theme-panel');
-    if (!panel) return;
-    panel.querySelectorAll('.theme-row[data-name]').forEach(function(r) {
-        if (r.getAttribute('data-name') === _currentScheme) r.classList.add('active');
-        else r.classList.remove('active');
-    });
-}
-
-function buildThemePanel() {
-    var panel = document.getElementById('theme-panel');
-    if (!panel) return;
-    var html = '<div class="theme-row theme-row-search" data-action="search">🔍 Search all… (Ctrl+Shift+K)</div>';
-    for (var i = 0; i < ALL_SCHEMES.length; i++) {
-        var name = ALL_SCHEMES[i];
-        var cls = (name === _currentScheme) ? 'theme-row active' : 'theme-row';
-        html += '<div class="' + cls + '" data-name="' + escHtml(name) + '">' + escHtml(name) + '</div>';
-    }
-    panel.innerHTML = html;
-    // Event delegation: one listener handles all rows (works with the sidebar's
-    // click-based focus model — no element needs to hold keyboard focus).
-    panel.addEventListener('click', function(e) {
-        var row = e.target.closest('.theme-row');
-        if (!row) return;
-        if (row.getAttribute('data-action') === 'search') {
-            sendAction({ type: 'color_scheme_picker' });
-            closeThemePanel();
-            return;
-        }
-        var name = row.getAttribute('data-name');
-        if (name) applyTheme(name);
-    });
-    _themePanelBuilt = true;
-}
-
-function applyTheme(name) {
-    sendAction({ type: 'apply_color_scheme', name: name });
-    _currentScheme = name;
-    updateThemeButton();
-    updateActiveThemeRow();
-    closeThemePanel();
-}
-
-function toggleThemePanel() {
-    var panel = document.getElementById('theme-panel');
-    if (!panel) return;
-    if (panel.style.display === 'none') {
-        if (!_themePanelBuilt) buildThemePanel();
-        else updateActiveThemeRow();
-        panel.style.display = '';
-        var active = panel.querySelector('.theme-row.active');
-        if (active) active.scrollIntoView({ block: 'center' });
-    } else {
-        panel.style.display = 'none';
-    }
-}
-
-function closeThemePanel() {
-    var panel = document.getElementById('theme-panel');
-    if (panel) panel.style.display = 'none';
-}
-
+// ── IPC ────────────────────────────────────────────────────────────────────
 var _actionDebounce = {};
 function sendAction(action) {
-    var key = action.type;
-    var now = Date.now();
-    // Debounce non-refocus actions: only fire once per 400ms per action type
-    if (key !== 'refocus' && key !== 'activate_tab' && key !== 'activate_pane') {
-        if (_actionDebounce[key] && (now - _actionDebounce[key]) < 400) {
-            return;
-        }
-        _actionDebounce[key] = now;
-    }
-    window.ipc.postMessage(JSON.stringify(action));
+  var key = action.type;
+  var now = Date.now();
+  // Debounce, EXCEPT actions where a rapid pair is legitimate: refocus,
+  // activation, and set_flyout (an open/close pair within 400ms is exactly
+  // what a quick hover produces — swallowing the close wedges the drawer).
+  if (key !== 'refocus' && key !== 'activate_tab' && key !== 'activate_pane' && key !== 'set_flyout') {
+    if (_actionDebounce[key] && (now - _actionDebounce[key]) < 400) return;
+    _actionDebounce[key] = now;
+  }
+  window.ipc.postMessage(JSON.stringify(action));
 }
 
 function escHtml(s) {
-    const div = document.createElement('div');
-    div.textContent = s;
-    return div.innerHTML;
+  var div = document.createElement('div');
+  div.textContent = s == null ? '' : String(s);
+  return div.innerHTML;
 }
 
-function claudeAccentClass(claude) {
-    if (!claude || !claude.status) return 'card-accent-gray';
-    switch (claude.status) {
-        case 'working':       return 'card-accent-green';
-        case 'waiting_input': return 'card-accent-yellow';
-        case 'idle':          return 'card-accent-gray';
-        case 'error':         return 'card-accent-red';
-        default:              return 'card-accent-green';
-    }
+// ── scale: rail width drives the type, capped at 1.15x ────────────────────
+function applyScale() {
+  var scale = Math.min(_railWidth / 180, 1.15);
+  scale = Math.max(scale, 0.72);
+  document.documentElement.style.setProperty('--scale', scale.toFixed(3));
+}
+window.addEventListener('resize', function () {
+  if (!document.body.classList.contains('flyout-open') &&
+      !document.body.classList.contains('drawer-open')) {
+    _railWidth = window.innerWidth;
+    document.documentElement.style.setProperty('--rail-w', '100%');
+    applyScale();
+  } else {
+    // Host widened for the flyout: pin the rail at its remembered width.
+    document.documentElement.style.setProperty('--rail-w', _railWidth + 'px');
+  }
+});
+
+// ── flyout open/close ──────────────────────────────────────────────────────
+function openFlyout(desc, anchorY) {
+  _flyout = desc;
+  var fly = document.getElementById('flyout');
+  fly.innerHTML = desc.html;
+  fly.className = 'flyout' + (desc.accent ? ' acc-' + desc.accent : '');
+  document.documentElement.style.setProperty('--rail-w', _railWidth + 'px');
+  document.body.classList.add(desc.kind === 'drawer' ? 'drawer-open' : 'flyout-open');
+  var w = flyoutWidth();
+  fly.style.width = w + 'px';
+  // Anchor vertically near the source tile, clamped to the viewport.
+  var h = Math.min(fly.scrollHeight + 20, window.innerHeight - 16);
+  var y = Math.max(4, Math.min(anchorY || 4, window.innerHeight - h - 8));
+  fly.style.top = y + 'px';
+  sendAction({ type: 'set_flyout', open: true, width: w + 16 });
 }
 
-function statusDotClass(status) {
-    switch (status) {
-        case 'working':       return 'status-dot-green';
-        case 'waiting_input': return 'status-dot-yellow';
-        case 'error':         return 'status-dot-red';
-        case 'idle':          return 'status-dot-gray';
-        default:              return 'status-dot-gray';
-    }
+function closeFlyout() {
+  if (!_flyout) return;
+  _flyout = null;
+  document.body.classList.remove('flyout-open', 'drawer-open');
+  document.getElementById('flyout').innerHTML = '';
+  document.documentElement.style.setProperty('--rail-w', '100%');
+  sendAction({ type: 'set_flyout', open: false, width: 0 });
+  document.querySelectorAll('.dock button.open').forEach(function (b) { b.classList.remove('open'); });
 }
 
-function statusLabel(status) {
-    switch (status) {
-        case 'working':       return 'working';
-        case 'waiting_input': return 'awaiting input';
-        case 'error':         return 'error';
-        case 'idle':          return 'idle';
-        default:              return 'idle';
-    }
+// Hover plumbing: info flyouts open after a delay; moving into the flyout
+// keeps them; leaving both closes. Drawers (theme/stats) are click-toggled.
+function armHover(el, buildDesc) {
+  el.addEventListener('mouseenter', function () {
+    clearTimeout(_hoverTimer);
+    _hoverTimer = setTimeout(function () {
+      var d = buildDesc();
+      if (d) openFlyout(d, el.getBoundingClientRect().top);
+    }, FLYOUT_DELAY);
+  });
+  el.addEventListener('mouseleave', function () { clearTimeout(_hoverTimer); });
+}
+document.getElementById('flyout-area').addEventListener('mouseleave', function () {
+  if (_flyout && _flyout.kind !== 'drawer') closeFlyout();
+});
+document.getElementById('rail').addEventListener('mouseleave', function (e) {
+  // Leaving the rail toward anything but the flyout area closes an info flyout.
+  if (_flyout && _flyout.kind !== 'drawer') {
+    var toEl = e.relatedTarget;
+    if (!toEl || !toEl.closest || !toEl.closest('.flyout-area')) closeFlyout();
+  }
+});
+document.getElementById('scrim').addEventListener('click', function () {
+  closeFlyout();
+  sendAction({ type: 'refocus' });
+});
+
+// ── render helpers ─────────────────────────────────────────────────────────
+function statusLabel(st) {
+  return st === 'working' ? 'working'
+    : st === 'waiting_input' ? 'awaiting input'
+    : st === 'error' ? 'error' : 'idle';
+}
+function statusColor(st) {
+  return st === 'working' ? 'var(--accent-green)'
+    : st === 'waiting_input' ? 'var(--accent-yellow)'
+    : st === 'error' ? 'var(--accent-red)' : 'var(--text-tertiary)';
+}
+function statusTint(st) {
+  return st === 'working' ? 'st-green'
+    : st === 'waiting_input' ? 'st-yellow'
+    : st === 'error' ? 'st-red' : '';
+}
+function accentOf(st) {
+  return st === 'working' ? 'green' : st === 'waiting_input' ? 'yellow' : st === 'error' ? 'red' : null;
+}
+function lastComponent(p) {
+  if (!p) return '';
+  var parts = String(p).replace(/\/+$/, '').split('/');
+  return parts[parts.length - 1] || p;
+}
+function ctxClass(pct) { return pct >= 90 ? 'ctx-crit' : pct >= 70 ? 'ctx-warn' : 'ctx-ok'; }
+
+// ── flyout content builders (fed from the SAME state json) ────────────────
+function claudeFlyoutHtml(claude, title, cwd, branch, extra) {
+  var html = '<div class="fly-title claude">' + escHtml(title) + '</div>';
+  var st = (claude && claude.status) || 'idle';
+  html += '<div class="fly-row"><span class="sdot" style="background:' + statusColor(st) + '"></span>'
+       + '<span style="color:' + statusColor(st) + '">' + statusLabel(st) + '</span>';
+  if (claude && claude.host) html += '<span style="margin-left:auto;color:var(--text-tertiary)">' + escHtml(claude.host) + '</span>';
+  html += '</div>';
+  if (cwd) {
+    html += '<div class="fly-row">' + escHtml(cwd)
+         + (branch ? ' <span style="color:var(--text-tertiary)">⎇ ' + escHtml(branch) + '</span>' : '')
+         + '</div>';
+  }
+  if (claude && claude.contextPct != null) {
+    html += '<div class="fly-ctx"><i style="width:' + claude.contextPct + '%"></i></div>';
+  }
+  var parts = [];
+  if (claude && claude.contextPct != null) parts.push('ctx ' + claude.contextPct + '%');
+  if (claude && claude.costUsd != null) parts.push('$' + Number(claude.costUsd).toFixed(2));
+  if (claude && claude.durationMs != null) {
+    var mins = Math.floor(claude.durationMs / 60000);
+    if (mins > 0) parts.push(mins + 'm');
+  }
+  var lines = '';
+  if (claude && claude.linesAdded > 0) lines += '<span class="stat-add">+' + claude.linesAdded + '</span> ';
+  if (claude && claude.linesRemoved > 0) lines += '<span class="stat-remove">-' + claude.linesRemoved + '</span>';
+  if (parts.length || lines) {
+    html += '<div class="fly-stats">' + parts.join(' · ') + (parts.length && lines ? ' · ' : '') + lines + '</div>';
+  }
+  return html + (extra || '');
 }
 
-function statusColor(status) {
-    switch (status) {
-        case 'working':       return 'var(--accent-green)';
-        case 'waiting_input': return 'var(--accent-yellow)';
-        case 'error':         return 'var(--accent-red)';
-        case 'idle':          return 'var(--text-tertiary)';
-        default:              return 'var(--text-tertiary)';
-    }
+function shellFlyoutHtml(title, cwd, branch, extra) {
+  var html = '<div class="fly-title">' + escHtml(title) + '</div>';
+  if (cwd) html += '<div class="fly-row">' + escHtml(cwd) + '</div>';
+  if (branch) html += '<div class="fly-row" style="color:var(--text-tertiary)">⎇ ' + escHtml(branch) + '</div>';
+  return html + (extra || '');
 }
 
-function renderClaudeCard(claude, cwdShort, gitBranch) {
-    let html = '';
+function chipsHtml(chips) {
+  var html = '<div class="fly-chips">';
+  chips.forEach(function (c) { html += '<button onclick="' + c.onclick + '">' + escHtml(c.label) + '</button>'; });
+  return html + '</div>';
+}
 
-    // Status row
-    const st = claude.status || 'idle';
-    html += '<div class="status-row">';
-    html += '<span class="status-dot ' + statusDotClass(st) + '"></span>';
-    html += '<span style="color:' + statusColor(st) + '">' + statusLabel(st) + '</span>';
-    if (claude.host) {
-        html += '<span class="card-host" title="Host: ' + escHtml(claude.host) + '">' + HOST_ICON_SVG + escHtml(claude.host) + '</span>';
+window.flyClose = function (kind, id) {
+  closeFlyout();
+  sendAction(kind === 'tab' ? { type: 'close_tab', tabIdx: id } : { type: 'close_pane', paneId: id });
+};
+window.flyMute = function (paneId) { closeFlyout(); sendAction({ type: 'toggle_mute', paneId: paneId }); };
+window.flyZoomReset = function () { closeFlyout(); sendAction({ type: 'reset_zoom' }); };
+window.flyHide = function (paneId) { closeFlyout(); sendAction({ type: 'toggle_hidden', paneId: paneId }); };
+window.flyUnhide = function (paneId) { closeFlyout(); sendAction({ type: 'unhide_pane', paneId: paneId }); };
+window.flyAttach = function (box, session, mode) {
+  closeFlyout();
+  sendAction({ type: 'attach_tmux_session', box: box, session: session, mode: mode });
+};
+
+function tabFlyoutDesc(tab) {
+  return function () {
+    var claude = tab.claudeInfo;
+    var notif = tab.hasNotification
+      ? '<div class="fly-notif"><b>● ' + (tab.notificationCount || 1) + '</b> notification' + ((tab.notificationCount || 1) > 1 ? 's' : '') + '</div>'
+      : '';
+    var zoom = tab.zoomPct
+      ? '<div class="fly-row" style="color:var(--text-tertiary)">zoom ' + tab.zoomPct + '%</div>'
+      : '';
+    var chips = [{ label: 'close', onclick: 'flyClose(\'tab\',' + tab.tabIdx + ')' }];
+    if (tab.activePaneId != null) {
+      chips.push({ label: tab.notificationsMuted ? 'unmute' : 'mute', onclick: 'flyMute(' + tab.activePaneId + ')' });
     }
+    if (tab.zoomPct) chips.push({ label: 'reset zoom', onclick: 'flyZoomReset()' });
+    var body = claude
+      ? claudeFlyoutHtml(claude, claude.model || 'claude', tab.cwdShort, tab.gitBranch, notif + zoom + chipsHtml(chips))
+      : shellFlyoutHtml(tab.cwdShort || tab.title || 'Terminal', tab.cwdShort, tab.gitBranch, notif + zoom + chipsHtml(chips));
+    return { kind: 'tab', html: body, accent: claude ? accentOf(claude.status) : null };
+  };
+}
+
+function paneFlyoutDesc(tab, pane) {
+  return function () {
+    var claude = pane.claudeInfo;
+    var chips = [{ label: 'close', onclick: 'flyClose(\'pane\',' + pane.paneId + ')' }];
+    chips.push(pane.isHidden
+      ? { label: 'show pane', onclick: 'flyUnhide(' + pane.paneId + ')' }
+      : { label: 'hide pane', onclick: 'flyHide(' + pane.paneId + ')' });
+    var body = claude
+      ? claudeFlyoutHtml(claude, claude.model || 'claude', pane.cwdShort, null, chipsHtml(chips))
+      : shellFlyoutHtml(pane.title || pane.cwdShort || 'pane', pane.cwdShort, null, chipsHtml(chips));
+    return { kind: 'pane', html: body, accent: claude ? accentOf(claude.status) : null };
+  };
+}
+
+function tmuxFlyoutDesc(box, s) {
+  return function () {
+    var html = '<div class="fly-title' + (s.agentIsInstance ? ' claude' : '') + '">' + escHtml(s.name) + '</div>';
+    var dotColor = box.status === 'ok' ? 'var(--accent-green)' : box.status === 'unreachable' ? 'var(--accent-red)' : 'var(--text-tertiary)';
+    html += '<div class="fly-row"><span class="sdot" style="background:' + dotColor + '"></span>'
+         + escHtml(box.box) + ' · ' + (box.status === 'ok' ? 'reachable' : escHtml(box.status)) + '</div>';
+    html += '<div class="fly-row">' + s.windows + ' window' + (s.windows === 1 ? '' : 's') + (s.attached ? ' · attached' : '') + '</div>';
+    if (s.agent) {
+      html += '<div class="fly-row" style="color:var(--accent-orange)">'
+           + (s.agentIsInstance ? '⇄ ' + escHtml(s.agent) + ' (interconnect)' : 'running ' + escHtml(s.agent)) + '</div>';
+    }
+    var bx = JSON.stringify(box.box).replace(/"/g, '&quot;');
+    var sn = JSON.stringify(s.name).replace(/"/g, '&quot;');
+    html += chipsHtml([
+      { label: 'attach in split', onclick: 'flyAttach(' + bx + ',' + sn + ',\'split\')' },
+      { label: 'attach in pane', onclick: 'flyAttach(' + bx + ',' + sn + ',\'pane\')' },
+    ]);
+    return { kind: 'tmux', html: html, accent: null };
+  };
+}
+
+// ── drawers ────────────────────────────────────────────────────────────────
+function themeDrawerHtml() {
+  var html = '<div class="fly-title">Theme</div><div class="theme-list">';
+  html += '<div class="theme-row search" data-action="search">⌕ Search all… (Ctrl+Shift+K)</div>';
+  for (var i = 0; i < ALL_SCHEMES.length; i++) {
+    var name = ALL_SCHEMES[i];
+    html += '<div class="theme-row' + (name === _currentScheme ? ' active' : '') + '" data-name="' + escHtml(name) + '">' + escHtml(name) + '</div>';
+  }
+  return html + '</div>';
+}
+
+function statsDrawerHtml(stats) {
+  var html = '<div class="fly-title claude">Claude Stats' + (stats.activeSessions ? ' · ' + stats.activeSessions + ' session' + (stats.activeSessions !== 1 ? 's' : '') : '') + '</div>';
+  if (stats.activeSessions > 0) {
+    html += '<div class="stats-line">';
+    if (stats.working > 0) html += '<span><span class="sdot" style="background:var(--accent-green)"></span> ' + stats.working + ' working</span>';
+    if (stats.waitingInput > 0) html += '<span><span class="sdot" style="background:var(--accent-yellow)"></span> ' + stats.waitingInput + ' awaiting</span>';
+    if (stats.idle > 0) html += '<span><span class="sdot" style="background:var(--text-tertiary)"></span> ' + stats.idle + ' idle</span>';
+    if (stats.error > 0) html += '<span><span class="sdot" style="background:var(--accent-red)"></span> ' + stats.error + ' error</span>';
     html += '</div>';
-
-    // CWD + git branch
-    if (cwdShort) {
-        let meta = escHtml(cwdShort);
-        if (gitBranch) {
-            meta += ' <span class="card-git">' + GIT_ICON_SVG + ' ' + escHtml(gitBranch) + '</span>';
-        }
-        html += '<div class="card-meta">' + meta + '</div>';
+  }
+  function budget(label, spent, total, remaining) {
+    var h = '<div class="budget-label"><span>' + label + ': $' + (spent || 0).toFixed(2);
+    if (total != null) h += ' / $' + total.toFixed(2);
+    h += '</span>';
+    if (total != null) h += '<span style="color:var(--text-tertiary)">$' + (remaining || 0).toFixed(2) + ' left</span>';
+    h += '</div>';
+    if (total != null) {
+      var pct = Math.min(100, (spent / total) * 100);
+      var color = pct < 70 ? 'budget-green' : pct < 90 ? 'budget-yellow' : 'budget-red';
+      h += '<div class="budget-bar"><i class="' + color + '" style="width:' + pct.toFixed(1) + '%"></i></div>';
     }
-
-    // Context bar
-    if (claude.contextPct != null) {
-        html += '<div class="context-bar"><div class="context-bar-fill" style="width:' + claude.contextPct + '%"></div></div>';
-    }
-
-    // Stats line
-    const parts = [];
-    if (claude.costUsd != null) parts.push('$' + claude.costUsd.toFixed(2));
-    if (claude.durationMs != null) {
-        const mins = Math.floor(claude.durationMs / 60000);
-        if (mins > 0) parts.push(mins + 'm');
-    }
-
-    const added = claude.linesAdded || 0;
-    const removed = claude.linesRemoved || 0;
-    let lineStats = '';
-    if (added > 0) lineStats += '<span class="stat-add">+' + added + '</span>';
-    if (added > 0 && removed > 0) lineStats += ' ';
-    if (removed > 0) lineStats += '<span class="stat-remove">-' + removed + '</span>';
-
-    if (parts.length > 0 || lineStats) {
-        let statsHtml = parts.join(' \u00b7 ');
-        if (statsHtml && lineStats) statsHtml += ' \u00b7 ';
-        statsHtml += lineStats;
-        html += '<div class="card-stats">' + statsHtml + '</div>';
-    }
-
-    return html;
+    return h;
+  }
+  if (stats.dailyBudget != null || stats.dailySpent > 0) html += budget('Daily', stats.dailySpent, stats.dailyBudget, stats.dailyRemaining);
+  if (stats.weeklyBudget != null || stats.weeklySpent > 0) html += budget('Weekly', stats.weeklySpent, stats.weeklyBudget, stats.weeklyRemaining);
+  var parts = [];
+  if (stats.totalCostUsd > 0) parts.push('$' + stats.totalCostUsd.toFixed(2) + ' session');
+  if (stats.totalDurationMs > 0) {
+    var mins = Math.floor(stats.totalDurationMs / 60000);
+    var hrs = Math.floor(mins / 60);
+    parts.push(hrs > 0 ? hrs + 'h ' + (mins % 60) + 'm' : mins + 'm');
+  }
+  var lines = '';
+  if (stats.totalLinesAdded > 0) lines += '<span class="stat-add">+' + stats.totalLinesAdded + '</span> ';
+  if (stats.totalLinesRemoved > 0) lines += '<span class="stat-remove">-' + stats.totalLinesRemoved + '</span>';
+  if (parts.length || lines) html += '<div class="fly-stats">' + parts.join(' · ') + (parts.length && lines ? ' · ' : '') + lines + '</div>';
+  if (stats.models && stats.models.length) {
+    var mt = stats.models.length <= 3 ? stats.models.join(', ') : stats.models.slice(0, 2).join(', ') + ' +' + (stats.models.length - 2) + ' more';
+    html += '<div class="fly-stats">' + escHtml(mt) + '</div>';
+  }
+  return html;
 }
 
-function renderClaudeStatsCard(stats) {
-    var html = '<div class="card claude-stats-card">';
-    html += '<div class="card-accent card-accent-orange"></div>';
-
-    // Header
-    html += '<div class="stats-header">';
-    html += '<span class="stats-title">Claude Stats</span>';
-    if (stats.activeSessions > 0) {
-        html += '<span class="stats-badge">' + stats.activeSessions + ' session' + (stats.activeSessions !== 1 ? 's' : '') + '</span>';
-    }
-    html += '</div>';
-
-    // Status breakdown (only if active sessions)
-    if (stats.activeSessions > 0) {
-        html += '<div class="stats-status-row">';
-        if (stats.working > 0) {
-            html += '<span class="stats-status-item"><span class="status-dot status-dot-green"></span>' + stats.working + ' working</span>';
-        }
-        if (stats.waitingInput > 0) {
-            html += '<span class="stats-status-item"><span class="status-dot status-dot-yellow"></span>' + stats.waitingInput + ' awaiting</span>';
-        }
-        if (stats.idle > 0) {
-            html += '<span class="stats-status-item"><span class="status-dot status-dot-gray"></span>' + stats.idle + ' idle</span>';
-        }
-        if (stats.error > 0) {
-            html += '<span class="stats-status-item"><span class="status-dot status-dot-red"></span>' + stats.error + ' error</span>';
-        }
-        html += '</div>';
-    }
-
-    // Daily budget
-    var hasDaily = stats.dailyBudget != null;
-    var hasWeekly = stats.weeklyBudget != null;
-
-    if (hasDaily || stats.dailySpent > 0) {
-        html += '<div class="budget-row">';
-        html += '<div class="budget-label">';
-        html += '<span>Daily: $' + (stats.dailySpent || 0).toFixed(2);
-        if (hasDaily) html += ' / $' + stats.dailyBudget.toFixed(2);
-        html += '</span>';
-        if (hasDaily) {
-            html += '<span class="budget-remaining">$' + (stats.dailyRemaining || 0).toFixed(2) + ' left</span>';
-        }
-        html += '</div>';
-        if (hasDaily) {
-            var dailyPct = Math.min(100, (stats.dailySpent / stats.dailyBudget) * 100);
-            var dailyColor = dailyPct < 70 ? 'green' : dailyPct < 90 ? 'yellow' : 'red';
-            html += '<div class="budget-bar"><div class="budget-bar-fill budget-fill-' + dailyColor + '" style="width:' + dailyPct.toFixed(1) + '%"></div></div>';
-        }
-        html += '</div>';
-    }
-
-    // Weekly budget
-    if (hasWeekly || stats.weeklySpent > 0) {
-        html += '<div class="budget-row">';
-        html += '<div class="budget-label">';
-        html += '<span>Weekly: $' + (stats.weeklySpent || 0).toFixed(2);
-        if (hasWeekly) html += ' / $' + stats.weeklyBudget.toFixed(2);
-        html += '</span>';
-        if (hasWeekly) {
-            html += '<span class="budget-remaining">$' + (stats.weeklyRemaining || 0).toFixed(2) + ' left</span>';
-        }
-        html += '</div>';
-        if (hasWeekly) {
-            var weeklyPct = Math.min(100, (stats.weeklySpent / stats.weeklyBudget) * 100);
-            var weeklyColor = weeklyPct < 70 ? 'green' : weeklyPct < 90 ? 'yellow' : 'red';
-            html += '<div class="budget-bar"><div class="budget-bar-fill budget-fill-' + weeklyColor + '" style="width:' + weeklyPct.toFixed(1) + '%"></div></div>';
-        }
-        html += '</div>';
-    }
-
-    // Session stats line (if active)
-    if (stats.activeSessions > 0) {
-        var parts = [];
-        if (stats.totalCostUsd > 0) parts.push('$' + stats.totalCostUsd.toFixed(2) + ' session');
-        if (stats.totalDurationMs > 0) {
-            var mins = Math.floor(stats.totalDurationMs / 60000);
-            var hrs = Math.floor(mins / 60);
-            if (hrs > 0) {
-                parts.push(hrs + 'h ' + (mins % 60) + 'm');
-            } else if (mins > 0) {
-                parts.push(mins + 'm');
-            }
-        }
-
-        var lineStats = '';
-        if (stats.totalLinesAdded > 0) lineStats += '<span class="stat-add">+' + stats.totalLinesAdded + '</span>';
-        if (stats.totalLinesAdded > 0 && stats.totalLinesRemoved > 0) lineStats += ' ';
-        if (stats.totalLinesRemoved > 0) lineStats += '<span class="stat-remove">-' + stats.totalLinesRemoved + '</span>';
-
-        if (parts.length > 0 || lineStats) {
-            var statsHtml = parts.join(' \u00b7 ');
-            if (statsHtml && lineStats) statsHtml += ' \u00b7 ';
-            statsHtml += lineStats;
-            html += '<div class="card-stats">' + statsHtml + '</div>';
-        }
-
-        // Average context bar
-        if (stats.avgContextPct != null) {
-            html += '<div class="context-bar" style="margin-top:4px"><div class="context-bar-fill" style="width:' + stats.avgContextPct + '%"></div></div>';
-        }
-    }
-
-    // Models
-    if (stats.models && stats.models.length > 0) {
-        var modelText = stats.models.length <= 3
-            ? stats.models.join(', ')
-            : stats.models.slice(0, 2).join(', ') + ' +' + (stats.models.length - 2) + ' more';
-        html += '<div class="stats-models">' + escHtml(modelText) + '</div>';
-    }
-
-    html += '</div>';
-    return html;
+function toggleDrawer(which) {
+  if (_flyout && _flyout.kind === 'drawer' && _flyout.which === which) { closeFlyout(); return; }
+  closeFlyout();
+  var html = which === 'theme' ? themeDrawerHtml() : statsDrawerHtml((_state && _state.claudeStats) || {});
+  _flyout = { kind: 'drawer', which: which, html: html, accent: null };
+  openFlyout(_flyout, 40);
+  var btn = document.getElementById(which === 'theme' ? 'btn-theme' : 'btn-stats');
+  if (btn) btn.classList.add('open');
+  if (which === 'theme') {
+    var active = document.querySelector('.theme-list .theme-row.active');
+    if (active) active.scrollIntoView({ block: 'center' });
+  }
 }
 
-function renderTab(tab) {
-    const isActive = tab.isActive;
-    const hasClaude = tab.claudeInfo != null;
-    const hasMultiplePanes = tab.panes && tab.panes.length > 1;
+document.getElementById('flyout').addEventListener('click', function (e) {
+  var row = e.target.closest('.theme-row');
+  if (!row) return;
+  if (row.getAttribute('data-action') === 'search') {
+    closeFlyout();
+    sendAction({ type: 'color_scheme_picker' });
+    return;
+  }
+  var name = row.getAttribute('data-name');
+  if (name) {
+    _currentScheme = name;
+    sendAction({ type: 'apply_color_scheme', name: name });
+    closeFlyout();
+  }
+});
 
-    // Determine accent stripe
-    let accentClass = '';
-    if (hasClaude) {
-        accentClass = claudeAccentClass(tab.claudeInfo);
-    } else if (isActive) {
-        accentClass = 'card-accent-blue';
-    }
-
-    let html = '<div class="card' + (isActive ? ' active' : '') + (tab.hasNotification && tab.panes.length === 0 ? ' flashing' : '') + '" data-tab="' + tab.tabIdx + '">';
-
-    if (accentClass) {
-        html += '<div class="card-accent ' + accentClass + '"></div>';
-    }
-
-    // Header
-    html += '<div class="card-header">';
-    let titleClass = 'card-title';
-    if (hasClaude) titleClass += ' card-title-claude';
-    else if (!isActive) titleClass += ' card-title-inactive';
-
-    let titleText = hasClaude
-        ? escHtml(tab.claudeInfo.model || 'claude')
-        : escHtml(tab.cwdShort || tab.title || 'Terminal');
-
-    if (hasMultiplePanes && !hasClaude) {
-        titleText = '\u25bc ' + titleText;
-    }
-
-    html += '<span class="' + titleClass + '">' + titleText;
-    if (tab.hasNotification) {
-        const cnt = tab.notificationCount || 1;
-        html += '<span class="notif-badge">\u25cf' + (cnt > 1 ? ' ' + cnt : '') + '</span>';
-    }
-    html += '</span>';
-    html += '<button class="card-close" onclick="event.stopPropagation();sendAction({type:\'close_tab\',tabIdx:' + tab.tabIdx + '})">&times;</button>';
-    html += '</div>';
-
-    // Mute toggle + Zoom — inline row
-    const hasMuteOrZoom = (tab.activePaneId != null) || tab.zoomPct;
-    if (hasMuteOrZoom) {
-        html += '<div class="card-controls">';
-        if (tab.activePaneId != null) {
-            const muteClass = tab.notificationsMuted ? 'ctrl-btn muted' : 'ctrl-btn';
-            const muteIcon = tab.notificationsMuted
-                ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/><line x1="1" y1="1" x2="23" y2="23"/></svg>'
-                : '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>';
-            const muteTitle = tab.notificationsMuted ? 'Unmute notifications' : 'Mute notifications';
-            html += '<button class="' + muteClass + '" title="' + muteTitle + '" onclick="event.stopPropagation();sendAction({type:\'toggle_mute\',paneId:' + tab.activePaneId + '})">' + muteIcon + '</button>';
-        }
-        if (tab.zoomPct) {
-            html += '<button class="ctrl-btn zoom" title="Reset zoom to 100%" onclick="event.stopPropagation();sendAction({type:\'reset_zoom\'})">';
-            html += '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>';
-            html += ' ' + tab.zoomPct + '%</button>';
-        }
-        html += '</div>';
-    }
-
-    // Body
-    if (hasClaude) {
-        html += renderClaudeCard(tab.claudeInfo, tab.cwdShort, tab.gitBranch);
-    } else {
-        // CWD + git for non-Claude tabs (CWD is already the title, just show git)
-        if (tab.gitBranch) {
-            html += '<div class="card-meta"><span class="card-git">' + GIT_ICON_SVG + ' ' + escHtml(tab.gitBranch) + '</span></div>';
-        }
-    }
-
-    // Multi-pane: each pane rendered as its own card
-    if (hasMultiplePanes) {
-        html += '<div style="display:flex;flex-direction:column;gap:4px;margin-top:6px">';
-        tab.panes.forEach(function(pane, idx) {
-            const paneLabel = pane.title || pane.cwdShort || 'pane';
-            const paneActive = pane.isActive && isActive;
-            const isHidden = pane.isHidden;
-
-            // Hide button (shown on hover for visible panes)
-            const hideBtn = '<button class="card-hide" title="Hide pane (Ctrl+Shift+H)" onclick="event.stopPropagation();sendAction({type:\'toggle_hidden\',paneId:' + pane.paneId + '})">&#9660;</button>';
-
-            if (isHidden) {
-                // Hidden pane: dimmed card with unhide button
-                html += '<div class="card" style="padding:6px 10px;margin:0;opacity:0.45" onclick="event.stopPropagation();sendAction({type:\'unhide_pane\',paneId:' + pane.paneId + '})">';
-                html += '<div class="card-header">';
-                html += '<span class="card-title card-title-inactive" style="font-style:italic">' + escHtml(paneLabel) + '</span>';
-                html += '<button class="card-unhide" title="Show pane" onclick="event.stopPropagation();sendAction({type:\'unhide_pane\',paneId:' + pane.paneId + '})">&#9650; show</button>';
-                html += '</div>';
-                html += '</div>';
-            } else if (pane.claudeInfo) {
-                // Full Claude card for this pane
-                const paneAccent = claudeAccentClass(pane.claudeInfo);
-                const paneFlash = pane.hasNotification ? ' flashing' : '';
-                html += '<div class="card' + (paneActive ? ' active' : '') + paneFlash + '" style="padding:8px 10px;margin:0" onclick="event.stopPropagation();sendAction({type:\'activate_pane\',tabIdx:' + tab.tabIdx + ',paneIdx:' + pane.paneIdx + '})">';
-                html += '<div class="card-accent ' + paneAccent + '"></div>';
-                html += '<div class="card-header">';
-                html += '<span class="card-title card-title-claude">' + escHtml(pane.claudeInfo.model || 'claude') + '</span>';
-                html += hideBtn;
-                html += '<button class="card-close" onclick="event.stopPropagation();sendAction({type:\'close_pane\',paneId:' + pane.paneId + '})">&times;</button>';
-                html += '</div>';
-                html += renderClaudeCard(pane.claudeInfo, pane.cwdShort, null);
-                html += '</div>';
-            } else {
-                // Normal pane as compact card
-                const paneAccentNorm = paneActive ? 'card-accent-blue' : '';
-                const paneFlashNorm = pane.hasNotification ? ' flashing' : '';
-                html += '<div class="card' + (paneActive ? ' active' : '') + paneFlashNorm + '" style="padding:6px 10px;margin:0" onclick="event.stopPropagation();sendAction({type:\'activate_pane\',tabIdx:' + tab.tabIdx + ',paneIdx:' + pane.paneIdx + '})">';
-                if (paneAccentNorm) html += '<div class="card-accent ' + paneAccentNorm + '"></div>';
-                html += '<div class="card-header">';
-                html += '<span class="card-title' + (paneActive ? '' : ' card-title-inactive') + '">' + escHtml(paneLabel) + '</span>';
-                html += hideBtn;
-                html += '<button class="card-close" onclick="event.stopPropagation();sendAction({type:\'close_pane\',paneId:' + pane.paneId + '})">&times;</button>';
-                html += '</div>';
-                if (pane.cwdShort) {
-                    html += '<div class="card-meta card-meta-dim">' + escHtml(pane.cwdShort) + '</div>';
-                }
-                html += '</div>';
-            }
-        });
-        html += '</div>';
-    }
-
-    html += '</div>';
-    return html;
-}
-
-function renderTmuxCard(boxes) {
-    var html = '<div class="card tmux-card">';
-    html += '<div class="stats-header">';
-    html += '<span class="stats-title">Tmux Sessions</span>';
-    html += '<button class="tmux-refresh" data-tmux-refresh="1" title="Refresh now">⟳</button>';
-    html += '</div>';
-
-    for (var i = 0; i < boxes.length; i++) {
-        var box = boxes[i];
-        var dotCls = box.status === 'ok' ? 'tmux-dot-ok'
-                   : box.status === 'unreachable' ? 'tmux-dot-unreachable'
-                   : 'tmux-dot-pending';
-        html += '<div class="tmux-box-header">';
-        html += '<span class="tmux-status-dot ' + dotCls + '"></span>';
-        html += '<span>' + escHtml(box.box) + '</span>';
-        if (box.stale) html += '<span class="stats-badge">stale</span>';
-        html += '</div>';
-
-        if (box.status === 'unreachable' && box.error) {
-            html += '<div class="tmux-box-error" title="' + escHtml(box.error) + '">' + escHtml(box.error) + '</div>';
-        }
-
-        var sessions = box.sessions || [];
-        for (var j = 0; j < sessions.length; j++) {
-            var s = sessions[j];
-            var rowCls = 'tmux-session-row' + (box.stale || box.status === 'unreachable' ? ' tmux-stale' : '');
-            html += '<div class="' + rowCls + '" data-tmux-box="' + escHtml(box.box) + '" data-tmux-session="' + escHtml(s.name) + '" title="Attach in a split pane">';
-            html += '<span class="tmux-session-name">' + escHtml(s.name) + '</span>';
-            if (s.agent) {
-                // ⇄ marks a claude-agent-interconnect instance name (matching
-                // the statusline); a bare label is the generic agent type.
-                var agentCls = 'tmux-session-agent' + (s.agentIsInstance ? ' tmux-session-agent-instance' : '');
-                var agentTip = s.agentIsInstance
-                    ? 'Claude instance "' + s.agent + '" (interconnect)'
-                    : 'Running ' + s.agent;
-                html += '<span class="' + agentCls + '" title="' + escHtml(agentTip) + '">'
-                     + (s.agentIsInstance ? '⇄ ' : '') + escHtml(s.agent) + '</span>';
-            }
-            var windowLabel = s.windows + (s.windows === 1 ? ' window' : ' windows');
-            html += '<span class="tmux-session-meta" title="' + windowLabel + (s.attached ? ', attached' : '') + '">▣ ' + s.windows + (s.attached ? ' ●' : '') + '</span>';
-            html += '<span class="tmux-attach-tabs" data-tmux-pane="1" title="Attach in the active pane (replaces its content; pane must be at a prompt)">⧉</span>';
-            html += '</div>';
-        }
-        if (sessions.length === 0 && box.status === 'ok') {
-            html += '<div class="tmux-box-error">no sessions</div>';
-        }
-    }
-    html += '</div>';
-    return html;
-}
-
-// Event delegation on the stable container (innerHTML replaces the rows on
-// every state push, so per-row listeners would be lost).
-(function() {
-    var el = document.getElementById('tmux-sessions-container');
-    if (!el) return;
-    el.addEventListener('click', function(e) {
-        if (e.target.closest('[data-tmux-refresh]')) {
-            sendAction({ type: 'refresh_tmux_sessions' });
-            return;
-        }
-        var row = e.target.closest('.tmux-session-row');
-        if (!row) return;
-        sendAction({
-            type: 'attach_tmux_session',
-            box: row.getAttribute('data-tmux-box'),
-            session: row.getAttribute('data-tmux-session'),
-            mode: e.target.closest('[data-tmux-pane]') ? 'pane' : 'split',
-        });
-    });
-})();
-
+// ── main render ────────────────────────────────────────────────────────────
 function renderSidebar(state) {
-    const container = document.getElementById('tab-list');
-    if (!container) return;
+  _state = state;
+  var container = document.getElementById('tab-list');
+  if (!container) return;
+  container.innerHTML = '';
 
-    let html = '';
-    if (state.tabs) {
-        state.tabs.forEach(function(tab) {
-            html += renderTab(tab);
+  document.body.classList.toggle('pos-left', state.sidebarPosition === 'left');
+
+  function eyebrow(name, dotCls, stale) {
+    var el = document.createElement('div');
+    el.className = 'eyebrow' + (stale ? ' stale' : '');
+    el.innerHTML = (dotCls ? '<span class="dot ' + dotCls + '"></span>' : '') + escHtml(name.toUpperCase());
+    container.appendChild(el);
+  }
+
+  eyebrow('local', null, false);
+
+  (state.tabs || []).forEach(function (tab) {
+    var claude = tab.claudeInfo;
+    var st = claude ? (claude.status || 'idle') : null;
+    var tile = document.createElement('div');
+    tile.className = 'tile' + (tab.isActive ? ' active' : '') + (st ? ' ' + statusTint(st) : '')
+      + (tab.hasNotification && (!tab.panes || !tab.panes.length) ? ' flashing' : '');
+    var iconHtml = claude
+      ? '<span class="t-icon claude"><i class="gi gi-spark"></i></span>'
+      : '<span class="t-icon"><i class="gi gi-prompt"></i></span>';
+    var line1 = '<div class="tile-iconline' + (claude || tab.hasNotification ? '' : ' centered') + '">';
+    if (tab.hasNotification) line1 += '<span class="t-notif">' + (tab.notificationCount || 1) + '</span>';
+    line1 += iconHtml;
+    if (st) line1 += '<span class="t-dot ' + st + '"></span>';
+    line1 += '</div>';
+    var label = lastComponent(tab.cwdShort) || tab.title || 'terminal';
+    var html = line1 + '<div class="tile-label">' + escHtml(label) + '</div>';
+    if (claude && claude.contextPct != null) {
+      html += '<div class="tile-ctx"><i class="' + ctxClass(claude.contextPct) + '" style="width:' + claude.contextPct + '%"></i></div>';
+    }
+    tile.innerHTML = html;
+    tile.addEventListener('click', function () { sendAction({ type: 'activate_tab', tabIdx: tab.tabIdx }); });
+    armHover(tile, tabFlyoutDesc(tab));
+    container.appendChild(tile);
+
+    if (tab.panes && tab.panes.length > 1) {
+      tab.panes.forEach(function (pane) {
+        var pClaude = pane.claudeInfo;
+        var pst = pClaude ? (pClaude.status || 'idle') : null;
+        var sub = document.createElement('div');
+        sub.className = 'tile sub' + (pane.isActive && tab.isActive ? ' active' : '')
+          + (pst ? ' ' + statusTint(pst) : '') + (pane.isHidden ? ' hidden-pane' : '')
+          + (pane.hasNotification ? ' flashing' : '');
+        var icon = pClaude
+          ? '<span class="t-icon claude"><i class="gi gi-spark"></i></span>'
+          : '<span class="t-icon"><i class="gi gi-elbow"></i></span>';
+        var plabel = pane.isHidden ? (pane.title || 'hidden') : (lastComponent(pane.cwdShort) || pane.title || 'pane');
+        var line = '<div class="tile-iconline">' + icon
+          + '<span class="t-label-inline">' + escHtml(plabel) + '</span>'
+          + (pst ? '<span class="t-dot ' + pst + '"></span>' : '') + '</div>';
+        sub.innerHTML = line;
+        sub.addEventListener('click', function () {
+          if (pane.isHidden) sendAction({ type: 'unhide_pane', paneId: pane.paneId });
+          else sendAction({ type: 'activate_pane', tabIdx: tab.tabIdx, paneIdx: pane.paneIdx });
         });
+        armHover(sub, paneFlyoutDesc(tab, pane));
+        container.appendChild(sub);
+      });
     }
-    container.innerHTML = html;
+  });
 
-    // Claude Stats card
-    var statsEl = document.getElementById('claude-stats-container');
-    if (statsEl) {
-        if (state.claudeStats) {
-            statsEl.innerHTML = renderClaudeStatsCard(state.claudeStats);
-            statsEl.style.display = '';
-        } else {
-            statsEl.innerHTML = '';
-            statsEl.style.display = 'none';
+  // Tmux boxes
+  var boxes = state.tmuxSessions || [];
+  var hiddenCount = 0;
+  boxes.forEach(function (box) {
+    if (!box.sessions || !box.sessions.length) {
+      if (box.status !== 'ok') {
+        eyebrow(box.box, box.status === 'unreachable' ? 'dot-red' : 'dot-gray', true);
+        if (box.error) {
+          var err = document.createElement('div');
+          err.className = 'box-error';
+          err.title = box.error;
+          err.textContent = box.error;
+          container.appendChild(err);
         }
+      }
+      return;
     }
-
-    // Multibox tmux sessions card
-    var tmuxEl = document.getElementById('tmux-sessions-container');
-    if (tmuxEl) {
-        if (state.tmuxSessions && state.tmuxSessions.length) {
-            tmuxEl.innerHTML = renderTmuxCard(state.tmuxSessions);
-            tmuxEl.style.display = '';
-        } else {
-            tmuxEl.innerHTML = '';
-            tmuxEl.style.display = 'none';
-        }
+    var stale = box.stale || box.status !== 'ok';
+    eyebrow(box.box, box.status === 'ok' ? 'dot-green' : box.status === 'unreachable' ? 'dot-red' : 'dot-gray', stale);
+    if (box.status === 'unreachable' && box.error) {
+      var err2 = document.createElement('div');
+      err2.className = 'box-error';
+      err2.title = box.error;
+      err2.textContent = box.error;
+      container.appendChild(err2);
     }
-
-    // Attach click handlers for tab activation
-    container.querySelectorAll('.card[data-tab]').forEach(function(card) {
-        card.addEventListener('click', function(e) {
-            if (e.target.closest('.card-close') || e.target.closest('.pane-tree-line')) return;
-            const idx = parseInt(card.getAttribute('data-tab'));
-            sendAction({ type: 'activate_tab', tabIdx: idx });
-        });
+    box.sessions.forEach(function (s) {
+      var tile = document.createElement('div');
+      tile.className = 'tile' + (stale || s.attached ? ' stale' : '');
+      var line1 = '<div class="tile-iconline' + (s.agent ? '' : ' centered') + '">';
+      if (s.agent) {
+        line1 += '<span class="t-icon ' + (s.agentIsInstance ? 'instance' : '') + '"><i class="gi gi-link"></i></span>'
+          + '<span class="t-agent ' + (s.agentIsInstance ? 'instance' : 'generic') + '">' + escHtml(s.agent) + '</span>';
+      } else {
+        line1 += '<span class="t-icon"><i class="gi gi-grid"></i></span>';
+      }
+      var count = '';
+      if (s.windows > 1) count = String(Math.min(s.windows, 9)) + (s.attached ? '●' : '');
+      else if (s.attached) count = '●';
+      if (count) line1 += '<span class="t-count">' + count + '</span>';
+      line1 += '</div>';
+      tile.innerHTML = line1 + '<div class="tile-label">' + escHtml(s.name) + '</div>';
+      tile.title = 'Attach in a split pane';
+      tile.addEventListener('click', function () {
+        sendAction({ type: 'attach_tmux_session', box: box.box, session: s.name, mode: 'split' });
+      });
+      armHover(tile, tmuxFlyoutDesc(box, s));
+      container.appendChild(tile);
     });
+  });
 
-    // Update resize handle position
-    const handle = document.getElementById('resize-handle');
-    if (handle && state.sidebarPosition) {
-        handle.className = 'resize-handle ' + state.sidebarPosition;
-    }
+  // Sync row (only when tmux discovery is active)
+  if (boxes.length) {
+    var sync = document.createElement('div');
+    sync.className = 'rail-row actionable';
+    sync.textContent = 'sync';
+    sync.addEventListener('click', function () { sendAction({ type: 'refresh_tmux_sessions' }); });
+    container.appendChild(sync);
+  }
 
-    // Reflect the active color scheme on the theme button + panel highlight
-    if (typeof state.activeColorScheme !== 'undefined') {
-        _currentScheme = state.activeColorScheme; // string, or null when unset
-        updateThemeButton();
-        updateActiveThemeRow();
-    }
+  // Stats dock chip only when the host supplies aggregate stats.
+  var statsBtn = document.getElementById('btn-stats');
+  if (statsBtn) statsBtn.style.display = state.claudeStats ? '' : 'none';
+
+  if (typeof state.activeColorScheme !== 'undefined') {
+    _currentScheme = state.activeColorScheme;
+  }
+
+  applyScale();
 }
 
 // Called from Rust via evaluate_script
@@ -1316,29 +882,31 @@ window.__updateState = renderSidebar;
 
 // Prevent WebView from keeping keyboard focus, but allow button clicks to complete.
 var _clickPending = false;
-document.addEventListener('mousedown', function(e) {
-    if (e.target.closest('button, .ctrl-btn, .card-close')) {
-        _clickPending = true;
-        return;
-    }
-    sendAction({ type: 'refocus' });
+document.addEventListener('mousedown', function (e) {
+  if (e.target.closest('button, .theme-row, .tile, .rail-row')) {
+    _clickPending = true;
+    return;
+  }
+  sendAction({ type: 'refocus' });
 }, true);
-document.addEventListener('click', function() {
-    if (_clickPending) {
-        _clickPending = false;
-        setTimeout(function() { sendAction({ type: 'refocus' }); }, 80);
-    }
+document.addEventListener('click', function () {
+  if (_clickPending) {
+    _clickPending = false;
+    setTimeout(function () { sendAction({ type: 'refocus' }); }, 80);
+  }
 }, true);
-document.addEventListener('mouseup', function() {
-    if (!_clickPending) sendAction({ type: 'refocus' });
+document.addEventListener('mouseup', function () {
+  if (!_clickPending) sendAction({ type: 'refocus' });
 }, true);
-window.addEventListener('focus', function() {
-    if (!_clickPending) sendAction({ type: 'refocus' });
+window.addEventListener('focus', function () {
+  if (!_clickPending) sendAction({ type: 'refocus' });
 });
-document.addEventListener('focusin', function(e) {
-    if (e.target && e.target.blur) e.target.blur();
-    if (!_clickPending) sendAction({ type: 'refocus' });
+document.addEventListener('focusin', function (e) {
+  if (e.target && e.target.blur) e.target.blur();
+  if (!_clickPending) sendAction({ type: 'refocus' });
 });
+
+applyScale();
 </script>
 
 </body>

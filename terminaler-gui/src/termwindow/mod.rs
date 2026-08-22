@@ -562,6 +562,11 @@ pub struct TermWindow {
     /// WebView2-based sidebar (Windows only). None = use GPU fallback.
     #[cfg(windows)]
     webview_sidebar: Option<crate::webview_sidebar::WebViewSidebar>,
+    /// Extra host width granted to the WebView while its flyout is open. The
+    /// terminal layout derives from tab_sidebar_width alone, so widening the
+    /// host overlays the terminal without moving a single cell.
+    #[cfg(windows)]
+    webview_flyout_width: u16,
     /// Tracks the last time each pane produced output (for idle detection).
     pane_last_output: HashMap<PaneId, Instant>,
     /// Panes for which we already fired a "Claude idle" notification.
@@ -954,6 +959,8 @@ impl TermWindow {
             last_agents_poll: Instant::now(),
             #[cfg(windows)]
             webview_sidebar: None,
+            #[cfg(windows)]
+            webview_flyout_width: 0,
             pane_last_output: HashMap::new(),
             claude_idle_notified: std::collections::HashSet::new(),
             claude_prev_status: HashMap::new(),
@@ -4752,18 +4759,25 @@ impl TermWindow {
             0
         };
         let handle_width = 6u32; // resize handle strip exposed to parent
-        let sidebar_width = (self.tab_sidebar_width as u32).saturating_sub(handle_width);
+        // While the JS flyout is open the host grows toward the terminal by
+        // the requested width; terminal cell layout derives from
+        // tab_sidebar_width alone, so nothing shifts underneath.
+        let flyout = self.webview_flyout_width as u32;
+        let sidebar_width =
+            (self.tab_sidebar_width as u32).saturating_sub(handle_width) + flyout;
         let y = border.top.get() as i32 + tab_bar_height + 7;
         let height = (self.dimensions.pixel_height as i32 - y).max(0) as u32;
 
         let x = match self.config.tab_sidebar_position {
             config::TabSidebarPosition::Left => border.left.get() as i32,
             config::TabSidebarPosition::Right => {
-                // Push WebView inward, leaving handle_width on the left edge
+                // Push WebView inward, leaving handle_width on the left edge,
+                // then extend left over the terminal by the flyout width.
                 self.dimensions.pixel_width as i32
                     - self.tab_sidebar_width as i32
                     - border.right.get() as i32
                     + handle_width as i32
+                    - flyout as i32
             }
         };
 
@@ -4850,6 +4864,15 @@ impl TermWindow {
                         w.invalidate();
                     }
                 }
+            }
+            "set_flyout" => {
+                // The JS flyout needs host room beyond the rail; the geometry
+                // recomputes on the next paint's reposition. Exempted from the
+                // JS-side debounce for the same reason a quick open/close pair
+                // must not be swallowed.
+                let open = action["open"].as_bool().unwrap_or(false);
+                let width = action["width"].as_u64().unwrap_or(0) as u16;
+                self.webview_flyout_width = if open { width } else { 0 };
             }
             "reset_zoom" => {
                 if let Some(pane) = self.get_active_pane_or_overlay() {

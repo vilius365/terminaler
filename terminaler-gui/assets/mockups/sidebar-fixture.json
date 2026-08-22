@@ -1,0 +1,38 @@
+{
+  "sidebarPosition": "right",
+  "activeColorScheme": "Gruvbox Dark (Gogh)",
+  "tabs": [
+    { "tabIdx": 0, "title": "zsh", "cwdShort": "~/projects/terminaler", "gitBranch": "main",
+      "isActive": true, "hasNotification": false, "panes": [], "activePaneId": 7 },
+    { "tabIdx": 1, "title": "claude", "cwdShort": ".../projects/terminaler", "gitBranch": "main",
+      "isActive": false, "hasNotification": false, "panes": [], "activePaneId": 9,
+      "claudeInfo": { "model": "Fable 5", "status": "working", "contextPct": 34,
+        "costUsd": 1.86, "durationMs": 2520000, "linesAdded": 412, "linesRemoved": 88, "host": "devbox" } },
+    { "tabIdx": 2, "title": "claude", "cwdShort": ".../personalProjects/exerciseAI", "gitBranch": "feature/plans",
+      "isActive": false, "hasNotification": true, "notificationCount": 2, "panes": [], "activePaneId": 11,
+      "claudeInfo": { "model": "Fable 5", "status": "waiting_input", "contextPct": 71,
+        "costUsd": 3.40, "durationMs": 4320000, "linesAdded": 820, "linesRemoved": 101 } },
+    { "tabIdx": 3, "title": "node", "cwdShort": "~/projects/node-app", "isActive": false,
+      "hasNotification": true, "notificationCount": 1, "activePaneId": 13,
+      "panes": [
+        { "paneId": 13, "paneIdx": 0, "title": "server", "cwdShort": "~/projects/node-app", "isActive": true, "isHidden": false, "hasNotification": false },
+        { "paneId": 14, "paneIdx": 1, "title": "logs", "cwdShort": "~/projects/node-app", "isActive": false, "isHidden": false, "hasNotification": true,
+          "claudeInfo": { "model": "Fable 5", "status": "error" } },
+        { "paneId": 15, "paneIdx": 2, "title": "scratch", "cwdShort": "~", "isActive": false, "isHidden": true, "hasNotification": false }
+      ] }
+  ],
+  "tmuxSessions": [
+    { "box": "devbox", "status": "ok", "stale": false, "sessions": [
+      { "name": "supervisorAI", "windows": 3, "attached": true, "agent": "forge", "agentIsInstance": true },
+      { "name": "terminaler", "windows": 1, "attached": false, "agent": "titan", "agentIsInstance": true },
+      { "name": "main", "windows": 2, "attached": false } ] },
+    { "box": "homepc", "status": "ok", "stale": true, "sessions": [
+      { "name": "projects", "windows": 1, "attached": false, "agent": "scout", "agentIsInstance": true } ] },
+    { "box": "laptop", "status": "unreachable", "stale": true, "error": "ssh: connect timed out", "sessions": [] }
+  ],
+  "claudeStats": { "activeSessions": 3, "working": 1, "waitingInput": 1, "idle": 0, "error": 1,
+    "dailySpent": 4.12, "dailyBudget": 15.0, "dailyRemaining": 10.88,
+    "weeklySpent": 31.4, "weeklyBudget": 60.0, "weeklyRemaining": 28.6,
+    "totalCostUsd": 6.2, "totalDurationMs": 8040000, "totalLinesAdded": 1204, "totalLinesRemoved": 312,
+    "avgContextPct": 52, "models": ["Fable 5", "Opus 5"] }
+}
