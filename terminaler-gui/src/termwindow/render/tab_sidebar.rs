@@ -358,13 +358,46 @@ impl crate::TermWindow {
         let mut children = vec![];
         let mut tiles_hidden = 0usize;
 
-        // Pixel accounting from live font metrics: the TILE_H constant
-        // drifted from real tile height once the rail font began tracking
-        // the terminal size, and a count-based budget clipped mid-tile.
+        // Pixel accounting with MEASURED heights: two rounds of estimating
+        // tile height from font metrics both undercounted and clipped
+        // mid-tile, so probe-compute a representative tile and eyebrow
+        // through the real layout instead.
+        let dpi = self.dimensions.dpi as f32;
+        let window_height = self.dimensions.pixel_height as f32;
+        let probe_ctx = LayoutContext {
+            width: config::DimensionContext {
+                dpi,
+                pixel_max: sidebar_width,
+                pixel_cell: metrics.cell_size.width as f32,
+            },
+            height: config::DimensionContext {
+                dpi,
+                pixel_max: window_height,
+                pixel_cell: metrics.cell_size.height as f32,
+            },
+            bounds: euclid::rect(0., 0., sidebar_width, window_height),
+            metrics,
+            gl_state: self.render_state.as_ref().unwrap(),
+            zindex: 10,
+        };
         let label_metrics = RenderMetrics::with_font_metrics(&title_font.metrics());
         let label_h = label_metrics.cell_size.height as f32;
-        let tile_px = metrics.cell_size.height as f32 * 1.1 + label_h + 14. + TILE_GAP;
-        let eyebrow_px = label_h * 1.3 + 10.;
+        let tile_px = {
+            let mut probe = TileArgs::new(font, title_font, metrics, theme, sidebar_width);
+            probe.icon = "\u{21c4}".to_string();
+            probe.label = "probe".to_string();
+            self.compute_element(&probe_ctx, &build_tile(probe))
+                .map(|c| c.bounds.height())
+                .unwrap_or(metrics.cell_size.height as f32 * 1.1 + label_h + 14.)
+                + TILE_GAP
+        };
+        let eyebrow_px = self
+            .compute_element(
+                &probe_ctx,
+                &sidebar_eyebrow(title_font, "probe", Some(theme.accent_green), theme, sidebar_width, false),
+            )
+            .map(|c| c.bounds.height())
+            .unwrap_or(label_h * 1.3 + 10.);
         let mut px_used = 0f32;
 
         // Sessions this window already hosts in a pane fold away rather than
@@ -427,7 +460,7 @@ impl crate::TermWindow {
                     })
                     .min_width(Some(Dimension::Pixels(sidebar_width))),
                 );
-                px_used += label_h * 1.1;
+                px_used += eyebrow_px;
             }
 
             for session in &snap.sessions {
@@ -782,8 +815,19 @@ impl crate::TermWindow {
             .compute_element(&context_probe, &tabs_probe)
             .map(|c| c.bounds.height())
             .unwrap_or(0.);
-        let dock_reserve = 40.;
-        let px_budget = (window_height - tabs_height - dock_reserve).max(0.);
+        // Measure the dock rather than reserving a guess for it.
+        let dock = build_widget_dock(
+            &font,
+            &title_font,
+            &theme,
+            sidebar_width,
+            self.config.tmux.as_ref().map_or(false, |t| t.enabled),
+        );
+        let dock_h = self
+            .compute_element(&context_probe, &dock)
+            .map(|c| c.bounds.height() + 8.)
+            .unwrap_or(40.);
+        let px_budget = (window_height - tabs_height - dock_h).max(0.);
         let agents_section = self.build_agents_section(
             &font,
             &title_font,
@@ -808,13 +852,7 @@ impl crate::TermWindow {
         if let Some(section) = agents_section {
             sidebar_children.push(section);
         }
-        sidebar_children.push(build_widget_dock(
-            &font,
-            &title_font,
-            &theme,
-            sidebar_width,
-            self.config.tmux.as_ref().map_or(false, |t| t.enabled),
-        ));
+        sidebar_children.push(dock);
 
         // Root container
         let root = Element::new(&font, ElementContent::Children(sidebar_children))
