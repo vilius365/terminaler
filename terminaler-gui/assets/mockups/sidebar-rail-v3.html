@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Rail V3 — Zoned</title>
+<style>
+  :root {
+    --bg-base: #121212;
+    --bg-surface: #1a1a1a;
+    --bg-elevated: #222222;
+    --border-subtle: #2e2e2e;
+    --border-default: #3a3a3a;
+    --text-primary: #e0e0e0;
+    --text-secondary: #999999;
+    --text-tertiary: #666666;
+    --accent-blue: #4d9eff;
+    --accent-green: #3fb950;
+    --accent-yellow: #d29922;
+    --accent-red: #f85149;
+    --accent-orange: #db8b0b;
+    --font-ui: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    --font-mono: 'Cascadia Code', 'JetBrains Mono', Consolas, monospace;
+    --radius-sm: 4px;
+    --radius-md: 6px;
+    --transition: 150ms ease;
+    --rail-width: 90px;
+    --flyout-width: 264px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #0b0b0b; color: var(--text-primary); font-family: var(--font-ui);
+    padding: 32px; display: flex; gap: 40px; flex-wrap: wrap; align-items: flex-start;
+  }
+  h1 { font-size: 14px; width: 100%; font-weight: 600; color: var(--text-secondary); margin-bottom: 4px; }
+  h1 b { color: var(--accent-orange); }
+  .stage-label { font-size: 11px; color: var(--text-tertiary); margin-bottom: 8px; }
+  .stage { display: flex; flex-direction: column; }
+  .appwin {
+    width: 560px; height: 640px; background: var(--bg-base);
+    border: 1px solid var(--border-default); border-radius: 8px;
+    overflow: hidden; display: flex; position: relative;
+  }
+  .term {
+    flex: 1; padding: 14px; font-family: var(--font-mono); font-size: 11px;
+    line-height: 1.7; color: #7a8478; overflow: hidden; white-space: pre;
+  }
+  .term .p { color: #a9b665; }
+  .term .d { color: #504945; }
+
+  /* ══ THE RAIL — zoned: eyebrow-labelled sections, dense 30px rows ══ */
+  .rail {
+    width: var(--rail-width); flex: none; background: var(--bg-surface);
+    border-left: 1px solid var(--border-subtle);
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  .rail-scroll { flex: 1; overflow-y: auto; padding: 4px 5px; display: flex; flex-direction: column; gap: 2px; }
+  .rail-scroll::-webkit-scrollbar { width: 0; }
+
+  /* zone eyebrow: 8px uppercase + count, hairline continuation */
+  .zone {
+    display: flex; align-items: center; gap: 4px;
+    padding: 8px 3px 3px 3px; flex: none;
+    font-size: 8px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--text-tertiary);
+  }
+  .zone:first-child { padding-top: 4px; }
+  .zone .line { flex: 1; height: 1px; background: var(--border-subtle); }
+  .zone .zcount { font-family: var(--font-mono); font-weight: 400; }
+  .zone .bdot { width: 5px; height: 5px; border-radius: 50%; }
+  .bdot.green { background: var(--accent-green); }
+  .bdot.red { background: var(--accent-red); }
+  .zone.stale { opacity: 0.55; }
+
+  /* Row: 30px, icon + label + right cluster; state edge on the LEFT like V1
+     but rendered as a 2px inset bar to keep zones the dominant structure */
+  .rrow {
+    position: relative; height: 30px; flex: none;
+    border-radius: var(--radius-sm);
+    display: flex; align-items: center; gap: 5px;
+    padding: 0 5px 0 9px;
+    cursor: pointer; transition: background var(--transition);
+  }
+  .rrow:hover { background: var(--bg-elevated); }
+  .rrow.active { background: var(--bg-elevated); }
+  .redge { position: absolute; left: 1px; top: 5px; bottom: 5px; width: 2px; border-radius: 1px; }
+  .redge.blue { background: var(--accent-blue); }
+  .redge.green { background: var(--accent-green); }
+  .redge.yellow { background: var(--accent-yellow); }
+  .redge.red { background: var(--accent-red); }
+
+  .ricon { flex: none; width: 14px; text-align: center; font-size: 11px; color: var(--text-secondary); }
+  .ricon.claude { color: var(--accent-orange); }
+  .rrow.active .ricon { color: var(--text-primary); }
+  .rlabel {
+    flex: 1; min-width: 0; font-size: 10px; color: var(--text-secondary);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .rrow.active .rlabel { color: var(--text-primary); font-weight: 600; }
+  .rlabel.instance { color: var(--accent-orange); font-weight: 600; }
+  .rdot { flex: none; width: 6px; height: 6px; border-radius: 50%; }
+  .rdot.green { background: var(--accent-green); animation: pulse-green 2s ease-in-out infinite; }
+  .rdot.yellow { background: var(--accent-yellow); animation: pulse-yellow 2s ease-in-out infinite; }
+  .rdot.red { background: var(--accent-red); }
+  .rnotif {
+    flex: none; min-width: 13px; height: 13px; padding: 0 3px;
+    border-radius: 7px; background: var(--accent-red); color: #fff;
+    font-size: 9px; font-weight: 700; line-height: 13px; text-align: center;
+  }
+  .rwin { flex: none; font-size: 9px; color: var(--text-tertiary); font-family: var(--font-mono); }
+  @keyframes pulse-green { 0%,100% { box-shadow: 0 0 0 0 rgba(63,185,80,0.4);} 50% { box-shadow: 0 0 0 4px rgba(63,185,80,0);} }
+  @keyframes pulse-yellow { 0%,100% { box-shadow: 0 0 0 0 rgba(210,153,34,0.4);} 50% { box-shadow: 0 0 0 4px rgba(210,153,34,0);} }
+
+  /* context: 2px right-edge vertical bar (fills bottom-up) — the zoned
+     variant keeps row bottoms clean for density */
+  .rctxv {
+    position: absolute; right: 1px; top: 4px; bottom: 4px; width: 2px;
+    background: var(--border-subtle); border-radius: 1px; overflow: hidden;
+  }
+  .rctxv i { position: absolute; left: 0; right: 0; bottom: 0; background: var(--accent-orange); border-radius: 1px; }
+
+  .rrow.pane { height: 24px; margin-left: 10px; }
+  .rrow.pane .rlabel { font-size: 9px; }
+
+  /* Widget dock */
+  .rdock {
+    flex: none; border-top: 1px solid var(--border-subtle);
+    display: flex; justify-content: space-evenly; padding: 6px 2px;
+  }
+  .rdock button {
+    width: 24px; height: 24px; border: none; border-radius: var(--radius-sm);
+    background: transparent; color: var(--text-tertiary); font-size: 12px; cursor: pointer;
+    transition: background var(--transition), color var(--transition);
+  }
+  .rdock button:hover, .rdock button.open { background: var(--bg-elevated); color: var(--text-primary); }
+
+  /* ══ FLYOUT ══ */
+  .flyout {
+    position: absolute; right: calc(var(--rail-width) + 1px); width: var(--flyout-width);
+    background: var(--bg-elevated); border: 1px solid var(--border-default);
+    border-right: 3px solid var(--accent-yellow);
+    border-radius: var(--radius-md) 0 0 var(--radius-md);
+    box-shadow: -6px 4px 18px rgba(0,0,0,0.55);
+    padding: 10px 12px; z-index: 10;
+  }
+  .fly-title { font-size: 13px; font-weight: 600; color: var(--accent-orange); margin-bottom: 2px; }
+  .fly-status { display: flex; align-items: center; gap: 6px; font-size: 11px; margin: 4px 0; }
+  .sdot { width: 6px; height: 6px; border-radius: 50%; flex: none; }
+  .sdot.yellow { background: var(--accent-yellow); }
+  .fly-meta { font-size: 11px; color: var(--text-secondary); display: flex; gap: 8px; align-items: center; margin: 2px 0; }
+  .fly-ctx { height: 3px; border-radius: 2px; background: var(--border-subtle); margin-top: 8px; overflow: hidden; }
+  .fly-ctx i { display: block; height: 100%; background: linear-gradient(90deg, var(--accent-orange), rgba(219,139,11,0.3)); }
+  .fly-stats { font-size: 10px; color: var(--text-tertiary); margin-top: 6px; font-family: var(--font-mono); }
+  .fly-stats .add { color: var(--accent-green); }
+  .fly-stats .rem { color: var(--accent-red); }
+  .fly-host { margin-left: auto; font-size: 10px; padding: 1px 5px; border-radius: 3px; background: rgba(255,255,255,0.06); color: var(--text-secondary); }
+  .fly-notif { margin-top: 8px; padding: 6px 8px; border-radius: var(--radius-sm); background: rgba(248,81,73,0.12); font-size: 10px; color: var(--text-secondary); }
+  .fly-notif b { color: var(--accent-red); font-weight: 600; }
+  .fly-actions { display: flex; gap: 4px; margin-top: 8px; }
+  .fly-actions span { font-size: 10px; padding: 2px 8px; border-radius: 3px; background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.5); cursor: pointer; }
+  .fly-actions span:hover { background: rgba(255,255,255,0.14); color: rgba(255,255,255,0.85); }
+
+  .drawer-scrim {
+    position: absolute; top: 0; bottom: 0; right: var(--rail-width);
+    width: calc(var(--flyout-width) + 16px); background: rgba(0,0,0,0.45); z-index: 8;
+  }
+  .drawer {
+    position: absolute; bottom: 10px; right: calc(var(--rail-width) + 1px); width: var(--flyout-width);
+    background: var(--bg-elevated); border: 1px solid var(--border-default);
+    border-right: 3px solid var(--accent-orange);
+    border-radius: var(--radius-md) 0 0 var(--radius-md);
+    box-shadow: -6px 4px 18px rgba(0,0,0,0.55); padding: 10px 12px; z-index: 10;
+  }
+  .drawer .fly-title { text-transform: uppercase; font-size: 10px; letter-spacing: 0.06em; }
+  .theme-row { padding: 5px 8px; font-size: 12px; color: var(--text-secondary); border-radius: 3px; cursor: pointer; }
+  .theme-row:hover { background: var(--bg-surface); color: var(--text-primary); }
+  .theme-row.active { color: var(--accent-orange); font-weight: 600; }
+  .theme-row.search { color: var(--accent-blue); border-bottom: 1px solid var(--border-subtle); border-radius: 0; margin-bottom: 3px; }
+
+  /* Glyph icons: CSS-mask SVG so they render everywhere and tint via currentColor */
+  .gi { display:inline-block; width:1em; height:1em; vertical-align:-0.12em; background-color:currentColor;
+        -webkit-mask:var(--m) center/contain no-repeat; mask:var(--m) center/contain no-repeat; }
+  .gi-prompt { --m:url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M5 3l6 5-6 5" fill="none" stroke="black" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>'); }
+  .gi-spark { --m:url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M8 1v14M2.2 4.5l11.6 7M13.8 4.5l-11.6 7" fill="none" stroke="black" stroke-width="2" stroke-linecap="round"/></svg>'); }
+  .gi-link { --m:url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M2 5h10M9.5 2.5L12 5l-2.5 2.5M14 11H4m2.5-2.5L4 11l2.5 2.5" fill="none" stroke="black" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>'); }
+  .gi-grid { --m:url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><rect x="2" y="2" width="12" height="12" rx="1.5" fill="none" stroke="black" stroke-width="1.8"/><rect x="5.5" y="5.5" width="5" height="5" fill="black"/></svg>'); }
+  .gi-plus { --m:url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M8 2.5v11M2.5 8h11" fill="none" stroke="black" stroke-width="2" stroke-linecap="round"/></svg>'); }
+  .gi-theme { --m:url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.2" fill="none" stroke="black" stroke-width="1.8"/><path d="M8 1.8a6.2 6.2 0 010 12.4z" fill="black"/></svg>'); }
+  .gi-elbow { --m:url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M4 2v9h9" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>'); }
+</style>
+</head>
+<body>
+
+<h1>V3 — <b>Zoned</b> · eyebrow sections (tabs / boxes), dense 30px rows, vertical ctx bar · 90px</h1>
+
+<!-- Stage 1: resting -->
+<div class="stage">
+  <div class="stage-label">resting</div>
+  <div class="appwin">
+    <div class="term"><span class="p">vilius@devbox</span> ~/projects/terminaler
+<span class="d">$</span> cargo build --release
+   Compiling terminaler-gui v0.1.0
+    Finished `release` in 4m 02s
+<span class="d">$</span> ▁</div>
+    <div class="rail">
+      <div class="rail-scroll">
+        <div class="zone">tabs <span class="zcount">4</span><span class="line"></span></div>
+        <div class="rrow active"><span class="redge blue"></span><span class="ricon"><i class="gi gi-prompt"></i></span><span class="rlabel">terminaler</span></div>
+        <div class="rrow">
+          <span class="redge green"></span><span class="ricon claude"><i class="gi gi-spark"></i></span><span class="rlabel">terminaler</span><span class="rdot green"></span>
+          <div class="rctxv"><i style="height:34%"></i></div>
+        </div>
+        <div class="rrow">
+          <span class="redge yellow"></span><span class="ricon claude"><i class="gi gi-spark"></i></span><span class="rlabel">exerciseAI</span><span class="rnotif">2</span>
+          <div class="rctxv"><i style="height:71%"></i></div>
+        </div>
+        <div class="rrow"><span class="ricon"><i class="gi gi-prompt"></i></span><span class="rlabel">node</span><span class="rnotif">1</span></div>
+        <div class="rrow pane"><span class="rlabel">server</span></div>
+        <div class="rrow pane"><span class="redge red"></span><span class="rlabel">logs</span><span class="rdot red"></span></div>
+
+        <div class="zone"><span class="bdot green"></span>devbox<span class="line"></span></div>
+        <div class="rrow"><span class="ricon" style="color:var(--accent-orange)"><i class="gi gi-link"></i></span><span class="rlabel instance">witch</span><span class="rwin">3·</span></div>
+        <div class="rrow"><span class="ricon" style="color:var(--text-tertiary)"><i class="gi gi-grid"></i></span><span class="rlabel">main</span><span class="rwin">2</span></div>
+
+        <div class="zone stale"><span class="bdot green"></span>wsl<span class="line"></span></div>
+        <div class="rrow" style="opacity:0.55"><span class="ricon" style="color:var(--accent-orange)"><i class="gi gi-link"></i></span><span class="rlabel instance">home</span><span class="rwin">1</span></div>
+      </div>
+      <div class="rdock">
+        <button title="New tab"><i class="gi gi-plus"></i></button>
+        <button title="Theme"><i class="gi gi-theme"></i></button>
+        <button title="Claude stats">$</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Stage 2: hover flyout on the awaiting-input row (with notification detail) -->
+<div class="stage">
+  <div class="stage-label">hover flyout (awaiting row, incl. notification)</div>
+  <div class="appwin">
+    <div class="term"><span class="p">vilius@devbox</span> ~/projects/terminaler
+<span class="d">$</span> cargo build --release
+   Compiling terminaler-gui v0.1.0
+    Finished `release` in 4m 02s
+<span class="d">$</span> ▁</div>
+
+    <div class="flyout" style="top:84px">
+      <div class="fly-title">Fable 5</div>
+      <div class="fly-status">
+        <span class="sdot yellow"></span><span style="color:var(--accent-yellow)">awaiting input</span>
+        <span class="fly-host">devbox</span>
+      </div>
+      <div class="fly-meta">~/projects/…/exerciseAI <span>⎇ feature/plans</span></div>
+      <div class="fly-ctx"><i style="width:71%"></i></div>
+      <div class="fly-stats">ctx 71% · $3.40 · 1h 12m · <span class="add">+820</span> <span class="rem">-101</span></div>
+      <div class="fly-notif"><b>● 2 notifications</b> — waiting on plan approval</div>
+      <div class="fly-actions"><span>mute</span><span>hide</span><span>close</span></div>
+    </div>
+
+    <div class="rail">
+      <div class="rail-scroll">
+        <div class="zone">tabs <span class="zcount">4</span><span class="line"></span></div>
+        <div class="rrow active"><span class="redge blue"></span><span class="ricon"><i class="gi gi-prompt"></i></span><span class="rlabel">terminaler</span></div>
+        <div class="rrow"><span class="redge green"></span><span class="ricon claude"><i class="gi gi-spark"></i></span><span class="rlabel">terminaler</span><span class="rdot green"></span><div class="rctxv"><i style="height:34%"></i></div></div>
+        <div class="rrow" style="background:var(--bg-elevated)">
+          <span class="redge yellow"></span><span class="ricon claude"><i class="gi gi-spark"></i></span><span class="rlabel">exerciseAI</span><span class="rnotif">2</span>
+          <div class="rctxv"><i style="height:71%"></i></div>
+        </div>
+        <div class="rrow"><span class="ricon"><i class="gi gi-prompt"></i></span><span class="rlabel">node</span><span class="rnotif">1</span></div>
+        <div class="rrow pane"><span class="rlabel">server</span></div>
+        <div class="rrow pane"><span class="redge red"></span><span class="rlabel">logs</span><span class="rdot red"></span></div>
+        <div class="zone"><span class="bdot green"></span>devbox<span class="line"></span></div>
+        <div class="rrow"><span class="ricon" style="color:var(--accent-orange)"><i class="gi gi-link"></i></span><span class="rlabel instance">witch</span><span class="rwin">3·</span></div>
+        <div class="rrow"><span class="ricon" style="color:var(--text-tertiary)"><i class="gi gi-grid"></i></span><span class="rlabel">main</span><span class="rwin">2</span></div>
+        <div class="zone stale"><span class="bdot green"></span>wsl<span class="line"></span></div>
+        <div class="rrow" style="opacity:0.55"><span class="ricon" style="color:var(--accent-orange)"><i class="gi gi-link"></i></span><span class="rlabel instance">home</span><span class="rwin">1</span></div>
+      </div>
+      <div class="rdock">
+        <button title="New tab"><i class="gi gi-plus"></i></button>
+        <button title="Theme"><i class="gi gi-theme"></i></button>
+        <button title="Claude stats">$</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Stage 3: widget drawer -->
+<div class="stage">
+  <div class="stage-label">widget drawer + scrim (theme, click-open)</div>
+  <div class="appwin">
+    <div class="term"><span class="p">vilius@devbox</span> ~/projects/terminaler
+<span class="d">$</span> cargo build --release
+   Compiling terminaler-gui v0.1.0
+    Finished `release` in 4m 02s
+<span class="d">$</span> ▁</div>
+
+    <div class="drawer-scrim"></div>
+    <div class="drawer">
+      <div class="fly-title">Theme</div>
+      <div class="theme-row search">🔍 Search all… (Ctrl+Shift+K)</div>
+      <div class="theme-row active">● Gruvbox Dark (Gogh)</div>
+      <div class="theme-row">Catppuccin Mocha</div>
+      <div class="theme-row">Tokyo Night</div>
+      <div class="theme-row">Nord</div>
+    </div>
+
+    <div class="rail">
+      <div class="rail-scroll">
+        <div class="zone">tabs <span class="zcount">4</span><span class="line"></span></div>
+        <div class="rrow active"><span class="redge blue"></span><span class="ricon"><i class="gi gi-prompt"></i></span><span class="rlabel">terminaler</span></div>
+        <div class="rrow"><span class="redge green"></span><span class="ricon claude"><i class="gi gi-spark"></i></span><span class="rlabel">terminaler</span><span class="rdot green"></span><div class="rctxv"><i style="height:34%"></i></div></div>
+        <div class="rrow"><span class="redge yellow"></span><span class="ricon claude"><i class="gi gi-spark"></i></span><span class="rlabel">exerciseAI</span><span class="rnotif">2</span><div class="rctxv"><i style="height:71%"></i></div></div>
+        <div class="rrow"><span class="ricon"><i class="gi gi-prompt"></i></span><span class="rlabel">node</span><span class="rnotif">1</span></div>
+        <div class="rrow pane"><span class="rlabel">server</span></div>
+        <div class="rrow pane"><span class="redge red"></span><span class="rlabel">logs</span><span class="rdot red"></span></div>
+        <div class="zone"><span class="bdot green"></span>devbox<span class="line"></span></div>
+        <div class="rrow"><span class="ricon" style="color:var(--accent-orange)"><i class="gi gi-link"></i></span><span class="rlabel instance">witch</span><span class="rwin">3·</span></div>
+        <div class="rrow"><span class="ricon" style="color:var(--text-tertiary)"><i class="gi gi-grid"></i></span><span class="rlabel">main</span><span class="rwin">2</span></div>
+        <div class="zone stale"><span class="bdot green"></span>wsl<span class="line"></span></div>
+        <div class="rrow" style="opacity:0.55"><span class="ricon" style="color:var(--accent-orange)"><i class="gi gi-link"></i></span><span class="rlabel instance">home</span><span class="rwin">1</span></div>
+      </div>
+      <div class="rdock">
+        <button title="New tab"><i class="gi gi-plus"></i></button>
+        <button class="open" title="Theme"><i class="gi gi-theme"></i></button>
+        <button title="Claude stats">$</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>
