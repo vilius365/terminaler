@@ -991,7 +991,10 @@ impl crate::TermWindow {
     fn paint_sidebar_flyout(&mut self, rail_x: f32, rail_y: f32) -> anyhow::Result<()> {
         let fly = match self.sidebar_flyout.clone() {
             Some(f) => f,
-            None => return Ok(()),
+            None => {
+                self.sidebar_flyout_rect = None;
+                return Ok(());
+            }
         };
         if fly.hover_since.elapsed() < crate::termwindow::SIDEBAR_FLYOUT_DELAY {
             // Not open yet: schedule the frame that will open it, so the delay
@@ -1050,6 +1053,7 @@ impl crate::TermWindow {
         let h = computed.bounds.height();
         let y = fly.anchor_y.min(window_h - h - 8.).max(rail_y);
         computed.translate(euclid::vec2(x, y));
+        self.sidebar_flyout_rect = Some((x, y, computed.bounds.width(), h));
 
         let gl_state = self.render_state.as_ref().unwrap();
         self.render_element(&computed, gl_state, None)?;

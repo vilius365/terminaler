@@ -551,6 +551,9 @@ pub struct TermWindow {
     /// element itself is rebuilt each paint while open (its data is live), so
     /// only the hover state is stored.
     pub sidebar_flyout: Option<SidebarFlyoutState>,
+    /// Where the open flyout was painted last frame (x, y, w, h) — used by the
+    /// mouse keep-open logic, which must not depend on pixel-perfect adjacency.
+    pub sidebar_flyout_rect: Option<(f32, f32, f32, f32)>,
     last_sidebar_info_poll: Instant,
     /// Number of Claude agent panes in `waiting_input` across all windows,
     /// shown as a tab-bar badge. Refreshed on a throttled poll.
@@ -945,6 +948,7 @@ impl TermWindow {
             tab_sidebar: None,
             tab_sidebar_info: HashMap::new(),
             sidebar_flyout: None,
+            sidebar_flyout_rect: None,
             last_sidebar_info_poll: Instant::now(),
             agents_waiting: 0,
             last_agents_poll: Instant::now(),

@@ -408,26 +408,26 @@ impl super::TermWindow {
             None
         };
 
-        // Sidebar flyout: close when the pointer is on neither a rail item nor
-        // the flyout. Hovering a different rail row swaps the anchor instead
-        // (mouse_event_tab_sidebar re-arms it), and the flyout's own action
-        // chips keep it open. CloseTab is the flyout's tab-close chip.
+        // Sidebar flyout: stay open while the pointer is anywhere in the rail
+        // column or on/near the flyout itself — closing must NOT depend on the
+        // pointer resolving to a UI item every step of the way (gaps between
+        // tiles, eyebrows, and the rail margin resolve to nothing, and closing
+        // there made the flyout unreachable). Close once the pointer is
+        // genuinely back over the terminal, or over the widget dock.
         if self.sidebar_flyout.is_some() {
-            let keep = match &ui_item {
-                Some(item) => match &item.item_type {
-                    UIItemType::TabSidebar(si) => !matches!(
-                        si,
-                        TabSidebarItem::NewTabButton
-                            | TabSidebarItem::ThemePickerButton
-                            | TabSidebarItem::TmuxRefreshButton
-                            | TabSidebarItem::ResizeHandle
-                    ),
-                    UIItemType::CloseTab(_) => true,
-                    _ => false,
-                },
-                None => false,
-            };
-            if !keep {
+            let on_dock = matches!(
+                ui_item.as_ref().map(|i| &i.item_type),
+                Some(UIItemType::TabSidebar(
+                    TabSidebarItem::NewTabButton
+                        | TabSidebarItem::ThemePickerButton
+                        | TabSidebarItem::TmuxRefreshButton
+                ))
+            );
+            let in_zone = self.sidebar_flyout_zone_contains(
+                event.coords.x as f32,
+                event.coords.y as f32,
+            );
+            if on_dock || !in_zone {
                 self.sidebar_flyout = None;
                 context.invalidate();
             }
@@ -2048,6 +2048,26 @@ impl super::TermWindow {
                 }
             },
             _ => {}
+        }
+    }
+
+    /// True when (x, y) is inside the rail column or within the open flyout's
+    /// painted bounds (slightly inflated). The keep-open zone for the flyout.
+    fn sidebar_flyout_zone_contains(&self, x: f32, y: f32) -> bool {
+        let sidebar_w = self.tab_sidebar_width as f32;
+        let win_w = self.dimensions.pixel_width as f32;
+        let in_rail = match self.config.tab_sidebar_position {
+            config::TabSidebarPosition::Right => x >= win_w - sidebar_w,
+            config::TabSidebarPosition::Left => x <= sidebar_w,
+        };
+        if in_rail {
+            return true;
+        }
+        if let Some((fx, fy, fw, fh)) = self.sidebar_flyout_rect {
+            let pad = 8.;
+            x >= fx - pad && x <= fx + fw + pad && y >= fy - pad && y <= fy + fh + pad
+        } else {
+            false
         }
     }
 
