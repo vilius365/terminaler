@@ -474,31 +474,26 @@ impl crate::TermWindow {
                     continue;
                 }
 
-                // A named interconnect instance is the more specific identity,
-                // so it names the tile in orange; a generic agent type or the
-                // bare session name stays secondary.
-                let (icon, icon_color, label, label_color) = if session.agent_is_instance {
+                // The PROJECT (tmux session name) is the tile's identity and
+                // takes the label line; the agent name is metadata and rides
+                // the icon line (user feedback: agent name alone is not
+                // enough). A named interconnect instance stays orange.
+                let (icon, icon_color, agent_line) = if session.agent_is_instance {
                     (
                         "\u{21c4}", // ⇄ matches the statusline's instance marker
                         theme.accent_orange,
-                        session.agent.clone().unwrap_or_else(|| session.session.clone()),
-                        theme.accent_orange,
+                        session
+                            .agent
+                            .clone()
+                            .map(|a| (a, theme.accent_orange)),
                     )
-                } else if session.agent.is_some() {
-                    (
-                        "\u{21c4}",
-                        theme.text_secondary,
-                        session.agent.clone().unwrap(),
-                        theme.text_secondary,
-                    )
+                } else if let Some(agent) = session.agent.clone() {
+                    ("\u{21c4}", theme.text_secondary, Some((agent, theme.text_secondary)))
                 } else {
-                    (
-                        "\u{25a3}", // ▣
-                        theme.text_tertiary,
-                        session.session.clone(),
-                        theme.text_secondary,
-                    )
+                    ("\u{25a3}", theme.text_tertiary, None) // ▣
                 };
+                let label = session.session.clone();
+                let label_color = theme.text_secondary;
 
                 // Window count only when it says something (n>1), plus a dot
                 // when another client is attached — a "1" on every tile was
@@ -514,6 +509,7 @@ impl crate::TermWindow {
                 let mut tile = TileArgs::new(font, title_font, metrics, theme, sidebar_width);
                 tile.icon = icon.to_string();
                 tile.icon_color = dim(icon_color, dimf);
+                tile.icon_label = agent_line.map(|(t, c)| (t, dim(c, dimf)));
                 tile.label = label;
                 tile.label_color = dim(label_color, dimf);
                 tile.right_hint = count.map(|c| (c, dim(theme.text_tertiary, dimf)));
@@ -1958,6 +1954,10 @@ struct TileArgs<'a> {
     left_hint: Option<(String, LinearRgba)>,
     /// Status dot / window count, right end of the icon line.
     right_hint: Option<(String, LinearRgba)>,
+    /// Inline text after the icon (left-aligned icon line instead of a
+    /// centered icon) — the agent name on tmux tiles, so the label line stays
+    /// free for the project name.
+    icon_label: Option<(String, LinearRgba)>,
     border_color: LinearRgba,
     bg: LinearRgba,
     hover_bg: Option<LinearRgba>,
@@ -1988,6 +1988,7 @@ impl<'a> TileArgs<'a> {
             label_color: theme.text_secondary,
             left_hint: None,
             right_hint: None,
+            icon_label: None,
             border_color: theme.border_subtle,
             bg: theme.bg_base,
             hover_bg: None,
@@ -2042,6 +2043,54 @@ fn build_tile(a: TileArgs) -> Element {
             Element::new(a.font, ElementContent::Children(segs))
                 .display(DisplayType::Block)
                 .line_height(Some(1.1)),
+        );
+    } else if let Some((itext, icolor)) = &a.icon_label {
+        // Left-aligned icon line: icon + inline identity + trailing hint.
+        let mut segs = vec![inline_mono(a.font, format!("{} ", a.icon), a.icon_color)];
+        segs.push(
+            Element::new(
+                a.label_font,
+                ElementContent::Text(truncate_str(itext, 9)),
+            )
+            .display(DisplayType::Inline)
+            .colors(text_only(*icolor)),
+        );
+        if let Some((rt, rc)) = &a.right_hint {
+            segs.push(
+                Element::new(
+                    a.label_font,
+                    ElementContent::Text(format!(" {}", rt.trim_end())),
+                )
+                .display(DisplayType::Inline)
+                .colors(text_only(*rc)),
+            );
+        }
+        lines.push(
+            Element::new(a.font, ElementContent::Children(segs))
+                .display(DisplayType::Block)
+                .line_height(Some(1.1)),
+        );
+
+        // Label line identical to the centered-icon branch below.
+        let label_metrics = RenderMetrics::with_font_metrics(&a.label_font.metrics());
+        let lcell = label_metrics.cell_size.width as f32;
+        let label_cols = if lcell > 0. {
+            ((inner_w / (lcell * 0.55)) as usize).clamp(6, 16)
+        } else {
+            12
+        };
+        lines.push(
+            Element::new(
+                a.label_font,
+                ElementContent::Text(format!(
+                    "{:^w$}",
+                    truncate_str(&a.label, label_cols),
+                    w = label_cols
+                )),
+            )
+            .display(DisplayType::Block)
+            .line_height(Some(1.0))
+            .colors(text_only(a.label_color)),
         );
     } else {
         // Icon line: [hint][centered icon][hint] in fixed mono columns.
