@@ -13,7 +13,7 @@ use mux::pane::{Pane, WithPaneLines};
 use mux::tab::{SplitDirection, SplitRequest, SplitSize, TabId};
 use mux::Mux;
 use std::convert::TryInto;
-use std::ops::Sub;
+use std::time::Instant;
 use std::sync::Arc;
 use std::time::Duration;
 use termwiz::hyperlink::Hyperlink;
@@ -408,6 +408,31 @@ impl super::TermWindow {
             None
         };
 
+        // Sidebar flyout: close when the pointer is on neither a rail item nor
+        // the flyout. Hovering a different rail row swaps the anchor instead
+        // (mouse_event_tab_sidebar re-arms it), and the flyout's own action
+        // chips keep it open. CloseTab is the flyout's tab-close chip.
+        if self.sidebar_flyout.is_some() {
+            let keep = match &ui_item {
+                Some(item) => match &item.item_type {
+                    UIItemType::TabSidebar(si) => !matches!(
+                        si,
+                        TabSidebarItem::NewTabButton
+                            | TabSidebarItem::ThemePickerButton
+                            | TabSidebarItem::TmuxRefreshButton
+                            | TabSidebarItem::ResizeHandle
+                    ),
+                    UIItemType::CloseTab(_) => true,
+                    _ => false,
+                },
+                None => false,
+            };
+            if !keep {
+                self.sidebar_flyout = None;
+                context.invalidate();
+            }
+        }
+
         // Dismiss profile dropdown on any click outside dropdown items
         if matches!(event.kind, WMEK::Press(_)) {
             if let Some(modal) = self.get_modal() {
@@ -467,6 +492,7 @@ impl super::TermWindow {
         self.current_mouse_event = None;
         self.hovered_pane_id = None;
         self.toast_expanded_for = None;
+        self.sidebar_flyout = None;
         self.update_title();
         context.set_cursor(Some(MouseCursor::Arrow));
         context.invalidate();
@@ -1891,7 +1917,13 @@ impl super::TermWindow {
         context: &dyn WindowOps,
     ) {
         match event.kind {
-            WMEK::Press(MousePress::Left) => match sidebar_item {
+            WMEK::Press(MousePress::Left) => {
+                // A left click completes the interaction; the flyout closes
+                // whether the click hit a rail tile or one of its own chips.
+                if self.sidebar_flyout.take().is_some() {
+                    context.invalidate();
+                }
+                match sidebar_item {
                 TabSidebarItem::Tab { tab_idx, .. } => {
                     self.activate_tab(tab_idx as isize).ok();
                 }
@@ -1968,7 +2000,15 @@ impl super::TermWindow {
                     )
                     .ok();
                 }
-            },
+                TabSidebarItem::Flyout => {}
+                TabSidebarItem::ThemePickerButton => {
+                    self.show_color_scheme_picker();
+                }
+                TabSidebarItem::TmuxRefreshButton => {
+                    crate::tmux_discovery::request_refresh();
+                }
+                }
+            }
             WMEK::Press(MousePress::Middle) => match sidebar_item {
                 TabSidebarItem::Tab { tab_idx, .. } => {
                     self.close_specific_tab(tab_idx, true);
@@ -1989,16 +2029,45 @@ impl super::TermWindow {
                 TabSidebarItem::ResizeHandle => {
                     context.set_cursor(Some(MouseCursor::SizeLeftRight));
                 }
-                TabSidebarItem::NewTabButton
-                | TabSidebarItem::ClosePane { .. }
-                | TabSidebarItem::MuteNotifications { .. }
-                | TabSidebarItem::Tab { .. }
+                TabSidebarItem::Tab { .. }
                 | TabSidebarItem::TmuxSession { .. }
                 | TabSidebarItem::Pane { .. } => {
                     context.set_cursor(Some(MouseCursor::Hand));
+                    // Hovering a rail row arms (or swaps) the detail flyout.
+                    self.sidebar_flyout_hover(&item, &sidebar_item);
+                }
+                TabSidebarItem::NewTabButton
+                | TabSidebarItem::ClosePane { .. }
+                | TabSidebarItem::MuteNotifications { .. }
+                | TabSidebarItem::ThemePickerButton
+                | TabSidebarItem::TmuxRefreshButton => {
+                    context.set_cursor(Some(MouseCursor::Hand));
+                }
+                TabSidebarItem::Flyout => {
+                    context.set_cursor(Some(MouseCursor::Arrow));
                 }
             },
             _ => {}
+        }
+    }
+
+    /// Arm (or re-arm) the sidebar hover flyout for a rail row. The flyout
+    /// itself opens in paint once SIDEBAR_FLYOUT_DELAY has elapsed; the frame
+    /// that opens it is scheduled here so no further mouse motion is needed.
+    fn sidebar_flyout_hover(&mut self, item: &UIItem, sidebar_item: &TabSidebarItem) {
+        let rearm = match &self.sidebar_flyout {
+            Some(f) => f.item != *sidebar_item,
+            None => true,
+        };
+        if rearm {
+            self.sidebar_flyout = Some(crate::termwindow::SidebarFlyoutState {
+                item: sidebar_item.clone(),
+                anchor_y: item.y as f32,
+                hover_since: Instant::now(),
+            });
+            self.update_next_frame_time(Some(
+                Instant::now() + crate::termwindow::SIDEBAR_FLYOUT_DELAY,
+            ));
         }
     }
 

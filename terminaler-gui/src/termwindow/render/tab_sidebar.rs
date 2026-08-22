@@ -1,4 +1,3 @@
-use crate::customglyph::*;
 use crate::termwindow::box_model::*;
 use crate::termwindow::render::corners::{
     BOTTOM_LEFT_ROUNDED_CORNER, BOTTOM_RIGHT_ROUNDED_CORNER, TOP_LEFT_ROUNDED_CORNER,
@@ -6,7 +5,7 @@ use crate::termwindow::render::corners::{
 };
 use crate::termwindow::{SidebarTabInfo, TabSidebarItem, UIItem, UIItemType};
 use crate::utilsprites::RenderMetrics;
-use config::{Dimension, TabBarColor, TabBarColors, TabSidebarPosition};
+use config::{Dimension, TabSidebarPosition};
 use mux::pane::CachePolicy;
 use mux::tab::TabId;
 use mux::Mux;
@@ -17,24 +16,105 @@ use terminaler_font::LoadedFont;
 use terminaler_term::color::ColorPalette;
 use window::color::LinearRgba;
 
-const X_BUTTON: &[Poly] = &[
-    Poly {
-        path: &[
-            PolyCommand::MoveTo(BlockCoord::One, BlockCoord::Zero),
-            PolyCommand::LineTo(BlockCoord::Zero, BlockCoord::One),
-        ],
-        intensity: BlockAlpha::Full,
-        style: PolyStyle::Outline,
-    },
-    Poly {
-        path: &[
-            PolyCommand::MoveTo(BlockCoord::Zero, BlockCoord::Zero),
-            PolyCommand::LineTo(BlockCoord::One, BlockCoord::One),
-        ],
-        intensity: BlockAlpha::Full,
-        style: PolyStyle::Outline,
-    },
-];
+/// ── Shared visual spec (V2 "Tiles") ─────────────────────────────────────────
+/// Colors mirror the CSS `:root` token block in assets/sidebar.html — that
+/// block is the single source of truth and the two are kept in sync BY HAND.
+///
+/// Spec table (both renderers):
+///   rail width          90 px  (config tab_sidebar_width)
+///   tile                68 px wide, 1 px status-tint border, rounded, 6 px gap
+///   pane sub-tile       62 px wide, single line
+///   status dot          INSIDE the tile, right end of the icon line
+///   notification badge  red count, left end of the icon line
+///   context bar         thin strip inside the tile bottom
+///   flyout              264 px wide, opens after 200 ms hover
+///   label               centered under the icon, truncated with …
+pub(crate) const TILE_W: f32 = 68.;
+pub(crate) const TILE_HALF_W: f32 = 62.;
+pub(crate) const TILE_H: f32 = 48.;
+pub(crate) const TILE_GAP: f32 = 6.;
+pub(crate) const FLYOUT_W: f32 = 264.;
+
+pub(crate) struct SidebarTheme {
+    pub bg_base: LinearRgba,
+    pub bg_surface: LinearRgba,
+    pub bg_elevated: LinearRgba,
+    pub border_subtle: LinearRgba,
+    pub border_default: LinearRgba,
+    pub text_primary: LinearRgba,
+    pub text_secondary: LinearRgba,
+    pub text_tertiary: LinearRgba,
+    pub accent_blue: LinearRgba,
+    pub accent_green: LinearRgba,
+    pub accent_yellow: LinearRgba,
+    pub accent_red: LinearRgba,
+    pub accent_orange: LinearRgba,
+}
+
+impl SidebarTheme {
+    pub fn load() -> Self {
+        // sRGB -> linear, the same transfer function SrgbaTuple::to_linear
+        // applies; inlined to keep this dependency-free.
+        fn srgb_to_linear(c: f32) -> f32 {
+            if c <= 0.04045 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            }
+        }
+        fn rgb(r: u8, g: u8, b: u8) -> LinearRgba {
+            LinearRgba::with_components(
+                srgb_to_linear(r as f32 / 255.),
+                srgb_to_linear(g as f32 / 255.),
+                srgb_to_linear(b as f32 / 255.),
+                1.,
+            )
+        }
+        Self {
+            bg_base: rgb(0x12, 0x12, 0x12),
+            bg_surface: rgb(0x1a, 0x1a, 0x1a),
+            bg_elevated: rgb(0x22, 0x22, 0x22),
+            border_subtle: rgb(0x2e, 0x2e, 0x2e),
+            border_default: rgb(0x3a, 0x3a, 0x3a),
+            text_primary: rgb(0xe0, 0xe0, 0xe0),
+            text_secondary: rgb(0x99, 0x99, 0x99),
+            text_tertiary: rgb(0x66, 0x66, 0x66),
+            accent_blue: rgb(0x4d, 0x9e, 0xff),
+            accent_green: rgb(0x3f, 0xb9, 0x50),
+            accent_yellow: rgb(0xd2, 0x99, 0x22),
+            accent_red: rgb(0xf8, 0x51, 0x49),
+            accent_orange: rgb(0xdb, 0x8b, 0x0b),
+        }
+    }
+}
+
+/// Fade a color by scaling its alpha — used for stale boxes and inactive tints.
+fn dim(c: LinearRgba, f: f32) -> LinearRgba {
+    LinearRgba::with_components(c.0, c.1, c.2, c.3 * f)
+}
+
+/// Status color for a claude session (dot, flyout edge).
+fn status_color(
+    claude: &crate::termwindow::ClaudeSessionInfo,
+    theme: &SidebarTheme,
+) -> LinearRgba {
+    use crate::termwindow::ClaudeStatus;
+    match claude.status {
+        Some(ClaudeStatus::Working) => theme.accent_green,
+        Some(ClaudeStatus::WaitingInput) => theme.accent_yellow,
+        Some(ClaudeStatus::Error) => theme.accent_red,
+        Some(ClaudeStatus::Idle) | None => theme.text_tertiary,
+    }
+}
+
+/// Tile border tint: the status color, softened like the CSS `.tile.st-*`
+/// border rgba values.
+fn status_border(
+    claude: &crate::termwindow::ClaudeSessionInfo,
+    theme: &SidebarTheme,
+) -> LinearRgba {
+    dim(status_color(claude, theme), 0.6)
+}
 
 impl crate::TermWindow {
     pub fn invalidate_tab_sidebar(&mut self) {
@@ -253,17 +333,17 @@ impl crate::TermWindow {
         found
     }
 
+    /// Tmux boxes as tile groups: an eyebrow header per box, then one tile per
+    /// session (V2 "Tiles" spec). The rows-budget cap and the folding of
+    /// locally-attached sessions carry over from the old list layout.
     fn build_agents_section(
         &self,
         font: &Rc<LoadedFont>,
         title_font: &Rc<LoadedFont>,
         metrics: &RenderMetrics,
-        palette: &ColorPalette,
-        bg_color: LinearRgba,
-        text_color: LinearRgba,
-        active_tab_colors: TabBarColor,
+        theme: &SidebarTheme,
         sidebar_width: f32,
-        row_budget: usize,
+        tile_budget: usize,
     ) -> Option<Element> {
         if !self.config.tmux.as_ref().map_or(false, |t| t.enabled) {
             return None;
@@ -275,84 +355,12 @@ impl crate::TermWindow {
             return None;
         }
 
-        // Palette matches the WebView sidebar's CSS variables so the two
-        // platforms look like the same product. Hardcoded rather than pulled
-        // from the terminal palette for exactly that reason: the Windows
-        // sidebar is fixed-colour too, and the section should not restyle
-        // itself per colour scheme when its Windows counterpart does not.
-        // sRGB -> linear, the same transfer function SrgbaTuple::to_linear
-        // applies; done inline to keep this helper dependency-free.
-        let srgb_to_linear = |c: f32| -> f32 {
-            if c <= 0.04045 {
-                c / 12.92
-            } else {
-                ((c + 0.055) / 1.055).powf(2.4)
-            }
-        };
-        let rgb = |r: u8, g: u8, b: u8| -> LinearRgba {
-            LinearRgba::with_components(
-                srgb_to_linear(r as f32 / 255.),
-                srgb_to_linear(g as f32 / 255.),
-                srgb_to_linear(b as f32 / 255.),
-                1.,
-            )
-        };
-        let accent_orange = rgb(0xdb, 0x8b, 0x0b);
-        let accent_green = rgb(0x3f, 0xb9, 0x50);
-        let text_primary = rgb(0xe0, 0xe0, 0xe0);
-        let text_secondary = rgb(0x99, 0x99, 0x99);
-        let text_tertiary = rgb(0x66, 0x66, 0x66);
-        let border_subtle = rgb(0x2e, 0x2e, 0x2e);
-        let bg_base = rgb(0x12, 0x12, 0x12);
-
-        // How many character cells fit inside a row card: the sidebar minus the
-        // row's margins (10+6), padding (6+6) and border (1+1), and a further
-        // 10px of slack. Derived rather than hardcoded so a resized sidebar
-        // re-flows the columns.
-        //
-        // The slack here only sizes the NAME text. It does not position the
-        // floated agent badge: that is clamped to the row's max_width, set
-        // explicitly on the row below. An earlier comment claimed this slack
-        // kept the badge inside the card, which measurement disproved —
-        // changing it moves the text and leaves the badge where it was.
-        let cell_w = metrics.cell_size.width as f32;
-        let row_cols = if cell_w > 0. {
-            (((sidebar_width - 40.) / cell_w).floor() as usize).max(12)
-        } else {
-            24
-        };
-
         let mut children = vec![];
-        let mut rows_emitted = 0usize;
-        let mut rows_hidden = 0usize;
+        let mut tiles_emitted = 0usize;
+        let mut tiles_hidden = 0usize;
 
-        // Section heading, mirroring .stats-title: uppercase, orange, tracked
-        // out. The WebView sidebar labels this block and the GPU one did not,
-        // so on Linux the machine headers ran straight on from the pane tree
-        // with nothing to say what they were.
-        children.push(
-            Element::new(
-                title_font,
-                ElementContent::Text("  TMUX SESSIONS".to_string()),
-            )
-            .display(DisplayType::Block)
-            .line_height(Some(1.4))
-            .padding(BoxDimension {
-                left: Dimension::Pixels(8.),
-                right: Dimension::Pixels(6.),
-                top: Dimension::Pixels(6.),
-                bottom: Dimension::Pixels(3.),
-            })
-            .colors(ElementColors {
-                border: BorderColor::default(),
-                bg: bg_color.into(),
-                text: accent_orange.into(),
-            })
-            .min_width(Some(Dimension::Pixels(sidebar_width))),
-        );
-
-        // Sessions this window already hosts in a pane. Their rows are folded
-        // away rather than listed a second time; see locally_attached_sessions.
+        // Sessions this window already hosts in a pane fold away rather than
+        // listing the same thing twice; see locally_attached_sessions.
         let folded = self.locally_attached_sessions();
 
         for snap in &snaps {
@@ -361,226 +369,116 @@ impl crate::TermWindow {
                 .iter()
                 .all(|s| folded.contains(&(snap.box_name.clone(), s.session.clone())))
             {
-                // Every session on this box is already open here, so the box
-                // header would introduce a heading with nothing under it.
                 continue;
             }
             if snap.sessions.is_empty() {
                 continue;
             }
-            // Each box header costs a row's worth of budget too.
-            if rows_emitted + 1 >= row_budget {
-                rows_hidden += snap.sessions.len();
+            if tiles_emitted + 1 >= tile_budget {
+                tiles_hidden += snap.sessions.len();
                 continue;
             }
 
-            // Box header: a status dot and the machine name, mirroring
-            // .tmux-box-header / .tmux-status-dot.
-            let dot_color = match snap.status {
-                crate::tmux_discovery::BoxStatus::Ok => accent_green,
-                crate::tmux_discovery::BoxStatus::Unreachable(_) => rgb(0xf8, 0x51, 0x49),
-                _ => text_tertiary,
+            let (dot_color, stale) = match snap.status {
+                crate::tmux_discovery::BoxStatus::Ok => (theme.accent_green, false),
+                crate::tmux_discovery::BoxStatus::Unreachable(_) => (theme.accent_red, true),
+                _ => (theme.text_tertiary, true),
             };
-            children.push(machine_header(
-                font,
+            children.push(sidebar_eyebrow(
+                title_font,
                 &snap.box_name,
                 Some(dot_color),
-                text_secondary,
-                bg_color,
+                theme,
                 sidebar_width,
+                stale,
             ));
 
+            // An unreachable box's error is worth a dim one-liner; the old
+            // layout had this and the tiles must not silently drop it.
+            if let crate::tmux_discovery::BoxStatus::Unreachable(ref err) = snap.status {
+                children.push(
+                    Element::new(
+                        title_font,
+                        ElementContent::Text(truncate_str(err, 14)),
+                    )
+                    .display(DisplayType::Block)
+                    .line_height(Some(1.1))
+                    .padding(BoxDimension {
+                        left: Dimension::Pixels(12.),
+                        right: Dimension::Pixels(4.),
+                        top: Dimension::Pixels(0.),
+                        bottom: Dimension::Pixels(2.),
+                    })
+                    .colors(ElementColors {
+                        border: BorderColor::default(),
+                        bg: InheritableColor::Inherited,
+                        text: theme.text_tertiary.into(),
+                    })
+                    .min_width(Some(Dimension::Pixels(sidebar_width))),
+                );
+            }
+
             for session in &snap.sessions {
-                // Already open as a pane in this window: the local row is the
-                // canonical one, so this row folds away entirely.
                 if folded.contains(&(snap.box_name.clone(), session.session.clone())) {
                     continue;
                 }
-                if rows_emitted >= row_budget {
-                    rows_hidden += 1;
+                if tiles_emitted >= tile_budget {
+                    tiles_hidden += 1;
                     continue;
                 }
-                // Attached by some other client — another terminal, another
-                // machine. tmux is multi-client so attaching here is still
-                // valid; the row stays clickable but recedes.
-                let attached_elsewhere = session.attached;
-                // Columns are sized from the sidebar width rather than fixed,
-                // and share it by priority: the project directory (the tmux
-                // session name) is what identifies a row, so it takes the slack
-                // and is the last thing to be truncated; the agent badge takes
-                // only what it needs. Every row still pads to the same totals,
-                // so widening the sidebar reveals more of the name without
-                // changing the row's shape.
-                let badge_cols = session
-                    .agent
-                    .as_deref()
-                    .map(|a| a.chars().count().min(12))
-                    .unwrap_or(0);
-                // The badge floats right, so the name only has to reserve
-                // enough width to keep the two from overlapping.
-                let badge_field = if badge_cols > 0 { badge_cols + 2 } else { 0 };
-                let name_cols = row_cols.saturating_sub(badge_field).max(6);
 
-                let mut row_children = vec![Element::new(
-                    font,
-                    // Padded to name_cols so every row reserves the same width
-                    // for the name and the floated badge always clears it.
-                    ElementContent::Text(format!(
-                        "{:<width$}",
-                        truncate_str(&session.session, name_cols),
-                        width = name_cols
-                    )),
-                )
-                .display(DisplayType::Inline)
-                .colors(ElementColors {
-                    border: BorderColor::default(),
-                    bg: InheritableColor::Inherited,
-                    text: if attached_elsewhere {
-                        text_tertiary
-                    } else if session.attachable {
-                        text_primary
-                    } else {
-                        text_tertiary
-                    }
-                    .into(),
-                })];
+                // A named interconnect instance is the more specific identity,
+                // so it names the tile in orange; a generic agent type or the
+                // bare session name stays secondary.
+                let (icon, icon_color, label, label_color) = if session.agent_is_instance {
+                    (
+                        "\u{21c4}", // ⇄ matches the statusline's instance marker
+                        theme.accent_orange,
+                        session.agent.clone().unwrap_or_else(|| session.session.clone()),
+                        theme.accent_orange,
+                    )
+                } else if session.agent.is_some() {
+                    (
+                        "\u{21c4}",
+                        theme.text_secondary,
+                        session.agent.clone().unwrap(),
+                        theme.text_secondary,
+                    )
+                } else {
+                    (
+                        "\u{25a3}", // ▣
+                        theme.text_tertiary,
+                        session.session.clone(),
+                        theme.text_secondary,
+                    )
+                };
 
-                if let Some(agent) = &session.agent {
-                    // A named interconnect instance is the more specific fact,
-                    // so it gets the filled orange badge with dark text; a
-                    // generic agent type stays muted. Matches
-                    // .tmux-session-agent{,-instance}.
-                    let (badge_bg, badge_fg) = if session.agent_is_instance {
-                        (accent_orange, bg_base)
-                    } else {
-                        (border_subtle, accent_orange)
-                    };
-                    row_children.push(
-                        // title_font is the window-frame font, a size down from
-                        // the terminal font: the badge is supporting detail, so
-                        // it should not compete with the project name.
-                        Element::new(
-                            title_font,
-                            ElementContent::Text(format!(
-                                " {:<width$} ",
-                                truncate_str(agent, badge_cols),
-                                width = badge_cols
-                            )),
-                        )
-                        .display(DisplayType::Inline)
-                        // Pinned to the right edge rather than trailing the
-                        // name. The badge is set in title_font, a size down
-                        // from the name's font, so padding the name to
-                        // name_cols cannot line the badges up: each row would
-                        // end at a slightly different x. Floating right anchors
-                        // every badge to the same edge whatever the name.
-                        .float(Float::Right)
-                        .colors(ElementColors {
-                            border: BorderColor::default(),
-                            bg: badge_bg.into(),
-                            text: badge_fg.into(),
-                        }),
-                    );
-                }
+                // Window count (plus a dot when another client is attached)
+                // sits where a status dot would: tmux sessions have no claude
+                // state of their own on the rail.
+                let count = if session.attached {
+                    format!("{}\u{25cf}", session.windows.min(9))
+                } else {
+                    format!("{} ", session.windows.min(9))
+                };
 
-                // Indented card with a subtle border, hovering to orange —
-                // .tmux-session-row and its :hover rule.
-                let mut row = Element::new(font, ElementContent::Children(row_children))
-                    .display(DisplayType::Block)
-                    .line_height(Some(1.2))
-                    .margin(BoxDimension {
-                        left: Dimension::Pixels(10.),
-                        right: Dimension::Pixels(6.),
-                        top: Dimension::Pixels(2.),
-                        bottom: Dimension::Pixels(2.),
-                    })
-                    .padding(BoxDimension {
-                        left: Dimension::Pixels(6.),
-                        right: Dimension::Pixels(6.),
-                        top: Dimension::Pixels(2.),
-                        bottom: Dimension::Pixels(2.),
-                    })
-                    .border(BoxDimension {
-                        left: Dimension::Pixels(1.),
-                        right: Dimension::Pixels(1.),
-                        top: Dimension::Pixels(1.),
-                        bottom: Dimension::Pixels(1.),
-                    })
-                    .colors(ElementColors {
-                        border: BorderColor::new(border_subtle),
-                        // Unfilled, like the WebView row. .tmux-session-row
-                        // asks for var(--bg-hover), which :root never defines,
-                        // so on Windows it resolves to transparent: sampling
-                        // the screenshot inside a row gives #1a1a1a, the same
-                        // value as the gap between rows. Filling with
-                        // border_subtle here made the Linux rows read as solid
-                        // blocks instead of outlines.
-                        bg: InheritableColor::Inherited,
-                        text: text_primary.into(),
-                    })
-                    // Rounded card, matching .tmux-session-row's border-radius.
-                    .border_corners(Some(Corners {
-                        top_left: SizedPoly {
-                            width: Dimension::Cells(0.3),
-                            height: Dimension::Cells(0.3),
-                            poly: TOP_LEFT_ROUNDED_CORNER,
-                        },
-                        top_right: SizedPoly {
-                            width: Dimension::Cells(0.3),
-                            height: Dimension::Cells(0.3),
-                            poly: TOP_RIGHT_ROUNDED_CORNER,
-                        },
-                        bottom_left: SizedPoly {
-                            width: Dimension::Cells(0.3),
-                            height: Dimension::Cells(0.3),
-                            poly: BOTTOM_LEFT_ROUNDED_CORNER,
-                        },
-                        bottom_right: SizedPoly {
-                            width: Dimension::Cells(0.3),
-                            height: Dimension::Cells(0.3),
-                            poly: BOTTOM_RIGHT_ROUNDED_CORNER,
-                        },
-                    }))
-                    // Cards are uniform: the row spans the sidebar minus its
-                    // own margins, padding and border, so text length changes
-                    // what a row says, never its shape.
-                    .min_width(Some(Dimension::Pixels(
-                        (sidebar_width - 16. - 12. - 2.).max(0.),
-                    )))
-                    // The floated badge is clamped to max_width, NOT to this
-                    // row's min_width: box_model computes
-                    // `float_max_x = (max_x + float_width).min(max_width)`, and
-                    // an element that sets no max_width inherits the parent's
-                    // full bounds. The row therefore let the badge sit at the
-                    // sidebar's edge, painting over the card's right border and
-                    // rounded corner, and neither shortening the name nor
-                    // shrinking min_width moved it — measured, the badge's
-                    // right edge stayed at the same x while the card moved 10px
-                    // left. Bound the row explicitly so the clamp lands on the
-                    // card's content edge instead.
-                    .max_width(Some(Dimension::Pixels(
-                        (sidebar_width - 16. - 12. - 2.).max(0.),
-                    )));
-
+                let dimf = if stale || session.attached { 0.55 } else { 1.0 };
+                let mut tile = TileArgs::new(font, title_font, metrics, theme, sidebar_width);
+                tile.icon = icon.to_string();
+                tile.icon_color = dim(icon_color, dimf);
+                tile.label = label;
+                tile.label_color = dim(label_color, dimf);
+                tile.right_hint = Some((count, dim(theme.text_tertiary, dimf)));
+                tile.border_color = dim(theme.border_subtle, dimf);
                 if session.attachable {
-                    row = row
-                        .item_type(UIItemType::TabSidebar(TabSidebarItem::TmuxSession {
-                            box_name: snap.box_name.clone(),
-                            session: session.session.clone(),
-                        }))
-                        // Hover lights the border orange, as .tmux-session-row
-                        // :hover does. The fill lifts to border_subtle here to
-                        // give the pointer some feedback, since the resting
-                        // row is now unfilled.
-                        .hover_colors(Some(ElementColors {
-                            border: BorderColor::new(accent_orange),
-                            bg: border_subtle.into(),
-                            text: text_primary.into(),
-                        }));
+                    tile.item = Some(TabSidebarItem::TmuxSession {
+                        box_name: snap.box_name.clone(),
+                        session: session.session.clone(),
+                    });
+                    tile.hover_border = Some(theme.accent_orange);
                 }
-
-                children.push(row);
-                rows_emitted += 1;
+                children.push(build_tile(tile));
+                tiles_emitted += 1;
             }
         }
 
@@ -590,27 +488,24 @@ impl crate::TermWindow {
 
         // Say what is not shown, so a truncated list never reads as the whole
         // picture.
-        if rows_hidden > 0 {
+        if tiles_hidden > 0 {
             children.push(
                 Element::new(
                     title_font,
-                    ElementContent::Text(format!(
-                        "  +{} more (ctrl+shift+s)",
-                        rows_hidden
-                    )),
+                    ElementContent::Text(format!("+{} \u{2026} C-S-s", tiles_hidden)),
                 )
                 .display(DisplayType::Block)
                 .line_height(Some(1.2))
                 .padding(BoxDimension {
-                    left: Dimension::Pixels(8.),
-                    right: Dimension::Pixels(6.),
+                    left: Dimension::Pixels(10.),
+                    right: Dimension::Pixels(4.),
                     top: Dimension::Pixels(1.),
                     bottom: Dimension::Pixels(3.),
                 })
                 .colors(ElementColors {
                     border: BorderColor::default(),
-                    bg: bg_color.into(),
-                    text: text_tertiary.into(),
+                    bg: InheritableColor::Inherited,
+                    text: theme.text_tertiary.into(),
                 })
                 .min_width(Some(Dimension::Pixels(sidebar_width))),
             );
@@ -620,8 +515,8 @@ impl crate::TermWindow {
             .display(DisplayType::Block)
             .colors(ElementColors {
                 border: BorderColor::default(),
-                bg: bg_color.into(),
-                text: text_color.into(),
+                bg: InheritableColor::Inherited,
+                text: theme.text_secondary.into(),
             })
             .min_width(Some(Dimension::Pixels(sidebar_width)));
 
@@ -630,7 +525,7 @@ impl crate::TermWindow {
 
     pub fn build_tab_sidebar(
         &self,
-        palette: &ColorPalette,
+        _palette: &ColorPalette,
     ) -> anyhow::Result<ComputedElement> {
         let font = self.fonts.default_font()?;
         let title_font = self.fonts.title_font()?;
@@ -645,31 +540,11 @@ impl crate::TermWindow {
         let sidebar_top = border.top.get() as f32 + tab_bar_height;
         let window_height = self.dimensions.pixel_height as f32 - sidebar_top;
 
-        let colors = self
-            .config
-            .colors
-            .as_ref()
-            .and_then(|c| c.tab_bar.as_ref())
-            .cloned()
-            .unwrap_or_else(TabBarColors::default);
-
-        let bg_color = if self.focused.is_some() {
-            self.config.window_frame.inactive_titlebar_bg
-        } else {
-            self.config.window_frame.inactive_titlebar_bg
-        }
-        .to_linear();
-
-        let text_color = if self.focused.is_some() {
-            self.config.window_frame.active_titlebar_fg
-        } else {
-            self.config.window_frame.inactive_titlebar_fg
-        }
-        .to_linear();
-
-        let active_tab_colors = colors.active_tab();
-        let inactive_tab_colors = colors.inactive_tab();
-        let inactive_tab_hover_colors = colors.inactive_tab_hover();
+        // The rail commits to the fixed spec palette (SidebarTheme) on both
+        // renderers rather than restyling per terminal color scheme — the
+        // Windows sidebar is fixed-color too, and the two must read as the
+        // same product. This extends what the tmux section already did.
+        let theme = SidebarTheme::load();
 
         let mux = Mux::get();
         let mux_window = mux
@@ -680,36 +555,18 @@ impl crate::TermWindow {
             .get_active_tab_for_window(self.mux_window_id)
             .map(|t| t.tab_id());
 
-        let dimmed_color = LinearRgba::with_components(
-            text_color.0 * 0.6,
-            text_color.1 * 0.6,
-            text_color.2 * 0.6,
-            text_color.3,
-        );
-
-        // Accent color for active tab left border (accent-blue)
-        let accent_color = LinearRgba::with_components(0.302, 0.620, 1.0, 1.0);
-        // Notification color (accent-red)
-        let notif_color = LinearRgba::with_components(0.973, 0.318, 0.286, 1.0);
-
         let mut tab_elements = vec![];
 
-        // Head this window's own panes with a group heading, matching the box
-        // headings the discovered machines get below. Without it the pane list
-        // reads as an unlabelled list that happens to sit above the machines,
-        // which is what made the sidebar look like two competing lists. No
-        // status dot: these panes are live mux state, with no poller behind
-        // them whose reachability could be reported.
-        //
-        // Uses the same muted grey as the box headings rather than the sidebar's
-        // text colour, so the two headings carry equal weight.
-        tab_elements.push(machine_header(
-            &font,
+        // Group heading for this window's own panes, matching the box eyebrows
+        // the discovered machines get below. No status dot: live mux state has
+        // no poller whose reachability could be reported.
+        tab_elements.push(sidebar_eyebrow(
+            &title_font,
             "local",
             None,
-            header_text_color(),
-            bg_color,
+            &theme,
             sidebar_width,
+            false,
         ));
 
         for (tab_idx, tab) in mux_window.iter().enumerate() {
@@ -720,318 +577,101 @@ impl crate::TermWindow {
             let panes = tab.iter_panes_ignoring_zoom();
             let has_multiple_panes = panes.len() > 1;
 
-            let has_notification = self
+            let (has_notification, notif_count, notif_elapsed) = match self
                 .pane_state_for_tab(tab_id)
-                .map_or(false, |ps| ps.notification_start.is_some());
+            {
+                Some(ps) => (
+                    ps.notification_start.is_some(),
+                    ps.notification_count,
+                    ps.notification_start
+                        .map(|s| Instant::now().duration_since(s).as_secs_f32()),
+                ),
+                None => (false, 0, None),
+            };
 
-            // Build child elements for this tab entry
-            let mut children = vec![];
-
-            // Close button (float right)
-            let close_hover_bg = inactive_tab_hover_colors.bg_color.to_linear();
-            let close_button = Element::new(
-                &font,
-                ElementContent::Poly {
-                    line_width: metrics.underline_height.max(2),
-                    poly: SizedPoly {
-                        poly: X_BUTTON,
-                        width: Dimension::Pixels(metrics.cell_size.height as f32 * 0.35),
-                        height: Dimension::Pixels(metrics.cell_size.height as f32 * 0.35),
-                    },
-                },
-            )
-            .zindex(1)
-            .vertical_align(VerticalAlign::Middle)
-            .float(Float::Right)
-            .item_type(UIItemType::CloseTab(tab_idx))
-            .padding(BoxDimension {
-                left: Dimension::Pixels(4.),
-                right: Dimension::Pixels(2.),
-                top: Dimension::Pixels(4.),
-                bottom: Dimension::Pixels(4.),
-            })
-            .border(BoxDimension {
-                left: Dimension::Pixels(1.),
-                right: Dimension::Pixels(1.),
-                top: Dimension::Pixels(1.),
-                bottom: Dimension::Pixels(1.),
-            })
-            .colors(ElementColors {
-                border: BorderColor {
-                    left: LinearRgba::with_components(bg_color.0 + 0.08, bg_color.1 + 0.08, bg_color.2 + 0.08, 0.5),
-                    top: LinearRgba::with_components(bg_color.0 + 0.08, bg_color.1 + 0.08, bg_color.2 + 0.08, 0.5),
-                    right: LinearRgba::with_components(bg_color.0 - 0.02, bg_color.1 - 0.02, bg_color.2 - 0.02, 0.5),
-                    bottom: LinearRgba::with_components(bg_color.0 - 0.02, bg_color.1 - 0.02, bg_color.2 - 0.02, 0.5),
-                },
-                bg: LinearRgba::with_components(bg_color.0 + 0.04, bg_color.1 + 0.04, bg_color.2 + 0.04, 0.6).into(),
-                text: dimmed_color.into(),
-            })
-            .hover_colors(Some(ElementColors {
-                border: BorderColor::new(LinearRgba::with_components(bg_color.0 + 0.12, bg_color.1 + 0.12, bg_color.2 + 0.12, 0.8)),
-                bg: close_hover_bg.into(),
-                text: text_color.into(),
-            }));
-            children.push(close_button);
-
-            // Check if any pane in this tab runs Claude
             let has_any_claude = info.map_or(false, |i| !i.pane_claude_info.is_empty());
-
-            // For single-pane Claude tabs, get the Claude info to render at tab level
             let single_pane_claude = if !has_multiple_panes && has_any_claude {
                 info.and_then(|i| i.pane_claude_info.values().next())
             } else {
                 None
             };
-            let is_claude_tab = single_pane_claude.is_some();
+            // Multi-pane tabs borrow the first claude pane's status for the
+            // tab tile's tint; per-pane detail lives on the sub-tiles.
+            let claude_for_accent =
+                single_pane_claude.or_else(|| info.and_then(|i| i.pane_claude_info.values().next()));
 
-            // Title line — prefer CWD for non-Claude tabs
-            let tab_label = if is_claude_tab {
-                let model_short = single_pane_claude
-                    .and_then(|c| c.model.as_deref())
-                    .unwrap_or("claude");
-                truncate_str(model_short, 36)
-            } else if has_multiple_panes {
-                let label = info
-                    .map(|i| i.cwd_short.as_str())
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or(&title);
-                format!("\u{25bc} {}", truncate_str(label, 34))
-            } else {
-                let label = info
-                    .map(|i| i.cwd_short.as_str())
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or(&title);
-                truncate_str(label, 38)
-            };
-            let title_color = if is_claude_tab || has_any_claude {
-                // Orange/amber for Claude tabs
-                LinearRgba::with_components(0.859, 0.545, 0.043, 1.0)
+            // The tile names the PROJECT (last path component), not the model:
+            // identity is what the rail shows, detail lives in the flyout.
+            let label_src = info
+                .map(|i| i.cwd_short.as_str())
+                .filter(|s| !s.is_empty())
+                .unwrap_or(&title);
+            let label = last_path_component(label_src);
+
+            let (icon, icon_color) = if has_any_claude {
+                ("\u{2733}", theme.accent_orange) // ✳
             } else if is_active {
-                active_tab_colors.fg_color.to_linear()
+                ("\u{276f}", theme.text_primary) // ❯
             } else {
-                text_color
-            };
-            let title_element = Element::new(&font, ElementContent::Text(tab_label))
-                .line_height(Some(1.1))
-                .colors(ElementColors {
-                    border: BorderColor::default(),
-                    bg: InheritableColor::Inherited,
-                    text: title_color.into(),
-                });
-            children.push(title_element);
-
-            if let Some(claude) = single_pane_claude {
-                // === Single-pane Claude Card at tab level ===
-                build_claude_card_children(
-                    &mut children,
-                    claude,
-                    info,
-                    info.map(|i| i.cwd_short.as_str()),
-                    &font,
-                    &title_font,
-                    dimmed_color,
-                    notif_color,
-                );
-            } else if !has_multiple_panes {
-                // === Normal single-pane tab rendering ===
-                // CWD is already shown as tab title, only add git branch
-                if let Some(info) = info {
-                    if let Some(ref branch) = info.git_branch {
-                        let branch_text =
-                            format!("\u{e0a0} {}", truncate_str(branch, 34));
-                        let branch_element =
-                            Element::new(&title_font, ElementContent::Text(branch_text))
-                                .display(DisplayType::Block)
-                                .line_height(Some(0.9))
-                                .colors(ElementColors {
-                                    border: BorderColor::default(),
-                                    bg: InheritableColor::Inherited,
-                                    text: dimmed_color.into(),
-                                });
-                        children.push(branch_element);
-                    }
-                }
-            }
-
-            // Notification badge (colored dot + count)
-            if has_notification {
-                let notif_count = self
-                    .pane_state_for_tab(tab_id)
-                    .map_or(0u32, |ps| ps.notification_count);
-                let badge_text = if notif_count > 1 {
-                    format!("\u{25cf} {}", notif_count)
-                } else {
-                    "\u{25cf}".to_string()
-                };
-                let notif_element =
-                    Element::new(&font, ElementContent::Text(badge_text))
-                        .float(Float::Right)
-                        .colors(ElementColors {
-                            border: BorderColor::default(),
-                            bg: InheritableColor::Inherited,
-                            text: notif_color.into(),
-                        });
-                children.push(notif_element);
-            }
-
-            // Mute/unmute notifications toggle
-            let active_pane_id = panes.iter().find(|p| p.is_active).map(|p| p.pane.pane_id());
-            if let Some(pid) = active_pane_id {
-                let is_muted = self.pane_state(pid).notifications_muted;
-                let (label, text_col, bg_col, hover_bg) = if is_muted {
-                    (
-                        "MUTED (click to unmute)",
-                        LinearRgba::with_components(1.0, 0.7, 0.2, 1.0),
-                        LinearRgba::with_components(0.6, 0.3, 0.0, 0.3),
-                        LinearRgba::with_components(0.6, 0.3, 0.0, 0.5),
-                    )
-                } else {
-                    (
-                        "mute notifications",
-                        dimmed_color,
-                        LinearRgba::with_components(0.0, 0.0, 0.0, 0.0),
-                        LinearRgba::with_components(bg_color.0 + 0.08, bg_color.1 + 0.08, bg_color.2 + 0.08, 0.5),
-                    )
-                };
-                let mute_element = Element::new(
-                    &title_font,
-                    ElementContent::Text(label.to_string()),
-                )
-                .display(DisplayType::Block)
-                .line_height(Some(0.9))
-                .item_type(UIItemType::TabSidebar(TabSidebarItem::MuteNotifications {
-                    pane_id: pid as usize,
-                }))
-                .colors(ElementColors {
-                    border: BorderColor::default(),
-                    bg: bg_col.into(),
-                    text: text_col.into(),
-                })
-                .hover_colors(Some(ElementColors {
-                    border: BorderColor::default(),
-                    bg: hover_bg.into(),
-                    text: text_color.into(),
-                }));
-                children.push(mute_element);
-            }
-
-            // Zoom level indicator for active tab
-            if is_active {
-                if let Some(active_pane) = panes.iter().find(|p| p.is_active) {
-                    let pane_scale = self.pane_state(active_pane.pane.pane_id()).font_scale;
-                    let global_scale = self.fonts.get_font_scale();
-                    let pct = (pane_scale * global_scale * 100.0).round() as u16;
-                    if pct != 100 {
-                        let zoom_element = Element::new(
-                            &font,
-                            ElementContent::Text(format!("Zoom: {}%  (Ctrl+0 reset)", pct)),
-                        )
-                        .display(DisplayType::Block)
-                        .line_height(Some(1.0))
-                        .colors(ElementColors {
-                            border: BorderColor::default(),
-                            bg: LinearRgba::with_components(0.0, 0.3, 0.3, 0.3).into(),
-                            text: LinearRgba::with_components(0.0, 0.9, 0.9, 1.0).into(),
-                        });
-                        children.push(zoom_element);
-                    }
-                }
-            }
-
-            let base_tab_bg = if is_active {
-                active_tab_colors.bg_color.to_linear()
-            } else {
-                bg_color
-            };
-            let tab_bg = if has_notification {
-                // Pulse background between normal and notification color
-                let notif_start = self
-                    .pane_state_for_tab(tab_id)
-                    .and_then(|ps| ps.notification_start);
-                let elapsed = notif_start
-                    .map(|start| Instant::now().duration_since(start).as_secs_f32())
-                    .unwrap_or(0.0);
-                let period = 1.5_f32;
-                let t = ((elapsed * std::f32::consts::TAU / period).sin() + 1.0) / 2.0;
-                let blend = t * 0.35;
-                LinearRgba::with_components(
-                    base_tab_bg.0 + (notif_color.0 - base_tab_bg.0) * blend,
-                    base_tab_bg.1 + (notif_color.1 - base_tab_bg.1) * blend,
-                    base_tab_bg.2 + (notif_color.2 - base_tab_bg.2) * blend,
-                    base_tab_bg.3,
-                )
-            } else {
-                base_tab_bg
+                ("\u{276f}", theme.text_secondary)
             };
 
-            let hover_bg = inactive_tab_hover_colors.bg_color.to_linear();
-            let border_left_color = if is_claude_tab {
-                claude_status_accent(single_pane_claude.unwrap(), is_active)
-            } else if has_any_claude {
-                // Multi-pane tab with Claude — use first Claude pane's status
-                let first_claude = info.and_then(|i| i.pane_claude_info.values().next());
-                match first_claude {
-                    Some(c) => claude_status_accent(c, is_active),
-                    None => accent_color,
-                }
+            let border_color = if let Some(c) = claude_for_accent {
+                status_border(c, &theme)
             } else if is_active {
-                accent_color
+                theme.accent_blue
             } else {
-                bg_color
+                theme.border_subtle
             };
 
-            let tab_element = Element::new(&font, ElementContent::Children(children))
-                .display(DisplayType::Block)
-                .item_type(UIItemType::TabSidebar(TabSidebarItem::Tab {
-                    tab_idx,
-                    active: is_active,
-                }))
-                .padding(if is_claude_tab {
-                    BoxDimension {
-                        left: Dimension::Pixels(8.),
-                        right: Dimension::Pixels(4.),
-                        top: Dimension::Pixels(4.),
-                        bottom: Dimension::Pixels(4.),
-                    }
-                } else {
-                    BoxDimension {
-                        left: Dimension::Pixels(8.),
-                        right: Dimension::Pixels(4.),
-                        top: Dimension::Pixels(2.),
-                        bottom: Dimension::Pixels(2.),
-                    }
-                })
-                .border(BoxDimension {
-                    left: Dimension::Pixels(4.),
-                    right: Dimension::Pixels(0.),
-                    top: Dimension::Pixels(0.),
-                    bottom: Dimension::Pixels(0.),
-                })
-                .colors(ElementColors {
-                    border: BorderColor {
-                        left: border_left_color,
-                        right: tab_bg,
-                        top: tab_bg,
-                        bottom: tab_bg,
-                    },
-                    bg: tab_bg.into(),
-                    text: text_color.into(),
-                })
-                .hover_colors(Some(ElementColors {
-                    border: BorderColor {
-                        left: border_left_color,
-                        right: hover_bg,
-                        top: hover_bg,
-                        bottom: hover_bg,
-                    },
-                    bg: hover_bg.into(),
-                    text: text_color.into(),
-                }))
-                .min_width(Some(Dimension::Pixels(sidebar_width)));
+            // Notification pulse: blend the tile bg toward red, same period as
+            // the old card pulse; paint_tab_sidebar schedules the frames.
+            let base_bg = if is_active {
+                theme.bg_elevated
+            } else {
+                theme.bg_base
+            };
+            let bg = match notif_elapsed {
+                Some(elapsed) if has_notification => {
+                    let period = 1.5_f32;
+                    let t = ((elapsed * std::f32::consts::TAU / period).sin() + 1.0) / 2.0;
+                    let blend = t * 0.35;
+                    LinearRgba::with_components(
+                        base_bg.0 + (theme.accent_red.0 - base_bg.0) * blend,
+                        base_bg.1 + (theme.accent_red.1 - base_bg.1) * blend,
+                        base_bg.2 + (theme.accent_red.2 - base_bg.2) * blend,
+                        base_bg.3,
+                    )
+                }
+                _ => base_bg,
+            };
 
-            tab_elements.push(tab_element);
+            let mut tile = TileArgs::new(&font, &title_font, &metrics, &theme, sidebar_width);
+            tile.icon = icon.to_string();
+            tile.icon_color = icon_color;
+            tile.label = label;
+            tile.label_color = if is_active {
+                theme.text_primary
+            } else {
+                theme.text_secondary
+            };
+            if has_notification && notif_count > 0 {
+                tile.left_hint = Some((format!("{}", notif_count.min(9)), theme.accent_red));
+            }
+            if let Some(c) = claude_for_accent {
+                tile.right_hint = Some(("\u{25cf}".to_string(), status_color(c, &theme)));
+            }
+            tile.border_color = border_color;
+            tile.bg = bg;
+            tile.hover_bg = Some(theme.bg_elevated);
+            tile.ctx_pct = single_pane_claude.and_then(|c| c.context_pct);
+            tile.item = Some(TabSidebarItem::Tab {
+                tab_idx,
+                active: is_active,
+            });
+            tab_elements.push(build_tile(tile));
 
-            // Pane sub-entries (tree children) — shown for tabs with multiple panes
+            // Pane sub-tiles for split tabs.
             if has_multiple_panes {
                 for pane_pos in &panes {
                     let pane = &pane_pos.pane;
@@ -1046,201 +686,55 @@ impl crate::TermWindow {
                                 None
                             }
                         });
-
                     let is_active_pane = pane_pos.is_active && is_active;
                     let pane_claude = info.and_then(|i| i.pane_claude_info.get(&pane_id));
-                    let is_claude_pane = pane_claude.is_some();
 
-                    let pane_accent_color = if let Some(claude) = pane_claude {
-                        claude_status_accent(claude, is_active_pane)
-                    } else if is_active_pane {
-                        accent_color
+                    let pane_label_src = pane_cwd
+                        .as_deref()
+                        .filter(|s| !s.is_empty())
+                        .map(last_path_component)
+                        .unwrap_or_else(|| pane_title.clone());
+
+                    let mut sub = TileArgs::new(&font, &title_font, &metrics, &theme, sidebar_width);
+                    sub.half = true;
+                    if pane_claude.is_some() {
+                        sub.icon = "\u{2733}".to_string();
+                        sub.icon_color = theme.accent_orange;
                     } else {
-                        LinearRgba::with_components(0.0, 0.0, 0.0, 0.0)
-                    };
-
-                    let mut pane_children = vec![];
-
-                    // Close button for pane (float right) — full size for Claude panes
-                    let close_size = if is_claude_pane { 0.35 } else { 0.3 };
-                    let pane_close = Element::new(
-                        &font,
-                        ElementContent::Poly {
-                            line_width: metrics.underline_height.max(2),
-                            poly: SizedPoly {
-                                poly: X_BUTTON,
-                                width: Dimension::Pixels(metrics.cell_size.height as f32 * close_size),
-                                height: Dimension::Pixels(metrics.cell_size.height as f32 * close_size),
-                            },
-                        },
-                    )
-                    .zindex(1)
-                    .vertical_align(VerticalAlign::Middle)
-                    .float(Float::Right)
-                    .item_type(UIItemType::TabSidebar(TabSidebarItem::ClosePane {
-                        pane_id: pane_id as usize,
-                    }))
-                    .padding(BoxDimension {
-                        left: Dimension::Pixels(4.),
-                        right: Dimension::Pixels(2.),
-                        top: Dimension::Pixels(if is_claude_pane { 4. } else { 8. }),
-                        bottom: Dimension::Pixels(if is_claude_pane { 4. } else { 3. }),
-                    })
-                    .border(BoxDimension {
-                        left: Dimension::Pixels(1.),
-                        right: Dimension::Pixels(1.),
-                        top: Dimension::Pixels(1.),
-                        bottom: Dimension::Pixels(1.),
-                    })
-                    .colors(ElementColors {
-                        border: BorderColor {
-                            left: LinearRgba::with_components(bg_color.0 + 0.08, bg_color.1 + 0.08, bg_color.2 + 0.08, 0.5),
-                            top: LinearRgba::with_components(bg_color.0 + 0.08, bg_color.1 + 0.08, bg_color.2 + 0.08, 0.5),
-                            right: LinearRgba::with_components(bg_color.0 - 0.02, bg_color.1 - 0.02, bg_color.2 - 0.02, 0.5),
-                            bottom: LinearRgba::with_components(bg_color.0 - 0.02, bg_color.1 - 0.02, bg_color.2 - 0.02, 0.5),
-                        },
-                        bg: LinearRgba::with_components(bg_color.0 + 0.04, bg_color.1 + 0.04, bg_color.2 + 0.04, 0.6).into(),
-                        text: dimmed_color.into(),
-                    })
-                    .hover_colors(Some(ElementColors {
-                        border: BorderColor::new(LinearRgba::with_components(bg_color.0 + 0.12, bg_color.1 + 0.12, bg_color.2 + 0.12, 0.8)),
-                        bg: close_hover_bg.into(),
-                        text: text_color.into(),
-                    }));
-                    pane_children.push(pane_close);
-
-                    if let Some(claude) = pane_claude {
-                        // === Claude Card at pane level — full card, same as tab-level ===
-                        let model_short = claude
-                            .model
-                            .as_deref()
-                            .unwrap_or("claude");
-                        let title_element = Element::new(
-                            &font,
-                            ElementContent::Text(truncate_str(model_short, 36)),
-                        )
-                        .line_height(Some(1.1))
-                        .colors(ElementColors {
-                            border: BorderColor::default(),
-                            bg: InheritableColor::Inherited,
-                            text: LinearRgba::with_components(0.859, 0.545, 0.043, 1.0).into(),
-                        });
-                        pane_children.push(title_element);
-
-                        build_claude_card_children(
-                            &mut pane_children,
-                            claude,
-                            info,
-                            pane_cwd.as_deref(),
-                            &font,
-                            &title_font,
-                            dimmed_color,
-                            notif_color,
-                        );
-                    } else {
-                        // Normal pane: tree connector + title
-                        let pane_label = format!("\u{2514} {}", truncate_str(&pane_title, 30));
-                        pane_children.push(
-                            Element::new(&font, ElementContent::Text(pane_label)).colors(
-                                ElementColors {
-                                    border: BorderColor::default(),
-                                    bg: InheritableColor::Inherited,
-                                    text: if is_active_pane {
-                                        text_color.into()
-                                    } else {
-                                        dimmed_color.into()
-                                    },
-                                },
-                            ),
-                        );
-
-                        // Pane CWD
-                        if let Some(ref cwd) = pane_cwd {
-                            pane_children.push(
-                                Element::new(
-                                    &title_font,
-                                    ElementContent::Text(truncate_str(cwd, 34)),
-                                )
-                                .colors(ElementColors {
-                                    border: BorderColor::default(),
-                                    bg: InheritableColor::Inherited,
-                                    text: dimmed_color.into(),
-                                }),
-                            );
-                        }
+                        sub.icon = "\u{2514}".to_string(); // └
+                        sub.icon_color = theme.text_tertiary;
                     }
-
-                    let pane_bg = if is_active_pane {
-                        LinearRgba::with_components(
-                            tab_bg.0 + 0.05,
-                            tab_bg.1 + 0.05,
-                            tab_bg.2 + 0.05,
-                            tab_bg.3,
-                        )
+                    sub.label = pane_label_src;
+                    sub.label_color = if is_active_pane {
+                        theme.text_primary
                     } else {
-                        bg_color
+                        theme.text_secondary
                     };
-
-                    // Claude panes get full-card styling (same as tab-level),
-                    // normal panes stay compact/indented as tree children.
-                    let pane_element =
-                        Element::new(&font, ElementContent::Children(pane_children))
-                            .display(DisplayType::Block)
-                            .item_type(UIItemType::TabSidebar(TabSidebarItem::Pane {
-                                tab_idx,
-                                pane_idx: pane_pos.index,
-                            }))
-                            .padding(if is_claude_pane {
-                                BoxDimension {
-                                    left: Dimension::Pixels(8.),
-                                    right: Dimension::Pixels(4.),
-                                    top: Dimension::Pixels(4.),
-                                    bottom: Dimension::Pixels(4.),
-                                }
-                            } else {
-                                BoxDimension {
-                                    left: Dimension::Pixels(20.),
-                                    right: Dimension::Pixels(4.),
-                                    top: Dimension::Pixels(3.),
-                                    bottom: Dimension::Pixels(3.),
-                                }
-                            })
-                            .border(BoxDimension {
-                                left: Dimension::Pixels(4.),
-                                right: Dimension::Pixels(0.),
-                                top: Dimension::Pixels(0.),
-                                bottom: Dimension::Pixels(0.),
-                            })
-                            .colors(ElementColors {
-                                border: BorderColor {
-                                    left: pane_accent_color,
-                                    right: pane_bg,
-                                    top: pane_bg,
-                                    bottom: pane_bg,
-                                },
-                                bg: pane_bg.into(),
-                                text: text_color.into(),
-                            })
-                            .hover_colors(Some(ElementColors {
-                                border: BorderColor {
-                                    left: pane_accent_color,
-                                    right: hover_bg,
-                                    top: hover_bg,
-                                    bottom: hover_bg,
-                                },
-                                bg: hover_bg.into(),
-                                text: text_color.into(),
-                            }))
-                            .min_width(Some(Dimension::Pixels(sidebar_width)));
-
-                    tab_elements.push(pane_element);
+                    if let Some(c) = pane_claude {
+                        sub.right_hint =
+                            Some(("\u{25cf}".to_string(), status_color(c, &theme)));
+                        sub.border_color = status_border(c, &theme);
+                    } else if is_active_pane {
+                        sub.border_color = theme.accent_blue;
+                    } else {
+                        sub.border_color = theme.border_subtle;
+                    }
+                    sub.bg = if is_active_pane {
+                        theme.bg_elevated
+                    } else {
+                        theme.bg_base
+                    };
+                    sub.hover_bg = Some(theme.bg_elevated);
+                    sub.item = Some(TabSidebarItem::Pane {
+                        tab_idx,
+                        pane_idx: pane_pos.index,
+                    });
+                    tab_elements.push(build_tile(sub));
                 }
             }
         }
 
-        // Wrap tab entries in a container with min_height to push + button to bottom
-        // Layout context used only to measure elements before the final tree
-        // is assembled; identical to the one used for the real layout below.
+        // Layout context used to compute the final tree.
         let dpi = self.dimensions.dpi as f32;
         let context_probe = LayoutContext {
             width: config::DimensionContext {
@@ -1259,89 +753,25 @@ impl crate::TermWindow {
             zindex: 10,
         };
 
-        // New tab button — centered, stuck to bottom
-        let new_tab_colors = colors.new_tab();
-        let new_tab_hover = colors.new_tab_hover();
-        // A labelled row in the flow of the list rather than a control pinned
-        // to the sidebar's bottom edge. Pinning needed the tab list stretched
-        // to a predicted height, and whenever the prediction was short the
-        // button was pushed off-screen; a row in document order cannot be.
-        let new_tab_button = Element::new(
-            &font,
-            ElementContent::Text("  +  new terminal".to_string()),
-        )
-        .display(DisplayType::Block)
-        .item_type(UIItemType::TabSidebar(TabSidebarItem::NewTabButton))
-        .line_height(Some(1.2))
-        .padding(BoxDimension {
-            left: Dimension::Pixels(10.),
-            right: Dimension::Pixels(6.),
-            top: Dimension::Pixels(4.),
-            bottom: Dimension::Pixels(6.),
-        })
-        .colors(ElementColors {
-            border: BorderColor::default(),
-            bg: InheritableColor::Inherited,
-            text: new_tab_colors.fg_color.to_linear().into(),
-        })
-        .hover_colors(Some(ElementColors {
-            border: BorderColor::default(),
-            bg: new_tab_hover.bg_color.to_linear().into(),
-            text: new_tab_hover.fg_color.to_linear().into(),
-        }))
-        .min_width(Some(Dimension::Pixels(sidebar_width)));
-
-        // Claude agents / tmux sessions.
-        //
-        // The WebView sidebar renders this from serialize_sidebar_state(), but
-        // that path is Windows-only (WebView2), so on every other platform the
-        // section did not exist at all. Build it natively from the same
-        // discovery snapshot the Ctrl+Shift+S picker reads, which already
-        // covers every machine in the interconnect registry.
-        //
-        // Built here, before tabs_min_height, because the tabs container is
-        // stretched to push the new-tab button to the bottom of the sidebar:
-        // its height has to account for this section or the agent rows land
-        // below the visible area.
-        // Cap the section at half the sidebar so the tab and pane tree, which
-        // is the primary content, cannot be squeezed out by a machine running
-        // many agents. Rows beyond the budget are summarised rather than
-        // silently dropped, and Ctrl+Shift+S still lists every session.
-        let row_budget = {
+        // Tmux tile groups, capped at roughly half the sidebar so the local
+        // tiles (the primary content) cannot be squeezed out. Hidden tiles are
+        // summarised; Ctrl+Shift+S still lists every session.
+        let tile_budget = {
             let avail = (window_height * 0.5).max(0.);
-            let row_h = metrics.cell_size.height as f32 * 1.2 + 10.;
-            if row_h > 0. { (avail / row_h) as usize } else { usize::MAX }
+            ((avail / (TILE_H + TILE_GAP)) as usize).max(2)
         };
-        let agents_section =
-            self.build_agents_section(&font, &title_font, &metrics, palette, bg_color,
-                                      text_color, active_tab_colors, sidebar_width,
-                                      row_budget);
+        let agents_section = self.build_agents_section(
+            &font,
+            &title_font,
+            &metrics,
+            &theme,
+            sidebar_width,
+            tile_budget,
+        );
 
-        // Measure the section instead of estimating it. A hand-computed guess
-        // has to match what layout actually produces to the pixel; when it came
-        // up short the tabs container over-reserved and pushed the agent rows
-        // off the bottom of the window, which a maximized window made obvious
-        // because it fits more rows.
-        let agents_height = match agents_section.as_ref() {
-            Some(section) => self
-                .compute_element(&context_probe, section)
-                .map(|c| c.bounds.height())
-                .unwrap_or(0.),
-            None => 0.,
-        };
-
-
-        // Everything flows in document order, with nothing stretched to pin a
-        // child to the window's bottom edge.
-        //
-        // The old layout padded this container out to
-        // `window_height - button_height - agents_height` so the new-tab button
-        // sat at the bottom. That is a *minimum*, so whenever the tab list's own
-        // content was taller than the remainder the container grew past it and
-        // pushed the button below the visible area — which is why the button
-        // looked like it never rendered on Linux. It was painting the whole
-        // time, just off-screen, and no amount of adjusting the reservation
-        // could fix a prediction the layout is free to exceed.
+        // Everything flows in document order; nothing is stretched to pin a
+        // child to the window's bottom edge (a height prediction the layout is
+        // free to exceed pushed the old new-tab button off-screen).
         let tabs_container = Element::new(&font, ElementContent::Children(tab_elements))
             .display(DisplayType::Block)
             .colors(ElementColors {
@@ -1350,31 +780,33 @@ impl crate::TermWindow {
                 text: InheritableColor::Inherited,
             });
 
-        // The new-terminal row closes the local group instead of floating at
-        // the bottom of the sidebar, so it needs no height prediction at all.
-        let mut sidebar_children = vec![tabs_container, new_tab_button];
+        let mut sidebar_children = vec![tabs_container];
         if let Some(section) = agents_section {
             sidebar_children.push(section);
         }
+        sidebar_children.push(build_widget_dock(
+            &font,
+            &title_font,
+            &theme,
+            sidebar_width,
+            self.config.tmux.as_ref().map_or(false, |t| t.enabled),
+        ));
 
         // Root container
-        let root = Element::new(
-            &font,
-            ElementContent::Children(sidebar_children),
-        )
-        .display(DisplayType::Block)
-        .padding(BoxDimension {
-            left: Dimension::Pixels(0.),
-            right: Dimension::Pixels(0.),
-            top: Dimension::Pixels(3.),
-            bottom: Dimension::Pixels(0.),
-        })
-        .colors(ElementColors {
-            border: BorderColor::default(),
-            bg: bg_color.into(),
-            text: text_color.into(),
-        })
-        .min_width(Some(Dimension::Pixels(sidebar_width)));
+        let root = Element::new(&font, ElementContent::Children(sidebar_children))
+            .display(DisplayType::Block)
+            .padding(BoxDimension {
+                left: Dimension::Pixels(0.),
+                right: Dimension::Pixels(0.),
+                top: Dimension::Pixels(6.),
+                bottom: Dimension::Pixels(0.),
+            })
+            .colors(ElementColors {
+                border: BorderColor::default(),
+                bg: theme.bg_surface.into(),
+                text: theme.text_secondary.into(),
+            })
+            .min_width(Some(Dimension::Pixels(sidebar_width)));
 
         let mut computed = self.compute_element(&context_probe, &root)?;
 
@@ -1415,16 +847,9 @@ impl crate::TermWindow {
         let sidebar_width = self.tab_sidebar_width as f32;
         let window_height = self.dimensions.pixel_height as f32;
         let border = self.get_os_border();
-        let tab_bar_height = if self.show_tab_bar {
-            self.tab_bar_pixel_height().unwrap_or(0.)
-        } else {
-            0.
-        };
-        let bg_color = self
-            .config
-            .window_frame
-            .inactive_titlebar_bg
-            .to_linear();
+        // Spec palette, not the window frame: the rail is fixed-color on both
+        // renderers (see SidebarTheme).
+        let bg_color = SidebarTheme::load().bg_surface;
         let bg_x = match self.config.tab_sidebar_position {
             TabSidebarPosition::Left => border.left.get() as f32,
             TabSidebarPosition::Right => {
@@ -1550,7 +975,356 @@ impl crate::TermWindow {
         self.render_element(computed, gl_state, None)?;
 
         self.ui_items.extend(ui_items);
+
+        // Detail flyout: painted last and its UI items pushed last, so reverse
+        // hit-testing gives it the mouse over the terminal area it overlays.
+        self.paint_sidebar_flyout(bg_x, bg_y)?;
         Ok(())
+    }
+
+    /// Paint the hover flyout next to the rail once the hover delay has
+    /// elapsed. Rebuilt every paint while open — its data is live (claude
+    /// status, tmux snapshot) and it only exists while hovered.
+    fn paint_sidebar_flyout(&mut self, rail_x: f32, rail_y: f32) -> anyhow::Result<()> {
+        let fly = match self.sidebar_flyout.clone() {
+            Some(f) => f,
+            None => return Ok(()),
+        };
+        if fly.hover_since.elapsed() < crate::termwindow::SIDEBAR_FLYOUT_DELAY {
+            // Not open yet: schedule the frame that will open it, so the delay
+            // elapses without needing another mouse move.
+            self.update_next_frame_time(Some(
+                fly.hover_since + crate::termwindow::SIDEBAR_FLYOUT_DELAY,
+            ));
+            return Ok(());
+        }
+
+        let font = self.fonts.default_font()?;
+        let title_font = self.fonts.title_font()?;
+        let metrics = RenderMetrics::with_font_metrics(&font.metrics());
+        let theme = SidebarTheme::load();
+
+        let element = match self.build_sidebar_flyout(&fly.item, &font, &title_font, &theme) {
+            Some(e) => e,
+            None => return Ok(()),
+        };
+
+        let window_w = self.dimensions.pixel_width as f32;
+        let window_h = self.dimensions.pixel_height as f32;
+        let dpi = self.dimensions.dpi as f32;
+        let context = LayoutContext {
+            width: config::DimensionContext {
+                dpi,
+                pixel_max: FLYOUT_W,
+                pixel_cell: metrics.cell_size.width as f32,
+            },
+            height: config::DimensionContext {
+                dpi,
+                pixel_max: window_h,
+                pixel_cell: metrics.cell_size.height as f32,
+            },
+            bounds: euclid::rect(0., 0., FLYOUT_W, window_h),
+            metrics: &metrics,
+            gl_state: self.render_state.as_ref().unwrap(),
+            zindex: 50,
+        };
+        let mut computed = self.compute_element(&context, &element)?;
+
+        let sidebar_width = self.tab_sidebar_width as f32;
+        let x = match self.config.tab_sidebar_position {
+            TabSidebarPosition::Right => (rail_x - FLYOUT_W - 1.).max(0.),
+            TabSidebarPosition::Left => (rail_x + sidebar_width + 1.).min(window_w - FLYOUT_W),
+        };
+        let h = computed.bounds.height();
+        let y = fly.anchor_y.min(window_h - h - 8.).max(rail_y);
+        computed.translate(euclid::vec2(x, y));
+
+        let gl_state = self.render_state.as_ref().unwrap();
+        self.render_element(&computed, gl_state, None)?;
+        self.ui_items.extend(computed.ui_items());
+        Ok(())
+    }
+
+    /// Build the detail flyout for a rail item. Returns None when the anchor
+    /// no longer resolves (tab closed, session gone) — the flyout simply does
+    /// not paint that frame and the close logic clears it on the next move.
+    fn build_sidebar_flyout(
+        &self,
+        item: &TabSidebarItem,
+        font: &Rc<LoadedFont>,
+        title_font: &Rc<LoadedFont>,
+        theme: &SidebarTheme,
+    ) -> Option<Element> {
+        let mut children: Vec<Element> = vec![];
+        let mut accent = theme.accent_orange;
+
+        match item {
+            TabSidebarItem::Tab { tab_idx, .. } | TabSidebarItem::Pane { tab_idx, .. } => {
+                let mux = Mux::get();
+                let mux_window = mux.get_window(self.mux_window_id)?;
+                let tab = mux_window.iter().nth(*tab_idx)?;
+                let tab_id = tab.tab_id();
+                let info = self.tab_sidebar_info.get(&tab_id);
+                let panes = tab.iter_panes_ignoring_zoom();
+
+                // Resolve the concrete pane this flyout describes.
+                let (pane, pane_cwd) = match item {
+                    TabSidebarItem::Pane { pane_idx, .. } => {
+                        let pos = panes.iter().find(|p| p.index == *pane_idx)?;
+                        let cwd = pos
+                            .pane
+                            .get_current_working_dir(CachePolicy::AllowStale)
+                            .and_then(|u| {
+                                if u.scheme() == "file" {
+                                    Some(shorten_path(u.path()))
+                                } else {
+                                    None
+                                }
+                            });
+                        (pos.pane.clone(), cwd)
+                    }
+                    _ => {
+                        let pos = panes
+                            .iter()
+                            .find(|p| p.is_active)
+                            .or_else(|| panes.first())?;
+                        (pos.pane.clone(), None)
+                    }
+                };
+                let pane_id = pane.pane_id();
+                let claude = info.and_then(|i| i.pane_claude_info.get(&pane_id));
+
+                // Title: the model for a claude pane, the full path otherwise.
+                let title_text = match claude.and_then(|c| c.model.as_deref()) {
+                    Some(model) => model.to_string(),
+                    None => info
+                        .map(|i| i.cwd_short.clone())
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or_else(|| tab.get_title()),
+                };
+                let title_color = if claude.is_some() {
+                    theme.accent_orange
+                } else {
+                    theme.text_primary
+                };
+                children.push(
+                    Element::new(font, ElementContent::Text(truncate_str(&title_text, 28)))
+                        .display(DisplayType::Block)
+                        .line_height(Some(1.2))
+                        .colors(ElementColors {
+                            border: BorderColor::default(),
+                            bg: InheritableColor::Inherited,
+                            text: title_color.into(),
+                        }),
+                );
+
+                if let Some(c) = claude {
+                    accent = status_color(c, theme);
+                    build_claude_card_children(
+                        &mut children,
+                        c,
+                        info,
+                        pane_cwd.as_deref(),
+                        font,
+                        title_font,
+                        theme.text_secondary,
+                        theme.accent_red,
+                    );
+                } else {
+                    // Plain shell: full cwd + git branch.
+                    if let Some(cwd) = pane_cwd
+                        .as_deref()
+                        .or(info.map(|i| i.cwd_short.as_str()))
+                        .filter(|s| !s.is_empty())
+                    {
+                        children.push(flyout_line(
+                            title_font,
+                            truncate_str(cwd, 36),
+                            theme.text_secondary,
+                        ));
+                    }
+                    if let Some(branch) = info.and_then(|i| i.git_branch.as_deref()) {
+                        children.push(flyout_line(
+                            title_font,
+                            format!("\u{e0a0} {}", truncate_str(branch, 30)),
+                            theme.text_secondary,
+                        ));
+                    }
+                }
+
+                // Notifications
+                let (notif_count, muted) = {
+                    let states = self.pane_state.borrow();
+                    match states.get(&pane_id) {
+                        Some(ps) => (ps.notification_count, ps.notifications_muted),
+                        None => (0, false),
+                    }
+                };
+                if notif_count > 0 {
+                    children.push(flyout_line(
+                        title_font,
+                        format!("\u{25cf} {} notifications", notif_count),
+                        theme.accent_red,
+                    ));
+                }
+
+                // Zoom hint when the pane's effective scale is not 100%.
+                let pane_scale = {
+                    let states = self.pane_state.borrow();
+                    states.get(&pane_id).map(|ps| ps.font_scale).unwrap_or(1.0)
+                };
+                let pct = (pane_scale * self.fonts.get_font_scale() * 100.0).round() as u16;
+                if pct != 100 {
+                    children.push(flyout_line(
+                        title_font,
+                        format!("zoom {}%  \u{00b7}  Ctrl+0 resets", pct),
+                        theme.text_tertiary,
+                    ));
+                }
+
+                // Action chips: close and mute. TabSidebar item types so
+                // hovering them keeps the flyout open (see keep-flyout logic).
+                let close_item = match item {
+                    TabSidebarItem::Pane { .. } => UIItemType::TabSidebar(
+                        TabSidebarItem::ClosePane {
+                            pane_id: pane_id as usize,
+                        },
+                    ),
+                    _ => UIItemType::CloseTab(*tab_idx),
+                };
+                let mute_label = if muted { "unmute" } else { "mute" };
+                let chips = vec![
+                    flyout_chip(title_font, "close", close_item, theme),
+                    flyout_chip(
+                        title_font,
+                        mute_label,
+                        UIItemType::TabSidebar(TabSidebarItem::MuteNotifications {
+                            pane_id: pane_id as usize,
+                        }),
+                        theme,
+                    ),
+                ];
+                children.push(
+                    Element::new(title_font, ElementContent::Children(chips))
+                        .display(DisplayType::Block)
+                        .line_height(Some(1.6))
+                        .padding(BoxDimension {
+                            left: Dimension::Pixels(0.),
+                            right: Dimension::Pixels(0.),
+                            top: Dimension::Pixels(4.),
+                            bottom: Dimension::Pixels(0.),
+                        }),
+                );
+            }
+            TabSidebarItem::TmuxSession { box_name, session } => {
+                let snaps = crate::tmux_discovery::snapshot();
+                let snap = snaps.iter().find(|s| &s.box_name == box_name)?;
+                let sess = snap.sessions.iter().find(|s| &s.session == session)?;
+
+                let name_color = if sess.agent_is_instance {
+                    theme.accent_orange
+                } else {
+                    theme.text_primary
+                };
+                children.push(
+                    Element::new(font, ElementContent::Text(truncate_str(session, 28)))
+                        .display(DisplayType::Block)
+                        .line_height(Some(1.2))
+                        .colors(ElementColors {
+                            border: BorderColor::default(),
+                            bg: InheritableColor::Inherited,
+                            text: name_color.into(),
+                        }),
+                );
+
+                let status_text = match snap.status {
+                    crate::tmux_discovery::BoxStatus::Ok => "reachable",
+                    crate::tmux_discovery::BoxStatus::Unreachable(_) => "unreachable",
+                    _ => "pending",
+                };
+                children.push(flyout_line(
+                    title_font,
+                    format!("{} \u{00b7} {}", box_name, status_text),
+                    theme.text_secondary,
+                ));
+                children.push(flyout_line(
+                    title_font,
+                    format!(
+                        "{} window{}{}",
+                        sess.windows,
+                        if sess.windows == 1 { "" } else { "s" },
+                        if sess.attached { " \u{00b7} attached" } else { "" },
+                    ),
+                    theme.text_secondary,
+                ));
+                if let Some(agent) = &sess.agent {
+                    let line = if sess.agent_is_instance {
+                        format!("\u{21c4} {} (interconnect)", agent)
+                    } else {
+                        format!("running {}", agent)
+                    };
+                    children.push(flyout_line(title_font, line, theme.accent_orange));
+                }
+
+                if sess.attachable {
+                    let chips = vec![flyout_chip(
+                        title_font,
+                        "attach in split",
+                        UIItemType::TabSidebar(TabSidebarItem::TmuxSession {
+                            box_name: box_name.clone(),
+                            session: session.clone(),
+                        }),
+                        theme,
+                    )];
+                    children.push(
+                        Element::new(title_font, ElementContent::Children(chips))
+                            .display(DisplayType::Block)
+                            .line_height(Some(1.6))
+                            .padding(BoxDimension {
+                                left: Dimension::Pixels(0.),
+                                right: Dimension::Pixels(0.),
+                                top: Dimension::Pixels(4.),
+                                bottom: Dimension::Pixels(0.),
+                            }),
+                    );
+                }
+            }
+            _ => return None,
+        }
+
+        let content_w = FLYOUT_W - 4. - 22.;
+        Some(
+            Element::new(font, ElementContent::Children(children))
+                .display(DisplayType::Block)
+                .item_type(UIItemType::TabSidebar(TabSidebarItem::Flyout))
+                .padding(BoxDimension {
+                    left: Dimension::Pixels(10.),
+                    right: Dimension::Pixels(12.),
+                    top: Dimension::Pixels(8.),
+                    bottom: Dimension::Pixels(8.),
+                })
+                .border(BoxDimension {
+                    left: Dimension::Pixels(1.),
+                    right: Dimension::Pixels(3.),
+                    top: Dimension::Pixels(1.),
+                    bottom: Dimension::Pixels(1.),
+                })
+                .border_corners(Some(rounded_corners(0.25)))
+                .colors(ElementColors {
+                    border: BorderColor {
+                        left: theme.border_default,
+                        top: theme.border_default,
+                        bottom: theme.border_default,
+                        // The fused state edge: the flyout carries its anchor's
+                        // status color on the rail-facing side.
+                        right: accent,
+                    },
+                    bg: theme.bg_elevated.into(),
+                    text: theme.text_primary.into(),
+                })
+                .min_width(Some(Dimension::Pixels(content_w)))
+                .max_width(Some(Dimension::Pixels(content_w))),
+        )
     }
 
     /// Check if a tab has notification state set on any of its panes.
@@ -2009,84 +1783,433 @@ fn find_git_branch_uncached(path: &str) -> Option<String> {
     None
 }
 
-/// Truncate a string to max_chars, appending "..." if truncated.
-/// The muted grey both sidebar group headings use, matching the WebView
-/// sidebar's --text-secondary. Defined once so the local heading and the box
-/// headings cannot drift apart.
-fn header_text_color() -> LinearRgba {
-    fn srgb_to_linear(c: f32) -> f32 {
-        if c <= 0.04045 {
-            c / 12.92
-        } else {
-            ((c + 0.055) / 1.055).powf(2.4)
-        }
+/// Uniform rounded-corner set for tiles and the flyout.
+fn rounded_corners(size: f32) -> Corners {
+    Corners {
+        top_left: SizedPoly {
+            width: Dimension::Cells(size),
+            height: Dimension::Cells(size),
+            poly: TOP_LEFT_ROUNDED_CORNER,
+        },
+        top_right: SizedPoly {
+            width: Dimension::Cells(size),
+            height: Dimension::Cells(size),
+            poly: TOP_RIGHT_ROUNDED_CORNER,
+        },
+        bottom_left: SizedPoly {
+            width: Dimension::Cells(size),
+            height: Dimension::Cells(size),
+            poly: BOTTOM_LEFT_ROUNDED_CORNER,
+        },
+        bottom_right: SizedPoly {
+            width: Dimension::Cells(size),
+            height: Dimension::Cells(size),
+            poly: BOTTOM_RIGHT_ROUNDED_CORNER,
+        },
     }
-    let c = srgb_to_linear(0x99 as f32 / 255.);
-    LinearRgba::with_components(c, c, c, 1.)
 }
 
-/// A group heading in the sidebar: an optional status dot and a machine name.
-///
-/// Shared by the discovered boxes and by the local pane list so the two read as
-/// one grouped system rather than two lists that happen to sit above each other.
-/// `dot` is None for the local group, which has no poller and so nothing to
-/// report a reachability status for.
-fn machine_header(
-    font: &Rc<LoadedFont>,
+fn text_only(c: LinearRgba) -> ElementColors {
+    ElementColors {
+        border: BorderColor::default(),
+        bg: InheritableColor::Inherited,
+        text: c.into(),
+    }
+}
+
+fn inline_mono(font: &Rc<LoadedFont>, text: String, color: LinearRgba) -> Element {
+    Element::new(font, ElementContent::Text(text))
+        .display(DisplayType::Inline)
+        .colors(text_only(color))
+}
+
+/// Last path component of a shortened cwd — the project name the tile shows.
+fn last_path_component(s: &str) -> String {
+    s.trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .filter(|c| !c.is_empty())
+        .unwrap_or(s)
+        .to_string()
+}
+
+/// Inputs for one rail tile. Everything defaults to a plain resting tile;
+/// callers set what differs.
+struct TileArgs<'a> {
+    font: &'a Rc<LoadedFont>,
+    label_font: &'a Rc<LoadedFont>,
+    metrics: &'a RenderMetrics,
+    theme: &'a SidebarTheme,
+    sidebar_width: f32,
+    icon: String,
+    icon_color: LinearRgba,
+    label: String,
+    label_color: LinearRgba,
+    /// Red notification count, left end of the icon line.
+    left_hint: Option<(String, LinearRgba)>,
+    /// Status dot / window count, right end of the icon line.
+    right_hint: Option<(String, LinearRgba)>,
+    border_color: LinearRgba,
+    bg: LinearRgba,
+    hover_bg: Option<LinearRgba>,
+    hover_border: Option<LinearRgba>,
+    ctx_pct: Option<u8>,
+    item: Option<TabSidebarItem>,
+    /// Pane sub-tile: narrower, single line.
+    half: bool,
+}
+
+impl<'a> TileArgs<'a> {
+    fn new(
+        font: &'a Rc<LoadedFont>,
+        label_font: &'a Rc<LoadedFont>,
+        metrics: &'a RenderMetrics,
+        theme: &'a SidebarTheme,
+        sidebar_width: f32,
+    ) -> Self {
+        Self {
+            font,
+            label_font,
+            metrics,
+            theme,
+            sidebar_width,
+            icon: String::new(),
+            icon_color: theme.text_secondary,
+            label: String::new(),
+            label_color: theme.text_secondary,
+            left_hint: None,
+            right_hint: None,
+            border_color: theme.border_subtle,
+            bg: theme.bg_base,
+            hover_bg: None,
+            hover_border: None,
+            ctx_pct: None,
+            item: None,
+            half: false,
+        }
+    }
+}
+
+/// One rail tile: bordered, rounded, centered in the rail. Full tiles stack
+/// icon over label with hints on the icon line; half tiles are a single
+/// icon+label line. All alignment is fixed mono columns — no floats, so the
+/// Float::Right/max_width clamp trap cannot reappear here.
+fn build_tile(a: TileArgs) -> Element {
+    let theme = a.theme;
+    let tile_w = if a.half { TILE_HALF_W } else { TILE_W };
+    let margin_x = ((a.sidebar_width - tile_w) / 2.).max(2.);
+    let cell_w = a.metrics.cell_size.width as f32;
+    let inner_w = tile_w - 2. - 6.;
+    let cols = if cell_w > 0. {
+        ((inner_w / cell_w) as usize).max(4)
+    } else {
+        6
+    };
+
+    let mut lines: Vec<Element> = vec![];
+
+    if a.half {
+        let mut segs = vec![inline_mono(
+            a.font,
+            format!("{} ", a.icon),
+            a.icon_color,
+        )];
+        segs.push(
+            Element::new(
+                a.label_font,
+                ElementContent::Text(truncate_str(&a.label, 9)),
+            )
+            .display(DisplayType::Inline)
+            .colors(text_only(a.label_color)),
+        );
+        if let Some((t, c)) = &a.right_hint {
+            segs.push(
+                Element::new(a.label_font, ElementContent::Text(format!(" {}", t)))
+                    .display(DisplayType::Inline)
+                    .colors(text_only(*c)),
+            );
+        }
+        lines.push(
+            Element::new(a.font, ElementContent::Children(segs))
+                .display(DisplayType::Block)
+                .line_height(Some(1.1)),
+        );
+    } else {
+        // Icon line: [hint][centered icon][hint] in fixed mono columns.
+        let side = 2usize;
+        let mid = cols.saturating_sub(side * 2).max(1);
+        let (ltext, lcolor) = match &a.left_hint {
+            Some((t, c)) => (format!("{:<w$}", truncate_str(t, side), w = side), *c),
+            None => (" ".repeat(side), a.icon_color),
+        };
+        let (rtext, rcolor) = match &a.right_hint {
+            Some((t, c)) => (format!("{:>w$}", truncate_str(t, side), w = side), *c),
+            None => (" ".repeat(side), a.icon_color),
+        };
+        let segs = vec![
+            inline_mono(a.font, ltext, lcolor),
+            inline_mono(a.font, format!("{:^w$}", a.icon, w = mid), a.icon_color),
+            inline_mono(a.font, rtext, rcolor),
+        ];
+        lines.push(
+            Element::new(a.font, ElementContent::Children(segs))
+                .display(DisplayType::Block)
+                .line_height(Some(1.1)),
+        );
+
+        // Label line, approximately centered in label-font columns. The label
+        // font is proportional, so `{:^}` centering is approximate — close
+        // enough at 9-ish glyphs, and exact centering would need pixel
+        // measurement the box model does not expose.
+        let label_metrics = RenderMetrics::with_font_metrics(&a.label_font.metrics());
+        let lcell = label_metrics.cell_size.width as f32;
+        let label_cols = if lcell > 0. {
+            ((inner_w / lcell) as usize).max(6)
+        } else {
+            9
+        };
+        lines.push(
+            Element::new(
+                a.label_font,
+                ElementContent::Text(format!(
+                    "{:^w$}",
+                    truncate_str(&a.label, label_cols),
+                    w = label_cols
+                )),
+            )
+            .display(DisplayType::Block)
+            .line_height(Some(1.0))
+            .colors(text_only(a.label_color)),
+        );
+
+        // Context strip: colored spaces at a tiny line height read as a bar.
+        if let Some(pct) = a.ctx_pct {
+            let filled = (((pct.min(100) as f32) / 100.) * cols as f32).round() as usize;
+            let filled = filled.min(cols);
+            let bar_color = if pct >= 90 {
+                theme.accent_red
+            } else if pct >= 70 {
+                theme.accent_yellow
+            } else {
+                theme.accent_orange
+            };
+            let mut segs = vec![];
+            if filled > 0 {
+                segs.push(
+                    Element::new(a.font, ElementContent::Text(" ".repeat(filled)))
+                        .display(DisplayType::Inline)
+                        .colors(ElementColors {
+                            border: BorderColor::default(),
+                            bg: bar_color.into(),
+                            text: InheritableColor::Inherited,
+                        }),
+                );
+            }
+            if cols > filled {
+                segs.push(
+                    Element::new(a.font, ElementContent::Text(" ".repeat(cols - filled)))
+                        .display(DisplayType::Inline)
+                        .colors(ElementColors {
+                            border: BorderColor::default(),
+                            bg: theme.border_subtle.into(),
+                            text: InheritableColor::Inherited,
+                        }),
+                );
+            }
+            lines.push(
+                Element::new(a.font, ElementContent::Children(segs))
+                    .display(DisplayType::Block)
+                    .line_height(Some(0.3)),
+            );
+        }
+    }
+
+    let vpad = if a.half { 2. } else { 4. };
+    let mut tile = Element::new(a.font, ElementContent::Children(lines))
+        .display(DisplayType::Block)
+        .margin(BoxDimension {
+            left: Dimension::Pixels(margin_x),
+            right: Dimension::Pixels(margin_x),
+            top: Dimension::Pixels(0.),
+            bottom: Dimension::Pixels(TILE_GAP),
+        })
+        .padding(BoxDimension {
+            left: Dimension::Pixels(3.),
+            right: Dimension::Pixels(3.),
+            top: Dimension::Pixels(vpad),
+            bottom: Dimension::Pixels(vpad),
+        })
+        .border(BoxDimension {
+            left: Dimension::Pixels(1.),
+            right: Dimension::Pixels(1.),
+            top: Dimension::Pixels(1.),
+            bottom: Dimension::Pixels(1.),
+        })
+        .border_corners(Some(rounded_corners(0.3)))
+        .colors(ElementColors {
+            border: BorderColor::new(a.border_color),
+            bg: a.bg.into(),
+            text: a.label_color.into(),
+        })
+        .min_width(Some(Dimension::Pixels(tile_w)))
+        .max_width(Some(Dimension::Pixels(tile_w)));
+
+    if let Some(item) = a.item {
+        tile = tile.item_type(UIItemType::TabSidebar(item));
+    }
+    if a.hover_bg.is_some() || a.hover_border.is_some() {
+        tile = tile.hover_colors(Some(ElementColors {
+            border: BorderColor::new(a.hover_border.unwrap_or(a.border_color)),
+            bg: a.hover_bg.unwrap_or(a.bg).into(),
+            text: a.label_color.into(),
+        }));
+    }
+    tile
+}
+
+/// Zone eyebrow: uppercase group label with an optional status dot — replaces
+/// the old machine_header. Shared by the local group and the tmux boxes so the
+/// two read as one grouped system.
+fn sidebar_eyebrow(
+    label_font: &Rc<LoadedFont>,
     name: &str,
     dot: Option<LinearRgba>,
-    text_color: LinearRgba,
-    bg_color: LinearRgba,
+    theme: &SidebarTheme,
     sidebar_width: f32,
+    stale: bool,
 ) -> Element {
+    let dimf = if stale { 0.55 } else { 1.0 };
     let mut parts = vec![];
     if let Some(dot_color) = dot {
         parts.push(
-            Element::new(font, ElementContent::Text("\u{25cf} ".to_string()))
+            Element::new(label_font, ElementContent::Text("\u{25cf} ".to_string()))
                 .display(DisplayType::Inline)
-                .colors(ElementColors {
-                    border: BorderColor::default(),
-                    bg: InheritableColor::Inherited,
-                    text: dot_color.into(),
-                }),
-        );
-    } else {
-        // Keep the name aligned with the dotted headers below it.
-        parts.push(
-            Element::new(font, ElementContent::Text("  ".to_string()))
-                .display(DisplayType::Inline)
-                .colors(ElementColors {
-                    border: BorderColor::default(),
-                    bg: InheritableColor::Inherited,
-                    text: text_color.into(),
-                }),
+                .colors(text_only(dim(dot_color, dimf))),
         );
     }
     parts.push(
-        Element::new(font, ElementContent::Text(truncate_str(name, 18)))
-            .display(DisplayType::Inline)
-            .colors(ElementColors {
-                border: BorderColor::default(),
-                bg: InheritableColor::Inherited,
-                text: text_color.into(),
-            }),
+        Element::new(
+            label_font,
+            ElementContent::Text(truncate_str(&name.to_uppercase(), 10)),
+        )
+        .display(DisplayType::Inline)
+        .colors(text_only(dim(theme.text_tertiary, dimf))),
     );
 
-    Element::new(font, ElementContent::Children(parts))
+    Element::new(label_font, ElementContent::Children(parts))
         .display(DisplayType::Block)
         .line_height(Some(1.3))
         .padding(BoxDimension {
             left: Dimension::Pixels(8.),
-            right: Dimension::Pixels(6.),
-            top: Dimension::Pixels(5.),
-            bottom: Dimension::Pixels(2.),
+            right: Dimension::Pixels(4.),
+            top: Dimension::Pixels(7.),
+            bottom: Dimension::Pixels(3.),
         })
         .colors(ElementColors {
             border: BorderColor::default(),
-            bg: bg_color.into(),
-            text: text_color.into(),
+            bg: InheritableColor::Inherited,
+            text: dim(theme.text_tertiary, dimf).into(),
         })
         .min_width(Some(Dimension::Pixels(sidebar_width)))
+}
+
+/// Bottom widget dock: new terminal, theme picker, tmux refresh.
+fn build_widget_dock(
+    font: &Rc<LoadedFont>,
+    _title_font: &Rc<LoadedFont>,
+    theme: &SidebarTheme,
+    sidebar_width: f32,
+    tmux_enabled: bool,
+) -> Element {
+    let chip = |icon: &str, item: TabSidebarItem| {
+        Element::new(font, ElementContent::Text(format!(" {} ", icon)))
+            .display(DisplayType::Inline)
+            .item_type(UIItemType::TabSidebar(item))
+            .padding(BoxDimension {
+                left: Dimension::Pixels(3.),
+                right: Dimension::Pixels(3.),
+                top: Dimension::Pixels(2.),
+                bottom: Dimension::Pixels(2.),
+            })
+            .colors(text_only(theme.text_tertiary))
+            .hover_colors(Some(ElementColors {
+                border: BorderColor::default(),
+                bg: theme.bg_elevated.into(),
+                text: theme.text_primary.into(),
+            }))
+    };
+
+    let mut chips = vec![
+        chip("+", TabSidebarItem::NewTabButton),
+        chip("\u{25d0}", TabSidebarItem::ThemePickerButton), // ◐
+    ];
+    if tmux_enabled {
+        chips.push(chip("\u{27f3}", TabSidebarItem::TmuxRefreshButton)); // ⟳
+    }
+
+    Element::new(font, ElementContent::Children(chips))
+        .display(DisplayType::Block)
+        .line_height(Some(1.3))
+        .padding(BoxDimension {
+            left: Dimension::Pixels(8.),
+            right: Dimension::Pixels(4.),
+            top: Dimension::Pixels(5.),
+            bottom: Dimension::Pixels(5.),
+        })
+        .border(BoxDimension {
+            left: Dimension::Pixels(0.),
+            right: Dimension::Pixels(0.),
+            top: Dimension::Pixels(1.),
+            bottom: Dimension::Pixels(0.),
+        })
+        .margin(BoxDimension {
+            left: Dimension::Pixels(0.),
+            right: Dimension::Pixels(0.),
+            top: Dimension::Pixels(8.),
+            bottom: Dimension::Pixels(0.),
+        })
+        .colors(ElementColors {
+            border: BorderColor::new(theme.border_subtle),
+            bg: InheritableColor::Inherited,
+            text: theme.text_tertiary.into(),
+        })
+        .min_width(Some(Dimension::Pixels(sidebar_width)))
+}
+
+/// A dim single line inside the flyout body.
+fn flyout_line(font: &Rc<LoadedFont>, text: String, color: LinearRgba) -> Element {
+    Element::new(font, ElementContent::Text(text))
+        .display(DisplayType::Block)
+        .line_height(Some(1.1))
+        .colors(text_only(color))
+}
+
+/// A small action chip inside the flyout (close / mute / attach).
+fn flyout_chip(
+    font: &Rc<LoadedFont>,
+    label: &str,
+    item: UIItemType,
+    theme: &SidebarTheme,
+) -> Element {
+    Element::new(font, ElementContent::Text(format!(" {} ", label)))
+        .display(DisplayType::Inline)
+        .item_type(item)
+        .padding(BoxDimension {
+            left: Dimension::Pixels(4.),
+            right: Dimension::Pixels(4.),
+            top: Dimension::Pixels(1.),
+            bottom: Dimension::Pixels(1.),
+        })
+        .colors(ElementColors {
+            border: BorderColor::default(),
+            bg: LinearRgba::with_components(1., 1., 1., 0.08).into(),
+            text: theme.text_secondary.into(),
+        })
+        .hover_colors(Some(ElementColors {
+            border: BorderColor::default(),
+            bg: LinearRgba::with_components(1., 1., 1., 0.16).into(),
+            text: theme.text_primary.into(),
+        }))
 }
 
 fn truncate_str(s: &str, max_chars: usize) -> String {

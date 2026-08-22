@@ -350,7 +350,28 @@ pub enum TabSidebarItem {
     ResizeHandle,
     /// A discovered tmux session in the AGENTS section; clicking attaches to it.
     TmuxSession { box_name: String, session: String },
+    /// The hover flyout panel itself. Registered so reverse hit-testing gives
+    /// the flyout the mouse while it overlays the terminal, and so hovering it
+    /// counts as "keep the flyout open".
+    Flyout,
+    /// Widget-dock button: opens the native color-scheme picker.
+    ThemePickerButton,
+    /// Widget-dock button: forces a tmux discovery refresh.
+    TmuxRefreshButton,
 }
+
+/// Hover state for the compact sidebar's detail flyout. `anchor` is the rail
+/// row the pointer sits on; the flyout opens once the hover has lasted
+/// `SIDEBAR_FLYOUT_DELAY` and stays while the pointer is on the anchor row or
+/// the flyout itself.
+#[derive(Clone)]
+pub struct SidebarFlyoutState {
+    pub item: TabSidebarItem,
+    pub anchor_y: f32,
+    pub hover_since: Instant,
+}
+
+pub const SIDEBAR_FLYOUT_DELAY: Duration = Duration::from_millis(200);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum UIItemType {
@@ -526,6 +547,10 @@ pub struct TermWindow {
     fancy_tab_bar: Option<box_model::ComputedElement>,
     tab_sidebar: Option<box_model::ComputedElement>,
     tab_sidebar_info: HashMap<TabId, SidebarTabInfo>,
+    /// Hover flyout over the compact sidebar rail; None = closed. The flyout
+    /// element itself is rebuilt each paint while open (its data is live), so
+    /// only the hover state is stored.
+    pub sidebar_flyout: Option<SidebarFlyoutState>,
     last_sidebar_info_poll: Instant,
     /// Number of Claude agent panes in `waiting_input` across all windows,
     /// shown as a tab-bar badge. Refreshed on a throttled poll.
@@ -919,6 +944,7 @@ impl TermWindow {
             fancy_tab_bar: None,
             tab_sidebar: None,
             tab_sidebar_info: HashMap::new(),
+            sidebar_flyout: None,
             last_sidebar_info_poll: Instant::now(),
             agents_waiting: 0,
             last_agents_poll: Instant::now(),
