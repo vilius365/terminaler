@@ -907,6 +907,17 @@ impl crate::TermWindow {
             self.update_next_frame_time(Some(Instant::now() + Duration::from_millis(32)));
         }
 
+        // Fallback fonts for the rail's glyph icons load asynchronously; an
+        // element cached before they arrive keeps its blank shapes forever
+        // (nothing re-shapes a cached element, so the ClearShapeCache heal
+        // never fires for it) — tiles rendered as tall empty boxes until a
+        // resize invalidated the cache. Rebuild every paint for the first
+        // moments after window creation so late glyphs land on their own.
+        if self.created.elapsed() < Duration::from_secs(3) {
+            self.tab_sidebar.take();
+            self.update_next_frame_time(Some(Instant::now() + Duration::from_millis(250)));
+        }
+
         // The sidebar is cached until invalidated, so a poll that discovers new
         // agents would otherwise never reach the screen. Compare a cheap
         // fingerprint of the discovery snapshot and rebuild when it moves.
@@ -1044,16 +1055,21 @@ impl crate::TermWindow {
         // the rail margin at zindex 50, and its accent border lands exactly on
         // the tile border.
         let tile_margin = ((sidebar_width - TILE_W) / 2.).max(2.);
+        // Position from the flyout's ACTUAL painted width: the layout does not
+        // honor min_width on this root element (it painted ~90px instead of
+        // 264, leaving exactly that much gap when positioned by FLYOUT_W).
+        // Anchoring the computed width to the tile edge abuts them always.
+        let w = computed.bounds.width();
+        let h = computed.bounds.height();
         let x = match self.config.tab_sidebar_position {
-            TabSidebarPosition::Right => (rail_x + tile_margin - FLYOUT_W).max(0.),
+            TabSidebarPosition::Right => (rail_x + tile_margin - w).max(0.),
             TabSidebarPosition::Left => {
-                (rail_x + sidebar_width - tile_margin).min(window_w - FLYOUT_W)
+                (rail_x + sidebar_width - tile_margin).min(window_w - w)
             }
         };
-        let h = computed.bounds.height();
         let y = fly.anchor_y.min(window_h - h - 8.).max(rail_y);
         computed.translate(euclid::vec2(x, y));
-        self.sidebar_flyout_rect = Some((x, y, computed.bounds.width(), h));
+        self.sidebar_flyout_rect = Some((x, y, w, h));
 
         let gl_state = self.render_state.as_ref().unwrap();
         self.render_element(&computed, gl_state, None)?;
@@ -2137,13 +2153,16 @@ fn build_widget_dock(
     sidebar_width: f32,
     tmux_enabled: bool,
 ) -> Element {
+    // No space wrappers and slim padding: three chips at mono size overflowed
+    // the 90px dock line, and inline overflow clips trailing children — the
+    // theme and refresh chips were silently missing from the dock.
     let chip = |icon: &str, item: TabSidebarItem| {
-        Element::new(font, ElementContent::Text(format!(" {} ", icon)))
+        Element::new(font, ElementContent::Text(icon.to_string()))
             .display(DisplayType::Inline)
             .item_type(UIItemType::TabSidebar(item))
             .padding(BoxDimension {
-                left: Dimension::Pixels(3.),
-                right: Dimension::Pixels(3.),
+                left: Dimension::Pixels(5.),
+                right: Dimension::Pixels(5.),
                 top: Dimension::Pixels(2.),
                 bottom: Dimension::Pixels(2.),
             })
@@ -2167,8 +2186,8 @@ fn build_widget_dock(
         .display(DisplayType::Block)
         .line_height(Some(1.3))
         .padding(BoxDimension {
-            left: Dimension::Pixels(8.),
-            right: Dimension::Pixels(4.),
+            left: Dimension::Pixels(4.),
+            right: Dimension::Pixels(2.),
             top: Dimension::Pixels(5.),
             bottom: Dimension::Pixels(5.),
         })

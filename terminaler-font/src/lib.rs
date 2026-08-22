@@ -620,9 +620,10 @@ impl FontConfigInner {
                 config.pane_select_font_size,
                 config.pane_select_font.as_ref(),
             ),
-            // The 90px rail needs a size well below the window-frame font;
-            // 9pt still truncated real project names (user feedback).
-            Entity::Sidebar => (8.0, None),
+            // Derived from the user's terminal font size so it tracks their
+            // chosen scale and DPI: fixed 12pt was too big at 90px, fixed 8pt
+            // unreadable on hidpi (user feedback, both directions).
+            Entity::Sidebar => ((config.font_size * 0.8).max(8.0), None),
         };
 
         let text_style =
