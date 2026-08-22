@@ -315,19 +315,8 @@ impl crate::TermWindow {
         // the row's padding and border, so without it the badge overhung the
         // right edge and was clipped by the sidebar.
         let cell_w = metrics.cell_size.width as f32;
-        // Margins (10+6), padding (6+6) and border (1+1) come off the sidebar
-        // before any text fits, plus slack for the floated badge.
-        //
-        // Float::Right anchors the badge to the row's CONTENT extent, which
-        // knows nothing about the padding and border to its right, so the badge
-        // is drawn that much further right than the text box implies. Without
-        // enough slack it covers the card's right border and rounded corner:
-        // measured on a real render, rows carrying a badge reached the very
-        // edge of the sidebar while unbadged rows stopped 8px short. Reserve
-        // the row's own chrome so the badge lands inside the card.
-        const ROW_CHROME: f32 = 10. + 6. + 6. + 6. + 1. + 1.;
         let row_cols = if cell_w > 0. {
-            (((sidebar_width - ROW_CHROME - 12.) / cell_w).floor() as usize).max(12)
+            (((sidebar_width - 40.) / cell_w).floor() as usize).max(12)
         } else {
             24
         };
@@ -554,8 +543,16 @@ impl crate::TermWindow {
                     // Cards are uniform: the row spans the sidebar minus its
                     // own margins, padding and border, so text length changes
                     // what a row says, never its shape.
+                    // The floated badge is placed against this content box's
+                    // right boundary (box_model float_max_x), not against the
+                    // card's border, so anything this width fails to subtract
+                    // is width the badge paints over. Take off the margins
+                    // (10+6), padding (6+6) and border (1+1) — measured on a
+                    // real render, an 8px shortfall here put every badged row
+                    // flush with the sidebar edge while unbadged rows stopped
+                    // 8px short, burying the card's right border and corner.
                     .min_width(Some(Dimension::Pixels(
-                        (sidebar_width - 16. - 12. - 2.).max(0.),
+                        (sidebar_width - 16. - 12. - 2. - 8.).max(0.),
                     )));
 
                 if session.attachable {
