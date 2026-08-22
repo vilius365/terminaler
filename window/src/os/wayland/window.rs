@@ -981,6 +981,25 @@ impl WaylandWindowInner {
                 let (x, y) = self.window_frame.location();
                 let surface_width = self.pixels_to_surface(pixel_width);
                 let surface_height = self.pixels_to_surface(pixel_height);
+                // Report the geometry of the whole window, decorations
+                // included. pixel_height has already had the client-side
+                // titlebar subtracted above, so handing that figure straight to
+                // set_window_geometry told the compositor the window was one
+                // titlebar shorter than it is. The next configure then came
+                // back that much smaller and the titlebar was subtracted again:
+                // dragging any resize edge shrank the window by HEADER_SIZE per
+                // motion event until it collapsed. Only the height was affected
+                // because sctk-adwaita's subtract_borders leaves the width
+                // alone, which matches the symptom of a window that narrows
+                // correctly but loses height on every mouse move.
+                let (surface_width, surface_height) = if self.window_frame.is_hidden() {
+                    (surface_width, surface_height)
+                } else {
+                    let (fw, fh) = self
+                        .window_frame
+                        .add_borders(surface_width as u32, surface_height as u32);
+                    (fw as i32, fh as i32)
+                };
                 self.window
                     .as_mut()
                     .unwrap()
