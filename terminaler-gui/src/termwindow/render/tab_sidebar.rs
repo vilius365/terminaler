@@ -294,93 +294,23 @@ impl crate::TermWindow {
         false
     }
 
-    /// Build the AGENTS section listing discovered Claude agents / tmux
-    /// sessions. The caller measures the result with compute_element to learn
-    /// how much vertical space to reserve for it.
+    /// Build the AGENTS section: tmux boxes as tile groups — an eyebrow
+    /// header per box, then one tile per session (V2 "Tiles" spec). The
+    /// caller measures the result with compute_element to learn how much
+    /// vertical space to reserve for it. The rows-budget cap carries over
+    /// from the old list layout.
+    ///
+    /// A session this window itself hosts in an attach pane is NOT special:
+    /// it renders like any other attached session — dimmed, with the \u{25cf}
+    /// dot (from tmux's own session_attached flag). An earlier revision
+    /// derived "attached here" from pane argv and folded those tiles away
+    /// entirely, but the heuristic only saw terminaler-launched attach panes
+    /// (a manual `ssh box` + `tmux attach` inside kept its tile), so the same
+    /// state rendered two different ways — and the folded tile hid the agent
+    /// badge for exactly the session in heaviest use.
     ///
     /// Returns None when the feature is off or nothing was discovered, so the
     /// sidebar keeps its previous layout exactly.
-    /// Sessions this window is itself attached to, as (box_name, session).
-    ///
-    /// A discovered session that is already open as a local pane is the same
-    /// thing listed twice, so the sidebar folds the remote row away. The link
-    /// is derived rather than recorded: an attach pane runs
-    /// `ssh -t <target> -- ... tmux ... attach ... -t <session>` (see
-    /// TmuxBox::attach_argv_impl), so the pane's foreground process argv still
-    /// names both the transport and the session. Deriving it means a detach
-    /// un-folds the row the moment the ssh process exits, with no poll lag and
-    /// nothing to keep in sync across a GUI restart.
-    ///
-    /// Returns an empty set when argv is unreadable, which leaves rows merely
-    /// demoted rather than hidden — the safe direction to fail.
-    fn locally_attached_sessions(&self) -> std::collections::HashSet<(String, String)> {
-        use std::collections::HashSet;
-
-        let mut found = HashSet::new();
-        let boxes: Vec<(String, Vec<String>)> = match self.config.tmux.as_ref() {
-            Some(tmux) => tmux
-                .boxes
-                .iter()
-                .map(|b| (b.name.clone(), b.connection.probe_tokens()))
-                .collect(),
-            None => return found,
-        };
-
-        let mux = Mux::get();
-        let window = match mux.get_window(self.mux_window_id) {
-            Some(w) => w,
-            None => return found,
-        };
-
-        // One snapshot for the whole scan — it deep-clones the discovery
-        // state, and it used to be taken per matching pane per box.
-        let snaps = crate::tmux_discovery::snapshot();
-
-        for tab in window.iter() {
-            for pos in tab.iter_panes_ignoring_zoom() {
-                let info = match pos
-                    .pane
-                    .get_foreground_process_info(CachePolicy::AllowStale)
-                {
-                    Some(info) => info,
-                    None => continue,
-                };
-                let argv = info.argv.join(" ");
-                if !argv.contains("tmux") || !argv.contains("attach") {
-                    continue;
-                }
-                for (box_name, tokens) in &boxes {
-                    // A local box has no transport tokens, so it matches on the
-                    // session name alone.
-                    if !tokens.is_empty() && !tokens.iter().any(|t| argv.contains(t.as_str())) {
-                        continue;
-                    }
-                    for snap in &snaps {
-                        if &snap.box_name != box_name {
-                            continue;
-                        }
-                        for session in &snap.sessions {
-                            // Match the quoted `-t <session>` the attach argv
-                            // builds, so a session name that is a prefix of
-                            // another does not claim its neighbour's row.
-                            if argv.contains(&format!("-t {}", session.session))
-                                || argv.contains(&format!("-t '{}'", session.session))
-                                || argv.contains(&format!("-t \"{}\"", session.session))
-                            {
-                                found.insert((box_name.clone(), session.session.clone()));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        found
-    }
-
-    /// Tmux boxes as tile groups: an eyebrow header per box, then one tile per
-    /// session (V2 "Tiles" spec). The rows-budget cap and the folding of
-    /// locally-attached sessions carry over from the old list layout.
     fn build_agents_section(
         &self,
         font: &Rc<LoadedFont>,
@@ -452,15 +382,10 @@ impl crate::TermWindow {
         let tile_budget_px = (px_budget - error_reserve).max(0.);
         let mut px_used = 0f32;
 
-        // Sessions this window already hosts in a pane fold away rather than
-        // listing the same thing twice; see locally_attached_sessions.
-        let folded = self.locally_attached_sessions();
-
         for snap in &snaps {
-            // A box with no sessions comes FIRST: the folded check below is
-            // vacuously true on an empty list and used to swallow these boxes
-            // entirely — so a box whose probe was Pending/Unreachable rendered
-            // nothing on the rail (the WebView shows its eyebrow + error).
+            // A box with no sessions comes FIRST — a box whose probe was
+            // Pending/Unreachable must still render its eyebrow + error line
+            // (the WebView shows the same).
             if snap.sessions.is_empty() {
                 if matches!(snap.status, crate::tmux_discovery::BoxStatus::Ok) {
                     continue;
@@ -497,13 +422,6 @@ impl crate::TermWindow {
                     );
                     px_used += eyebrow_px;
                 }
-                continue;
-            }
-            if snap
-                .sessions
-                .iter()
-                .all(|s| folded.contains(&(snap.box_name.clone(), s.session.clone())))
-            {
                 continue;
             }
             // The eyebrow plus at least one tile must fit, or the whole box
@@ -551,9 +469,6 @@ impl crate::TermWindow {
             }
 
             for session in &snap.sessions {
-                if folded.contains(&(snap.box_name.clone(), session.session.clone())) {
-                    continue;
-                }
                 if px_used + tile_px > tile_budget_px {
                     tiles_hidden += 1;
                     continue;
@@ -581,8 +496,9 @@ impl crate::TermWindow {
                 let label_color = theme.text_secondary;
 
                 // Window count only when it says something (n>1), plus a dot
-                // when another client is attached — a "1" on every tile was
-                // pure noise (user feedback, 2026-08-22).
+                // when a client is attached — including this window's own
+                // attach pane — a "1" on every tile was pure noise (user
+                // feedback, 2026-08-22).
                 let count = match (session.windows > 1, session.attached) {
                     (true, true) => Some(format!("{}\u{25cf}", session.windows.min(9))),
                     (true, false) => Some(session.windows.min(9).to_string()),
@@ -1113,26 +1029,15 @@ impl crate::TermWindow {
                         fingerprint.push('/');
                         fingerprint.push_str(agent);
                     }
-                    // Attach state changes how a row renders — dimmed, or
-                    // folded away entirely — so it has to move the fingerprint
-                    // or the cached sidebar keeps painting the old state.
+                    // Attach state changes how a row renders (dimmed, dot),
+                    // so it has to move the fingerprint or the cached sidebar
+                    // keeps painting the old state.
                     if session.attached {
                         fingerprint.push_str("@attached");
                     }
                     fingerprint.push('\n');
                 }
             }
-            // Folding depends on which sessions this window currently hosts,
-            // which changes when a pane attaches or detaches without the
-            // discovery snapshot moving at all.
-            let mut folded: Vec<String> = self
-                .locally_attached_sessions()
-                .into_iter()
-                .map(|(b, s)| format!("{b}:{s}"))
-                .collect();
-            folded.sort();
-            fingerprint.push_str("\x1efolded:");
-            fingerprint.push_str(&folded.join(","));
 
             if self.tmux_sidebar_fingerprint != fingerprint {
                 self.tmux_sidebar_fingerprint = fingerprint;
