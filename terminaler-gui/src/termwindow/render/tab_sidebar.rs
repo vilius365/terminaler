@@ -238,12 +238,19 @@ impl crate::TermWindow {
                 );
             }
 
-            // Detect Claude Code sessions on ALL panes in the tab
+            // Detect Claude Code sessions and connector processes on ALL
+            // panes in the tab.
             let mut pane_claude_info = std::collections::HashMap::new();
+            let mut pane_connector = std::collections::HashMap::new();
             for pane_pos in tab.iter_panes_ignoring_zoom() {
                 let pane = &pane_pos.pane;
                 if let Some(info) = claude_info_for_pane(pane) {
                     pane_claude_info.insert(pane.pane_id(), info);
+                }
+                if let Some(pinfo) = pane.get_foreground_process_info(CachePolicy::AllowStale) {
+                    if let Some(label) = connector_label_from_argv(&pinfo.argv) {
+                        pane_connector.insert(pane.pane_id(), label);
+                    }
                 }
             }
 
@@ -253,6 +260,7 @@ impl crate::TermWindow {
                     cwd_short,
                     git_branch,
                     pane_claude_info,
+                    pane_connector,
                 },
             );
         }
@@ -284,6 +292,7 @@ impl crate::TermWindow {
                     if old.cwd_short != new.cwd_short
                         || old.git_branch != new.git_branch
                         || old.pane_claude_info != new.pane_claude_info
+                        || old.pane_connector != new.pane_connector
                     {
                         return true;
                     }
@@ -663,11 +672,17 @@ impl crate::TermWindow {
 
             // The tile names the PROJECT (last path component), not the model:
             // identity is what the rail shows, detail lives in the flyout.
+            // A connector pane (tmux attach / ssh / wsl) is named by its
+            // TARGET instead: its cwd is the launch directory ("~" in
+            // practice), which labels every such pane identically.
+            let connector = tab
+                .get_active_pane()
+                .and_then(|p| info.and_then(|i| i.pane_connector.get(&p.pane_id()).cloned()));
             let label_src = info
                 .map(|i| i.cwd_short.as_str())
                 .filter(|s| !s.is_empty())
                 .unwrap_or(&title);
-            let label = last_path_component(label_src);
+            let label = connector.unwrap_or_else(|| last_path_component(label_src));
 
             let (icon, icon_color) = if has_any_claude {
                 ("\u{2733}", theme.accent_orange) // ✳
@@ -750,10 +765,14 @@ impl crate::TermWindow {
                     let is_active_pane = pane_pos.is_active && is_active;
                     let pane_claude = info.and_then(|i| i.pane_claude_info.get(&pane_id));
 
-                    let pane_label_src = pane_cwd
-                        .as_deref()
-                        .filter(|s| !s.is_empty())
-                        .map(last_path_component)
+                    let pane_label_src = info
+                        .and_then(|i| i.pane_connector.get(&pane_id).cloned())
+                        .or_else(|| {
+                            pane_cwd
+                                .as_deref()
+                                .filter(|s| !s.is_empty())
+                                .map(last_path_component)
+                        })
                         .unwrap_or_else(|| pane_title.clone());
 
                     let mut sub = TileArgs::new(&font, &title_font, &metrics, &label_metrics, &theme, sidebar_width);
@@ -1889,6 +1908,139 @@ fn last_path_component(s: &str) -> String {
         .filter(|c| !c.is_empty())
         .unwrap_or(s)
         .to_string()
+}
+
+/// The TARGET of a connector process (tmux client, ssh, wsl), or None when
+/// argv is not a connector. Feeds the sidebar labels: a connector pane's cwd
+/// is wherever the connector was launched from — "~" in practice — so every
+/// such pane labels identically unless the target names it instead.
+pub(crate) fn connector_label_from_argv(argv: &[String]) -> Option<String> {
+    let exe = argv.first()?;
+    let exe = exe.rsplit(['/', '\\']).next().unwrap_or(exe);
+    let exe = exe.strip_suffix(".exe").unwrap_or(exe).to_ascii_lowercase();
+    match exe.as_str() {
+        "tmux" => {
+            // The last `-t <target>` wins: an attach argv can name the
+            // session more than once (set-option ; attach-session).
+            let mut target = None;
+            let mut it = argv.iter().skip(1);
+            while let Some(tok) = it.next() {
+                if tok == "-t" {
+                    target = it.next();
+                }
+            }
+            target.map(|t| t.trim_matches(|c| c == '\'' || c == '"').to_string())
+        }
+        "ssh" => {
+            // The destination is the first token that is neither a flag nor a
+            // flag's value; ssh(1) option letters that consume a value:
+            const VALUE_FLAGS: &[&str] = &[
+                "-B", "-b", "-c", "-D", "-E", "-e", "-F", "-I", "-i", "-J",
+                "-L", "-l", "-m", "-O", "-o", "-P", "-p", "-Q", "-R", "-S",
+                "-W", "-w",
+            ];
+            let mut it = argv.iter().skip(1);
+            while let Some(tok) = it.next() {
+                if tok == "--" {
+                    // Remote command started without a destination — not a
+                    // shape ssh accepts; give up rather than mislabel.
+                    return None;
+                }
+                if tok.starts_with('-') {
+                    if VALUE_FLAGS.contains(&tok.as_str()) {
+                        it.next();
+                    }
+                    // Glued forms (-p2222, -oFoo=bar) carry their value.
+                    continue;
+                }
+                // user@host → host
+                return Some(tok.rsplit('@').next().unwrap_or(tok).to_string());
+            }
+            None
+        }
+        "wsl" => {
+            let mut it = argv.iter().skip(1);
+            while let Some(tok) = it.next() {
+                if tok == "-d" || tok == "--distribution" {
+                    if let Some(distro) = it.next() {
+                        return Some(distro.clone());
+                    }
+                }
+            }
+            Some("wsl".to_string())
+        }
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::connector_label_from_argv;
+
+    fn argv(s: &str) -> Vec<String> {
+        s.split_whitespace().map(String::from).collect()
+    }
+
+    #[test]
+    fn tmux_attach_names_the_session() {
+        // Real client argv observed on homepc: the session appears twice and
+        // the LAST -t is the attach target.
+        assert_eq!(
+            connector_label_from_argv(&argv(
+                "tmux -u set-option -uw -t homepc-demo window-size ; attach-session -t homepc-demo"
+            ))
+            .as_deref(),
+            Some("homepc-demo")
+        );
+        assert_eq!(
+            connector_label_from_argv(&argv("tmux attach -t scratch")).as_deref(),
+            Some("scratch")
+        );
+        // A tmux client with no target (plain `tmux attach`) has no better
+        // name than the cwd fallback.
+        assert_eq!(connector_label_from_argv(&argv("tmux attach")), None);
+    }
+
+    #[test]
+    fn ssh_names_the_destination() {
+        // -t takes no value for ssh (unlike tmux); the box attach argv shape.
+        assert_eq!(
+            connector_label_from_argv(&argv("ssh -t devbox -- tmux -u attach -t terminaler"))
+                .as_deref(),
+            Some("devbox")
+        );
+        // Value-taking flags are skipped, user@ is stripped.
+        assert_eq!(
+            connector_label_from_argv(&argv("ssh -p 2222 -o BatchMode=yes vilius@homepc"))
+                .as_deref(),
+            Some("homepc")
+        );
+        assert_eq!(
+            connector_label_from_argv(&argv("ssh -p2222 host")).as_deref(),
+            Some("host")
+        );
+    }
+
+    #[test]
+    fn wsl_names_the_distribution() {
+        assert_eq!(
+            connector_label_from_argv(&argv("wsl.exe -d Ubuntu")).as_deref(),
+            Some("Ubuntu")
+        );
+        assert_eq!(connector_label_from_argv(&argv("wsl.exe")).as_deref(), Some("wsl"));
+    }
+
+    #[test]
+    fn non_connectors_are_ignored() {
+        assert_eq!(connector_label_from_argv(&argv("zsh")), None);
+        assert_eq!(connector_label_from_argv(&argv("claude --dangerously-skip-permissions")), None);
+        assert_eq!(connector_label_from_argv(&[]), None);
+        // Path and .exe are stripped before matching.
+        assert_eq!(
+            connector_label_from_argv(&argv("/usr/bin/ssh devbox")).as_deref(),
+            Some("devbox")
+        );
+    }
 }
 
 /// Inputs for one rail tile. Everything defaults to a plain resting tile;

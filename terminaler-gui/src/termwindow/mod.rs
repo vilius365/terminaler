@@ -317,6 +317,11 @@ pub struct SidebarTabInfo {
     pub cwd_short: String,
     pub git_branch: Option<String>,
     pub pane_claude_info: HashMap<mux::pane::PaneId, ClaudeSessionInfo>,
+    /// Panes whose foreground process is a connector (tmux client, ssh, wsl),
+    /// mapped to the target it points at (session name, host, distro). Such a
+    /// pane's cwd is the connector's launch directory — "~" in practice — so
+    /// the target labels the pane better than the cwd ever can.
+    pub pane_connector: HashMap<mux::pane::PaneId, String>,
 }
 
 /// Convert a ClaudeSessionInfo to a serde_json::Value for the WebView sidebar.
@@ -5073,6 +5078,12 @@ impl TermWindow {
                                 });
                             let pane_claude =
                                 info.and_then(|i| i.pane_claude_info.get(&pane_id));
+                            // A connector pane (tmux attach / ssh / wsl) is
+                            // named by its target — its cwd is just the
+                            // launch directory (same rule as the GPU rail).
+                            let pane_label = info
+                                .and_then(|i| i.pane_connector.get(&pane_id).cloned())
+                                .or(pane_cwd);
                             let pane_has_notif = {
                                 let states = self.pane_state.borrow();
                                 states.get(&pane_id).map_or(false, |ps| ps.notification_start.is_some())
@@ -5082,7 +5093,7 @@ impl TermWindow {
                                 "paneId": pane_id,
                                 "paneIdx": pp.index,
                                 "title": pane_title,
-                                "cwdShort": pane_cwd,
+                                "cwdShort": pane_label,
                                 "isActive": pp.is_active,
                                 "isHidden": hidden_ids.contains(&pane_id),
                                 "hasNotification": pane_has_notif,
@@ -5125,7 +5136,10 @@ impl TermWindow {
                     "tabIdx": tab_idx,
                     "tabId": tab_id,
                     "title": title,
-                    "cwdShort": info.map(|i| i.cwd_short.as_str()).unwrap_or(""),
+                    "cwdShort": active_pane_id
+                        .and_then(|id| info.and_then(|i| i.pane_connector.get(&id).map(String::as_str)))
+                        .or(info.map(|i| i.cwd_short.as_str()))
+                        .unwrap_or(""),
                     "gitBranch": info.and_then(|i| i.git_branch.as_deref()),
                     "isActive": is_active,
                     "hasNotification": has_notification,
