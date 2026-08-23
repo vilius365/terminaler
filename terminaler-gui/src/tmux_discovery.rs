@@ -545,11 +545,25 @@ fn registry_only_snapshots(
 /// Index instances registered on `machine` by their tmux session name.
 /// Instances explicitly marked dead are skipped; anything else (including a
 /// missing status) counts, so an older daemon without the field still works.
+///
+/// A session can carry several registrations — an agent that re-registered
+/// leaves its old record behind as "stale" — so ties are broken by liveness:
+/// "active" outranks a missing/unknown status, which outranks "stale".
+/// Registry order decides between equals, keeping the pick deterministic.
 fn instances_for_machine(
     instances: &[InterconnectInstance],
     machine: &str,
 ) -> std::collections::HashMap<String, String> {
-    let mut by_session = std::collections::HashMap::new();
+    fn rank(status: Option<&str>) -> u8 {
+        match status {
+            Some("active") => 0,
+            Some("stale") => 2,
+            _ => 1,
+        }
+    }
+
+    let mut by_session: std::collections::HashMap<String, (u8, String)> =
+        std::collections::HashMap::new();
     for inst in instances {
         if inst.machine.as_deref() != Some(machine) {
             continue;
@@ -563,11 +577,22 @@ fn instances_for_machine(
         if session.is_empty() || inst.instance_id.is_empty() {
             continue;
         }
-        by_session
-            .entry(session.to_string())
-            .or_insert_with(|| inst.instance_id.clone());
+        let r = rank(inst.status.as_deref());
+        match by_session.entry(session.to_string()) {
+            std::collections::hash_map::Entry::Vacant(v) => {
+                v.insert((r, inst.instance_id.clone()));
+            }
+            std::collections::hash_map::Entry::Occupied(mut o) => {
+                if r < o.get().0 {
+                    o.insert((r, inst.instance_id.clone()));
+                }
+            }
+        }
     }
     by_session
+        .into_iter()
+        .map(|(session, (_, name))| (session, name))
+        .collect()
 }
 
 /// Foreground pane commands that identify an agent, mapped to the label the
@@ -704,6 +729,40 @@ mod tests {
         assert_eq!(by_session.get("live").map(String::as_str), Some("tonic"));
         assert!(by_session.get("old").is_none());
         assert!(by_session.get("gone").is_none());
+    }
+
+    #[test]
+    fn active_instance_outranks_stale_on_the_same_session() {
+        // Re-registration leaves the old record behind as "stale"; the label
+        // must follow the live agent regardless of registry order (observed:
+        // stale "plume" claimed homepc-demo over active "slope").
+        let all = vec![
+            inst("plume", "homepc", "homepc-demo", "stale"),
+            inst("slope", "homepc", "homepc-demo", "active"),
+        ];
+        assert_eq!(
+            instances_for_machine(&all, "homepc")
+                .get("homepc-demo")
+                .map(String::as_str),
+            Some("slope")
+        );
+        // Unknown status (older daemon) still outranks stale, and active
+        // outranks unknown.
+        let all = vec![
+            inst("early", "devbox", "s", "stale"),
+            InterconnectInstance {
+                instance_id: "plain".to_string(),
+                machine: Some("devbox".to_string()),
+                tmux_session: Some("s".to_string()),
+                tmux_window: None,
+                status: None,
+            },
+            inst("live", "devbox", "s", "active"),
+        ];
+        assert_eq!(
+            instances_for_machine(&all, "devbox").get("s").map(String::as_str),
+            Some("live")
+        );
     }
 
     #[test]
