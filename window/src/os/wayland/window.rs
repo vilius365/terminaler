@@ -1402,27 +1402,32 @@ impl WaylandWindowInner {
     }
 
     pub(super) fn frame_action(&mut self, pointer: &WlPointer, serial: u32, action: FrameAction) {
-        let pointer_data = pointer.data::<PointerUserData>().unwrap();
+        let Some(pointer_data) = pointer.data::<PointerUserData>() else {
+            return;
+        };
         let seat = pointer_data.pdata.seat();
+        // `close` drops the xdg window but leaves this inner in the window map,
+        // so decoration clicks can still arrive for a window that is on its way
+        // out. Every arm below drives the xdg window, so there is nothing to do
+        // once it is gone.
+        let Some(window) = self.window.as_ref().cloned() else {
+            log::trace!("frame_action {action:?} for a window that is closing");
+            return;
+        };
         match action {
             FrameAction::Close => self.events.dispatch(WindowEvent::CloseRequested),
-            FrameAction::Minimize => self.window.as_ref().unwrap().set_minimized(),
+            FrameAction::Minimize => window.set_minimized(),
             // A maximize resolves the gesture, so the press that opened it must
             // not also start a deferred drag once the pointer moves.
             FrameAction::Maximize => {
                 self.pending_move = None;
-                self.window.as_ref().unwrap().set_maximized()
+                window.set_maximized()
             }
             FrameAction::UnMaximize => {
                 self.pending_move = None;
-                self.window.as_ref().unwrap().unset_maximized()
+                window.unset_maximized()
             }
-            FrameAction::ShowMenu(x, y) => {
-                self.window
-                    .as_ref()
-                    .unwrap()
-                    .show_window_menu(seat, serial, (x, y))
-            }
+            FrameAction::ShowMenu(x, y) => window.show_window_menu(seat, serial, (x, y)),
             FrameAction::Resize(edge) => {
                 let edge = match edge {
                     ResizeEdge::None => XdgResizeEdge::None,
@@ -1436,7 +1441,7 @@ impl WaylandWindowInner {
                     ResizeEdge::BottomRight => XdgResizeEdge::BottomRight,
                     _ => return, // Realistically, there probably won't be any new edges added.
                 };
-                self.window.as_ref().unwrap().resize(seat, serial, edge)
+                window.resize(seat, serial, edge)
             }
             // Deferred: see `PendingMove`. The press position is recorded by the
             // caller, which is the only place that knows it.

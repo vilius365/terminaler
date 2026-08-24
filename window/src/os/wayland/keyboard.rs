@@ -110,7 +110,13 @@ impl Dispatch<WlKeyboard, KeyboardData> for WaylandState {
         };
         let mut inner = win.as_ref().borrow_mut();
         let mapper = state.keyboard_mapper.borrow_mut();
-        let mapper = mapper.as_mut().expect("no keymap");
+        // Every failure path in the Keymap arm above logs and leaves this
+        // None, so a layout xkbcommon cannot compile would otherwise abort
+        // here on the next key event rather than just losing input.
+        let Some(mapper) = mapper.as_mut() else {
+            log::warn!("no keymap available; dropping keyboard event");
+            return;
+        };
         inner.keyboard_event(mapper, event);
     }
 }

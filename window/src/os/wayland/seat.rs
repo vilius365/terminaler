@@ -14,8 +14,12 @@ impl SeatHandler for WaylandState {
         &mut self.seat
     }
 
-    fn new_seat(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _seat: WlSeat) {
-        todo!()
+    fn new_seat(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, seat: WlSeat) {
+        // Only fires for a seat appearing after startup — multi-seat setups,
+        // or a compositor creating one on input-device hotplug. We track a
+        // single seat, so there is no state to add; capabilities on it still
+        // arrive through new_capability.
+        log::warn!("additional seat {seat:?} is not tracked");
     }
 
     fn new_capability(
@@ -94,7 +98,10 @@ impl SeatHandler for WaylandState {
         }
     }
 
-    fn remove_seat(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _seat: WlSeat) {
-        todo!()
+    fn remove_seat(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, seat: WlSeat) {
+        // The compositor withdraws a seat's capabilities before removing the
+        // seat itself, so remove_capability has already released the keyboard
+        // and pointer by this point.
+        log::trace!("seat {seat:?} removed");
     }
 }
