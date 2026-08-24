@@ -61,7 +61,20 @@ impl DataDeviceHandler for WaylandState {
             .lock()
             .unwrap();
 
-        let window_id = SurfaceUserData::from_wl(&offer.surface).window_id;
+        // The drag can enter a surface we don't own — the client-side
+        // decoration frame has its own subsurfaces, and the compositor may
+        // also hand us an offer whose surface has already been destroyed.
+        // Neither carries our user data, so resolve it fallibly rather than
+        // panicking out of the event loop and taking the whole GUI down.
+        let Some(window_id) = SurfaceUserData::try_from_wl(&offer.surface).map(|sud| sud.window_id)
+        else {
+            log::trace!(
+                "Ignoring drag offer entering foreign surface {:?}",
+                offer.surface
+            );
+            offer.destroy();
+            return;
+        };
 
         pstate.drag_and_drop.offer = Some(SurfaceAndOffer { window_id, offer });
     }

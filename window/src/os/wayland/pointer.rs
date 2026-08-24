@@ -225,8 +225,17 @@ impl WaylandState {
                     None => continue,
                 };
 
-                let wid = SurfaceUserData::from_wl(parent_surface).window_id;
-                let mut inner = windows.get(&wid).unwrap().borrow_mut();
+                // A parent surface without our user data isn't one of our
+                // windows; skip the event rather than panicking out of the
+                // event loop. Matches the two `continue`s just above.
+                let Some(wid) = SurfaceUserData::try_from_wl(parent_surface).map(|sud| sud.window_id)
+                else {
+                    continue;
+                };
+                let Some(window) = windows.get(&wid) else {
+                    continue;
+                };
+                let mut inner = window.borrow_mut();
 
                 match evt.kind {
                     PointerEventKind::Enter { .. } => {
