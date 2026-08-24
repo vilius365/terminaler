@@ -359,6 +359,8 @@ impl WaylandWindow {
 
             pending_first_configure: Some(pending_first_configure),
             frame_callback: None,
+            frame_callback_since: None,
+            stale_frame_discards: 0,
 
             text_cursor: None,
             appearance,
@@ -647,6 +649,13 @@ pub struct WaylandWindowInner {
     pub(super) pending_move: Option<PendingMove>,
     pending_first_configure: Option<async_channel::Sender<()>>,
     frame_callback: Option<WlCallback>,
+    /// When `frame_callback` was requested. The compositor can lose a pending
+    /// callback across a monitor reconfiguration (observed with mutter when a
+    /// display powers off), which would otherwise gate painting forever.
+    frame_callback_since: Option<Instant>,
+    /// Consecutive stale-callback discards with no intervening frame event;
+    /// used to warn once per stall episode instead of at ~1Hz.
+    stale_frame_discards: u32,
     invalidated: bool,
     // font_config: Rc<FontConfiguration>,
     text_cursor: Option<Rect>,
@@ -1121,10 +1130,46 @@ impl WaylandWindowInner {
 
     fn invalidate(&mut self) {
         if self.frame_callback.is_some() {
-            self.invalidated = true;
-            return;
+            if !self.frame_callback_is_stale() {
+                self.invalidated = true;
+                return;
+            }
+            self.discard_stale_frame_callback();
         }
         self.do_paint().unwrap();
+    }
+
+    /// Delivery of a pending frame callback is not guaranteed: mutter has
+    /// been observed to drop one during a monitor reconfiguration (display
+    /// power-off), leaving `frame_callback` set forever and freezing all
+    /// painting while input and the mux keep running. Treat a callback older
+    /// than this as lost and paint anyway. This also caps the repaint rate at
+    /// ~1Hz while the compositor legitimately withholds callbacks for a
+    /// hidden surface.
+    const STALE_FRAME_CALLBACK: Duration = Duration::from_secs(1);
+
+    fn frame_callback_is_stale(&self) -> bool {
+        self.frame_callback_since
+            .map(|since| since.elapsed() > Self::STALE_FRAME_CALLBACK)
+            .unwrap_or(false)
+    }
+
+    fn discard_stale_frame_callback(&mut self) {
+        self.frame_callback.take();
+        self.frame_callback_since.take();
+        self.stale_frame_discards += 1;
+        if self.stale_frame_discards == 1 {
+            log::warn!(
+                "pending frame callback outlived {:?}; \
+                 assuming the compositor lost it and repainting anyway",
+                Self::STALE_FRAME_CALLBACK
+            );
+        } else {
+            log::debug!(
+                "discarding stale frame callback (x{} without a frame event)",
+                self.stale_frame_discards
+            );
+        }
     }
 
     fn set_text_cursor_position(&mut self, rect: Rect) {
@@ -1214,11 +1259,14 @@ impl WaylandWindowInner {
         }
 
         if self.frame_callback.is_some() {
-            // Painting now won't be productive, so skip it but
-            // remember that we need to be painted so that when
-            // the compositor is ready for us, we can paint then.
-            self.invalidated = true;
-            return Ok(());
+            if !self.frame_callback_is_stale() {
+                // Painting now won't be productive, so skip it but
+                // remember that we need to be painted so that when
+                // the compositor is ready for us, we can paint then.
+                self.invalidated = true;
+                return Ok(());
+            }
+            self.discard_stale_frame_callback();
         }
 
         self.invalidated = false;
@@ -1232,6 +1280,7 @@ impl WaylandWindowInner {
 
         log::trace!("do_paint - callback: {:?}", callback);
         self.frame_callback.replace(callback);
+        self.frame_callback_since.replace(Instant::now());
 
         // The repaint has the side of effect of committing the surface,
         // which is necessary for the frame callback to get triggered.
@@ -1253,6 +1302,8 @@ impl WaylandWindowInner {
 
     pub(crate) fn next_frame_is_ready(&mut self) {
         self.frame_callback.take();
+        self.frame_callback_since.take();
+        self.stale_frame_discards = 0;
         if self.invalidated {
             self.do_paint().ok();
         }
