@@ -1509,12 +1509,19 @@ impl WaylandState {
     }
 
     fn handle_window_event(&self, window: &XdgWindow, event: WaylandWindowEvent) {
-        let surface_data = SurfaceUserData::from_wl(window.wl_surface());
+        // Both lookups can legitimately miss while a window is being torn
+        // down: the compositor may still deliver configure or close events
+        // after we have dropped our side of the window.
+        let Some(surface_data) = SurfaceUserData::try_from_wl(window.wl_surface()) else {
+            log::trace!("window event for a surface that isn't ours");
+            return;
+        };
         let window_id = surface_data.window_id;
 
-        let window_inner = self
-            .window_by_id(window_id)
-            .expect("Inner Window should exist");
+        let Some(window_inner) = self.window_by_id(window_id) else {
+            log::trace!("window event for unknown window {window_id}");
+            return;
+        };
 
         let p = window_inner.borrow().pending_event.clone();
         let mut pending_event = p.lock().unwrap();
@@ -1595,7 +1602,13 @@ impl CompositorHandler for WaylandState {
         _time: u32,
     ) {
         log::trace!("frame: CompositorHandler");
-        let surface_data = SurfaceUserData::from_wl(surface);
+        // Frame callbacks arrive for any surface we asked one of, including
+        // decoration subsurfaces we don't own, and can outlive the surface
+        // itself while a window closes.
+        let Some(surface_data) = SurfaceUserData::try_from_wl(surface) else {
+            log::trace!("frame callback for a surface that isn't ours");
+            return;
+        };
         let window_id = surface_data.window_id;
 
         WaylandConnection::with_window_inner(window_id, |inner| {
