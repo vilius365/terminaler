@@ -36,7 +36,12 @@ impl DataDeviceHandler for WaylandState {
             }
         };
 
-        let offer = data.drag_offer().unwrap();
+        // The compositor can send enter without a live drag offer, e.g. when
+        // the drag was cancelled between the two events.
+        let Some(offer) = data.drag_offer() else {
+            log::trace!("Data offer entered with no drag offer attached");
+            return;
+        };
 
         offer.with_mime_types(|mime_types| {
             log::trace!(
@@ -52,14 +57,9 @@ impl DataDeviceHandler for WaylandState {
 
         offer.set_actions(DndAction::None | DndAction::Copy, DndAction::None);
 
-        let pointer = self.pointer.as_mut().unwrap();
-        let mut pstate = pointer
-            .pointer()
-            .data::<PointerUserData>()
-            .unwrap()
-            .state
-            .lock()
-            .unwrap();
+        let Some(mut pstate) = self.lock_pointer_state() else {
+            return;
+        };
 
         // The drag can enter a surface we don't own — the client-side
         // decoration frame has its own subsurfaces, and the compositor may
@@ -85,14 +85,9 @@ impl DataDeviceHandler for WaylandState {
         _qh: &wayland_client::QueueHandle<Self>,
         _data_device: &WlDataDevice,
     ) {
-        let pointer = self.pointer.as_mut().unwrap();
-        let mut pstate = pointer
-            .pointer()
-            .data::<PointerUserData>()
-            .unwrap()
-            .state
-            .lock()
-            .unwrap();
+        let Some(mut pstate) = self.lock_pointer_state() else {
+            return;
+        };
         if let Some(SurfaceAndOffer { offer, .. }) = pstate.drag_and_drop.offer.take() {
             offer.destroy();
         }
@@ -137,14 +132,9 @@ impl DataDeviceHandler for WaylandState {
         _qh: &wayland_client::QueueHandle<Self>,
         _data_device: &WlDataDevice,
     ) {
-        let pointer = self.pointer.as_mut().unwrap();
-        let mut pstate = pointer
-            .pointer()
-            .data::<PointerUserData>()
-            .unwrap()
-            .state
-            .lock()
-            .unwrap();
+        let Some(mut pstate) = self.lock_pointer_state() else {
+            return;
+        };
         let drag_and_drop = &mut pstate.drag_and_drop;
         if let Some(SurfaceAndPipe { window_id, read }) = drag_and_drop.create_pipe_for_drop() {
             std::thread::spawn(move || {

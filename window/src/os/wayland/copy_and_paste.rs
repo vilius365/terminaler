@@ -7,12 +7,14 @@ use toolkit::data_device_manager::data_offer::SelectionOffer;
 use toolkit::data_device_manager::{ReadPipe, WritePipe};
 use toolkit::primary_selection::device::PrimarySelectionDeviceHandler;
 use toolkit::primary_selection::selection::PrimarySelectionSourceHandler;
+use wayland_client::Proxy;
 use wayland_protocols::wp::primary_selection::zv1::client::zwp_primary_selection_device_v1::ZwpPrimarySelectionDeviceV1;
 use wayland_protocols::wp::primary_selection::zv1::client::zwp_primary_selection_source_v1::ZwpPrimarySelectionSourceV1;
 
 use crate::{Clipboard, ConnectionOps};
 
 use super::data_device::TEXT_MIME_TYPE;
+use super::pointer::{PointerState, PointerUserData};
 use super::state::WaylandState;
 
 #[derive(Default)]
@@ -100,6 +102,19 @@ impl CopyAndPaste {
 }
 
 impl WaylandState {
+    /// Lock the pointer's shared state, if a pointer exists at all. A seat
+    /// gains pointer capability asynchronously and can lack one entirely
+    /// (touch- or keyboard-only), so the drag handlers cannot assume one is
+    /// present: panicking here would abort the process from inside Wayland
+    /// event dispatch.
+    pub(super) fn lock_pointer_state(
+        &mut self,
+    ) -> Option<std::sync::MutexGuard<'_, PointerState>> {
+        let pointer = self.pointer.as_ref()?;
+        let udata = pointer.pointer().data::<PointerUserData>()?;
+        Some(udata.state.lock().unwrap())
+    }
+
     pub(super) fn resolve_copy_and_paste(&mut self) -> Option<Arc<Mutex<CopyAndPaste>>> {
         let active_surface_id = self.active_surface_id.borrow();
         let active_surface_id = active_surface_id.as_ref()?;

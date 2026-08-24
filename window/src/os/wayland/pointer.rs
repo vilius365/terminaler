@@ -28,12 +28,14 @@ impl PointerHandler for WaylandState {
         pointer: &WlPointer,
         events: &[PointerEvent],
     ) {
-        let mut pstate = pointer
-            .data::<PointerUserData>()
-            .unwrap()
-            .state
-            .lock()
-            .unwrap();
+        // The compositor addresses the event to a pointer object; if it isn't
+        // one we set up, there is no state to update. Panicking here would
+        // abort from inside Wayland event dispatch.
+        let Some(udata) = pointer.data::<PointerUserData>() else {
+            log::trace!("pointer_frame for a pointer without our user data");
+            return;
+        };
+        let mut pstate = udata.state.lock().unwrap();
 
         for evt in events {
             if let PointerEventKind::Enter { .. } = &evt.kind {
@@ -45,10 +47,14 @@ impl PointerHandler for WaylandState {
                 *self.last_serial.borrow_mut() = serial;
                 pstate.serial = serial;
             }
-            if let Some(pending) = self
-                .surface_to_pending
-                .get(&self.active_surface_id.borrow().as_ref().unwrap())
-            {
+            // No Enter has been seen yet if the first event of the session is
+            // a Leave, Motion or Axis, so there may be no active surface to
+            // attribute this event to.
+            let active_surface_id = self.active_surface_id.borrow().clone();
+            let Some(active_surface_id) = active_surface_id else {
+                continue;
+            };
+            if let Some(pending) = self.surface_to_pending.get(&active_surface_id) {
                 let mut pending = pending.lock().unwrap();
                 if pending.queue(evt) {
                     WaylandConnection::with_window_inner(pending.window_id, move |inner| {
@@ -215,7 +221,8 @@ impl WaylandState {
 
         for evt in events {
             let surface = &evt.surface;
-            if surface.id() == self.active_surface_id.borrow().as_ref().unwrap().clone() {
+            let active_surface_id = self.active_surface_id.borrow().clone();
+            if Some(surface.id()) == active_surface_id {
                 let (x, y) = evt.position;
                 let parent_surface = match evt.surface.data::<SurfaceData>() {
                     Some(data) => match data.parent_surface() {
