@@ -82,8 +82,8 @@ ci/build-windows-staging.sh --promote    # staging -> live (backs up current exe
 ```
 
 Only `--promote` needs Terminaler (and `terminaler-mux-server.exe`) fully closed.
-Support files that must travel with the exes: `WebView2Loader.dll`, `conpty.dll`,
-`OpenConsole.exe` — the script handles all three.
+Support files that must travel with the exes: `conpty.dll` and
+`OpenConsole.exe` — the script handles both.
 
 **Config location**: `%APPDATA%\Terminaler\terminaler.json` on Windows,
 `~/.config/terminaler/terminaler.json` on Linux (JSONC with comments)

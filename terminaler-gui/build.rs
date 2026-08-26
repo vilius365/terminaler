@@ -50,16 +50,6 @@ fn main() {
             }
         }
 
-        // Copy WebView2Loader.dll next to the exe (needed for wry/WebView2 sidebar).
-        // The DLL is checked into assets/windows/ so it works for both native and cross-compile.
-        {
-            let src = windows_dir.join("WebView2Loader.dll");
-            let dest = exe_output_dir.join("WebView2Loader.dll");
-            if src.exists() && !dest.exists() {
-                let _ = std::fs::copy(&src, &dest);
-            }
-        }
-
         // Version string from .tag file or git
         let mut ci_tag = String::new();
         if let Ok(tag) = std::fs::read("../.tag") {

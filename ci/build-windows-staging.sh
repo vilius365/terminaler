@@ -36,7 +36,7 @@ OUT="$REPO_ROOT/target/$TARGET/release"
 
 # The three exes plus the support files that must travel with them.
 EXES=(terminaler-gui.exe terminaler-mux-server.exe terminaler.exe)
-SUPPORT=(WebView2Loader.dll conpty.dll OpenConsole.exe)
+SUPPORT=(conpty.dll OpenConsole.exe)
 
 DRY_RUN=false; PROMOTE=false; STATUS=false
 while [ $# -gt 0 ]; do
