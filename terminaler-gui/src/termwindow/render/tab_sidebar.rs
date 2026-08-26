@@ -61,6 +61,13 @@ const DOCK_TOP_MARGIN: f32 = 8.;
 /// expects it.
 const CHIP_PAD_X: f32 = 9.;
 
+/// Floor for chip padding when the dock row is crowded; below this the chips
+/// touch and the hit targets get hard to aim at.
+const CHIP_PAD_X_MIN: f32 = 3.;
+
+/// Horizontal padding of the dock row itself.
+const DOCK_PAD_X: f32 = 10.;
+
 #[derive(Clone, Copy)]
 pub(crate) struct SidebarTheme {
     pub bg_base: LinearRgba,
@@ -816,8 +823,14 @@ impl crate::TermWindow {
         // Sync only appears when tmux discovery is configured, so the button
         // is never dead.
         let show_sync = self.config.tmux.as_ref().map_or(false, |t| t.enabled);
-        let bottom_block =
-            build_widget_dock(&font, &title_font, &theme, sidebar_width, show_sync);
+        let bottom_block = build_widget_dock(
+            &font,
+            &title_font,
+            &theme,
+            sidebar_width,
+            show_sync,
+            crate::termwindow::notifications_blocked(),
+        );
 
         // Measure the row rather than reserving a guess for it. Its measured
         // height already includes the dock's own top margin; DOCK_TOP_MARGIN
@@ -827,7 +840,6 @@ impl crate::TermWindow {
             .map(|c| c.bounds.height())
             .unwrap_or(40.);
         let dock_h = bottom_h + DOCK_TOP_MARGIN;
-
         // The tabs section is bounded too: enough tabs (or split panes) would
         // otherwise starve the tmux section to nothing and push the dock
         // off-screen — the clip class the measured budgeting exists to
@@ -2279,7 +2291,8 @@ fn sidebar_eyebrow(
         .min_width(Some(Dimension::Pixels(sidebar_width)))
 }
 
-/// Bottom widget dock: new terminal and theme picker. Text labels in the rail
+/// Bottom widget dock: new terminal, theme picker, and the global
+/// notification block. Text labels in the rail
 /// font rather than icon glyphs: two different refresh glyphs (U+27F3,
 /// U+21BB) failed to shape in the field, and at this size words read better
 /// than symbols anyway. Three text chips overflow 90px ("sync" clipped to
@@ -2290,14 +2303,29 @@ fn build_widget_dock(
     theme: &SidebarTheme,
     sidebar_width: f32,
     show_sync: bool,
+    notifications_blocked: bool,
 ) -> Element {
+    // Chip padding is budgeted, not fixed. The box model has no wrapping, so a
+    // row that overflows silently clips its last chip — measured at the 100px
+    // minimum rail width, four chips at full padding ran 17.5px past the
+    // content edge and swallowed the last button. Divide the space the chips
+    // don't need for glyphs among them instead, with a floor that keeps the
+    // hit target usable.
+    let chip_count = 1 + show_sync as u32 + 2;
+    let content_w = sidebar_width - 2. * DOCK_PAD_X;
+    // Glyph advances are ~8px at rail sizes; the primary chip carries +5 each
+    // side. Solve the remaining budget per chip side, then clamp.
+    let glyph_budget = chip_count as f32 * 9. + 10.;
+    let pad_x = ((content_w - glyph_budget) / (2. * chip_count as f32))
+        .clamp(CHIP_PAD_X_MIN, CHIP_PAD_X);
+
     let chip = |label: &str, item: TabSidebarItem| {
         Element::new(label_font, ElementContent::Text(label.to_string()))
             .display(DisplayType::Inline)
             .item_type(UIItemType::TabSidebar(item))
             .padding(BoxDimension {
-                left: Dimension::Pixels(CHIP_PAD_X),
-                right: Dimension::Pixels(CHIP_PAD_X),
+                left: Dimension::Pixels(pad_x),
+                right: Dimension::Pixels(pad_x),
                 top: Dimension::Pixels(4.),
                 bottom: Dimension::Pixels(4.),
             })
@@ -2317,8 +2345,8 @@ fn build_widget_dock(
             .display(DisplayType::Inline)
             .item_type(UIItemType::TabSidebar(item))
             .padding(BoxDimension {
-                left: Dimension::Pixels(CHIP_PAD_X + 5.),
-                right: Dimension::Pixels(CHIP_PAD_X + 5.),
+                left: Dimension::Pixels(pad_x + 5.),
+                right: Dimension::Pixels(pad_x + 5.),
                 top: Dimension::Pixels(4.),
                 bottom: Dimension::Pixels(4.),
             })
@@ -2338,18 +2366,48 @@ fn build_widget_dock(
     // clipped the last one, which is why sync used to be its own full-width
     // row. Each glyph is verified present in the rail font — an absent one
     // rasterizes to nothing and leaves a silently dead button.
+    // An active block must not look like an idle button: filled in red so the
+    // rail says at a glance that Terminaler is silenced. U+2298 has the same
+    // font coverage as the two glyphs beside it (Adwaita Mono, Symbola).
+    let blocked_chip = |item: TabSidebarItem| {
+        Element::new(label_font, ElementContent::Text("\u{2298}".to_string()))
+            .display(DisplayType::Inline)
+            .item_type(UIItemType::TabSidebar(item))
+            .padding(BoxDimension {
+                left: Dimension::Pixels(pad_x),
+                right: Dimension::Pixels(pad_x),
+                top: Dimension::Pixels(4.),
+                bottom: Dimension::Pixels(4.),
+            })
+            .colors(ElementColors {
+                border: BorderColor::default(),
+                bg: theme.accent_red.into(),
+                text: theme.bg_surface.into(),
+            })
+            .hover_colors(Some(ElementColors {
+                border: BorderColor::default(),
+                bg: theme.accent_orange.into(),
+                text: theme.bg_surface.into(),
+            }))
+    };
+
     let mut chips = vec![primary("+", TabSidebarItem::NewTabButton)];
     if show_sync {
         chips.push(chip("\u{21c4}", TabSidebarItem::TmuxRefreshButton)); // sync
     }
     chips.push(chip("\u{25d1}", TabSidebarItem::ThemePickerButton)); // theme
+    chips.push(if notifications_blocked {
+        blocked_chip(TabSidebarItem::NotificationsBlockButton)
+    } else {
+        chip("\u{2298}", TabSidebarItem::NotificationsBlockButton) // block notifications
+    });
 
     Element::new(font, ElementContent::Children(chips))
         .display(DisplayType::Block)
         .line_height(Some(1.3))
         .padding(BoxDimension {
-            left: Dimension::Pixels(10.),
-            right: Dimension::Pixels(10.),
+            left: Dimension::Pixels(DOCK_PAD_X),
+            right: Dimension::Pixels(DOCK_PAD_X),
             top: Dimension::Pixels(5.),
             bottom: Dimension::Pixels(5.),
         })

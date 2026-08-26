@@ -2010,6 +2010,13 @@ impl super::TermWindow {
                     TabSidebarItem::TmuxRefreshButton => {
                         crate::tmux_discovery::request_refresh();
                     }
+                    TabSidebarItem::NotificationsBlockButton => {
+                        use std::sync::atomic::Ordering;
+                        let blocked = !crate::termwindow::NOTIFICATIONS_BLOCKED
+                            .fetch_xor(true, Ordering::Relaxed);
+                        log::info!("Notifications globally blocked: {}", blocked);
+                        self.invalidate_tab_sidebar();
+                    }
                 }
             }
             WMEK::Press(MousePress::Middle) => match sidebar_item {
@@ -2043,7 +2050,8 @@ impl super::TermWindow {
                 | TabSidebarItem::ClosePane { .. }
                 | TabSidebarItem::MuteNotifications { .. }
                 | TabSidebarItem::ThemePickerButton
-                | TabSidebarItem::TmuxRefreshButton => {
+                | TabSidebarItem::TmuxRefreshButton
+                | TabSidebarItem::NotificationsBlockButton => {
                     context.set_cursor(Some(MouseCursor::Hand));
                 }
                 TabSidebarItem::Flyout => {

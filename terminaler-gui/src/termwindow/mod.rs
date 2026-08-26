@@ -101,6 +101,20 @@ lazy_static::lazy_static! {
     pub static ref MUTED_PANES: Mutex<HashSet<PaneId>> = Mutex::new(HashSet::new());
 }
 
+/// Global notification kill switch, toggled from the sidebar dock. When set,
+/// Terminaler raises no notifications at all: OSC 9/777 toasts, Claude idle
+/// toasts, and the Slack webhook are all suppressed, and the sidebar's
+/// per-pane flash never starts. Session-only, like the per-pane mute in
+/// `MUTED_PANES` — a config write would need a reload round-trip, and the
+/// switch exists to silence the next hour, not the next launch.
+pub static NOTIFICATIONS_BLOCKED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// True while the global notification block is active.
+pub fn notifications_blocked() -> bool {
+    NOTIFICATIONS_BLOCKED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 pub const ICON_DATA: &'static [u8] = include_bytes!("../../../assets/icon/terminal.png");
 
 pub fn set_window_position(pos: GuiPosition) {
@@ -333,6 +347,8 @@ pub enum TabSidebarItem {
     MuteNotifications { pane_id: usize },
     NewTabButton,
     ResizeHandle,
+    /// Widget-dock button: toggles the global notification block.
+    NotificationsBlockButton,
     /// A discovered tmux session in the AGENTS section; clicking attaches to it.
     TmuxSession { box_name: String, session: String },
     /// The hover flyout panel itself. Registered so reverse hit-testing gives
@@ -1520,7 +1536,8 @@ impl TermWindow {
                     pane_id,
                 } => {
                     if self.window_contains_pane(pane_id) {
-                        let muted = self.pane_state(pane_id).notifications_muted;
+                        let muted = notifications_blocked()
+                            || self.pane_state(pane_id).notifications_muted;
                         if !muted {
                             let mut per_pane = self.pane_state(pane_id);
                             per_pane.notification_start.replace(Instant::now());
@@ -2931,7 +2948,12 @@ impl TermWindow {
 
         for pane_info in &claude_panes {
             let pane_id = pane_info.pane_id;
-            let is_muted = self.pane_state(pane_id).notifications_muted;
+            // The global block folds into the per-pane mute rather than
+            // short-circuiting the scan: the loop must keep updating
+            // claude_prev_status while blocked, or a WaitingInput transition
+            // that happens during the block fires the moment it is lifted.
+            let is_muted =
+                notifications_blocked() || self.pane_state(pane_id).notifications_muted;
 
             if pane_info.has_user_vars {
                 // Phase 1: User-var based detection (precise)

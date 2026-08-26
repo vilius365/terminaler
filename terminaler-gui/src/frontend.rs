@@ -121,10 +121,11 @@ impl GuiFrontEnd {
                                 }
                             };
 
-                            // Check per-pane mute
-                            let is_muted = MUTED_PANES
-                                .lock()
-                                .map_or(false, |set| set.contains(&pane_id));
+                            // Check the global block first, then the per-pane mute.
+                            let is_muted = crate::termwindow::notifications_blocked()
+                                || MUTED_PANES
+                                    .lock()
+                                    .map_or(false, |set| set.contains(&pane_id));
 
                             if show && !is_muted {
                                 // Build tab context for the notification
