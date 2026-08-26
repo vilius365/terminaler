@@ -983,6 +983,15 @@ impl FontConfigInner {
         let prior_font = *self.font_scale.borrow();
         let prior_dpi = *self.dpi.borrow();
 
+        // Bail when nothing actually changed. Every call clears the whole
+        // font cache, and a fresh LoadedFont has an empty `tried_glyphs`, so
+        // each needless call makes every fallback glyph re-resolve and
+        // re-shape. The caller re-asserts the current scale on paths where it
+        // usually hasn't moved, so guard it here rather than at each caller.
+        if prior_font == font_scale && prior_dpi == dpi {
+            return (prior_font, prior_dpi);
+        }
+
         *self.dpi.borrow_mut() = dpi;
         *self.font_scale.borrow_mut() = font_scale;
         self.fonts.borrow_mut().clear();

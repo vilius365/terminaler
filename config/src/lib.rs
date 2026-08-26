@@ -3,7 +3,7 @@
 use anyhow::{anyhow, bail, Context, Error};
 use lazy_static::lazy_static;
 use ordered_float::NotNan;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::OsString;
 use std::fs::DirBuilder;
 #[cfg(unix)]
@@ -381,6 +381,10 @@ struct ConfigInner {
     warnings: Vec<String>,
     generation: usize,
     watcher: Option<notify::RecommendedWatcher>,
+    /// The config files themselves (not the directories we watch to catch
+    /// symlink swaps). The watcher thread reloads only for events touching
+    /// one of these; see `watch_path`.
+    watched_files: Arc<Mutex<HashSet<PathBuf>>>,
     subscribers: HashMap<usize, Box<dyn Fn() -> bool + Send>>,
 }
 
@@ -392,6 +396,7 @@ impl ConfigInner {
             warnings: vec![],
             generation: 0,
             watcher: None,
+            watched_files: Arc::new(Mutex::new(HashSet::new())),
             subscribers: HashMap::new(),
         }
     }
@@ -420,6 +425,7 @@ impl ConfigInner {
             const DELAY: Duration = Duration::from_millis(200);
             let watcher = notify::recommended_watcher(tx).unwrap();
             let path = path.clone();
+            let watched_files = Arc::clone(&self.watched_files);
 
             std::thread::spawn(move || {
                 // block until we get an event
@@ -448,8 +454,34 @@ impl ConfigInner {
                                 }
                                 paths.sort();
                                 paths.dedup();
-                                log::debug!("paths {:?} changed, reload config", path);
-                                reload();
+                                // We watch the config file's PARENT directory
+                                // too, so that swapping a symlink is noticed.
+                                // That makes us hear about every unrelated
+                                // file in the config dir — session state,
+                                // web-status, editor backups, stray logs —
+                                // and reloading for those is not free: a
+                                // reload drops every font cache, so each one
+                                // visibly re-shaped the UI (the sidebar dock
+                                // chips flashed as their glyphs fell back to
+                                // a different font and re-resolved). Reload
+                                // only when a config file we actually read
+                                // is the thing that changed.
+                                let relevant = match watched_files.lock() {
+                                    Ok(files) => paths.iter().any(|p| files.contains(p)),
+                                    // Never go silent on a poisoned lock:
+                                    // a missed reload looks like the config
+                                    // being ignored.
+                                    Err(_) => true,
+                                };
+                                if relevant {
+                                    log::debug!("paths {:?} changed, reload config", paths);
+                                    reload();
+                                } else {
+                                    log::trace!(
+                                        "ignoring change to {:?}; not a config file",
+                                        paths
+                                    );
+                                }
                             }
                         }
                         Err(_) => {
@@ -486,6 +518,11 @@ impl ConfigInner {
         // any paths that we should be watching
         let mut watch_paths = vec![];
         if let Some(path) = file_name {
+            // Record the config file itself, so the watcher thread can tell
+            // a real config change from unrelated churn in the same folder.
+            if let Ok(mut files) = self.watched_files.lock() {
+                files.insert(path.clone());
+            }
             // Let's also watch the parent directory for folks that do
             // things with symlinks:
             if let Some(parent) = path.parent() {
