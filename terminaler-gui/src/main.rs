@@ -604,11 +604,28 @@ fn setup_mux(
     Ok(mux)
 }
 
+/// Drop environment variables that describe *our* launch context and would
+/// otherwise be inherited by every pane we spawn.
+///
+/// Panes inherit a snapshot of this process's environment (see
+/// `CommandBuilder::get_base_env`), so anything set here leaks into the child
+/// shells. Launching the GUI from inside a tmux session, for example, leaves
+/// `TMUX` set, and every pane then believes it is already inside that session.
+///
+/// The mux server applies the same list at startup; local panes are spawned by
+/// whichever process hosts the LocalDomain, so both need it.
+fn remove_inherited_env(config: &ConfigHandle) {
+    for name in &config.mux_env_remove {
+        std::env::remove_var(name);
+    }
+}
+
 fn build_initial_mux(
     config: &ConfigHandle,
     default_domain_name: Option<&str>,
     default_workspace_name: Option<&str>,
 ) -> anyhow::Result<Arc<Mux>> {
+    remove_inherited_env(config);
     let domain: Arc<dyn Domain> = Arc::new(LocalDomain::new("local")?);
     setup_mux(domain, config, default_domain_name, default_workspace_name)
 }
