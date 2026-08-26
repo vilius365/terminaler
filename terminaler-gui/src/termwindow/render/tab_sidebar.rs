@@ -372,7 +372,8 @@ impl crate::TermWindow {
             )
             .map(|c| c.bounds.height())
             .unwrap_or(label_h * 1.3 + 10.);
-        // The trailing sync row is always emitted; reserve its height up front.
+        // Reserve the eyebrow height up front. The sync row is no longer part
+        // of this section — it moved into the pinned bottom block.
         let px_budget = (px_budget - eyebrow_px).max(0.);
         // A troubled box's eyebrow + error row outrank healthy session tiles:
         // without this reserve, height pressure folded an erroring box away
@@ -559,28 +560,6 @@ impl crate::TermWindow {
                 .min_width(Some(Dimension::Pixels(sidebar_width))),
             );
         }
-
-        // Manual re-poll of the discovery snapshot. A full-width row, so it
-        // can never clip the way a third dock chip did.
-        children.push(
-            Element::new(title_font, ElementContent::Text("sync".to_string()))
-                .display(DisplayType::Block)
-                .line_height(Some(1.2))
-                .item_type(UIItemType::TabSidebar(TabSidebarItem::TmuxRefreshButton))
-                .padding(BoxDimension {
-                    left: Dimension::Pixels(10.),
-                    right: Dimension::Pixels(4.),
-                    top: Dimension::Pixels(2.),
-                    bottom: Dimension::Pixels(2.),
-                })
-                .colors(text_only(theme.text_tertiary))
-                .hover_colors(Some(ElementColors {
-                    border: BorderColor::default(),
-                    bg: theme.bg_elevated.into(),
-                    text: theme.text_primary.into(),
-                }))
-                .min_width(Some(Dimension::Pixels(sidebar_width))),
-        );
 
         let section = Element::new(font, ElementContent::Children(children))
             .display(DisplayType::Block)
@@ -816,12 +795,23 @@ impl crate::TermWindow {
         // Layout context used to compute the final tree.
         let context_probe = self.sidebar_layout_ctx(&metrics, sidebar_width, window_height, 10);
 
-        // Measure the dock rather than reserving a guess for it.
-        let dock = build_widget_dock(&font, &title_font, &theme, sidebar_width);
-        let dock_h = self
-            .compute_element(&context_probe, &dock)
-            .map(|c| c.bounds.height() + DOCK_TOP_MARGIN)
+        // The bottom block: one row of icon buttons — sync, new tab, theme —
+        // pinned to the sidebar's bottom edge, so it is measured up front
+        // rather than left to flow after the sections.
+        // Sync only appears when tmux discovery is configured, so the button
+        // is never dead.
+        let show_sync = self.config.tmux.as_ref().map_or(false, |t| t.enabled);
+        let bottom_block =
+            build_widget_dock(&font, &title_font, &theme, sidebar_width, show_sync);
+
+        // Measure the row rather than reserving a guess for it. Its measured
+        // height already includes the dock's own top margin; DOCK_TOP_MARGIN
+        // on top is the gap it keeps above itself when budgeting the sections.
+        let bottom_h = self
+            .compute_element(&context_probe, &bottom_block)
+            .map(|c| c.bounds.height())
             .unwrap_or(40.);
+        let dock_h = bottom_h + DOCK_TOP_MARGIN;
 
         // The tabs section is bounded too: enough tabs (or split panes) would
         // otherwise starve the tmux section to nothing and push the dock
@@ -894,10 +884,30 @@ impl crate::TermWindow {
         // child to the window's bottom edge (a height prediction the layout is
         // free to exceed pushed the old new-tab button off-screen).
         let mut sidebar_children = vec![tabs_container];
+        let mut flowed_h = tabs_height;
         if let Some(section) = agents_section {
+            flowed_h += self
+                .compute_element(&context_probe, &section)
+                .map(|c| c.bounds.height())
+                .unwrap_or(0.);
             sidebar_children.push(section);
         }
-        sidebar_children.push(dock);
+
+        // Pin the bottom block to the sidebar's bottom edge by measuring what
+        // flows above it and pushing it down by the slack. The earlier attempt
+        // stretched a child to the bottom on a *predicted* height, which the
+        // layout was free to exceed — that pushed the dock off-screen. Every
+        // term here is probe-measured instead, and the max() floor means a
+        // short window degrades to ordinary document flow rather than
+        // overlapping the sections above.
+        let slack = window_height - flowed_h - bottom_h;
+        let bottom_block = bottom_block.margin(BoxDimension {
+            left: Dimension::Pixels(0.),
+            right: Dimension::Pixels(0.),
+            top: Dimension::Pixels(slack.max(DOCK_TOP_MARGIN)),
+            bottom: Dimension::Pixels(0.),
+        });
+        sidebar_children.push(bottom_block);
 
         // Root container
         let root = Element::new(&font, ElementContent::Children(sidebar_children))
@@ -2264,6 +2274,7 @@ fn build_widget_dock(
     label_font: &Rc<LoadedFont>,
     theme: &SidebarTheme,
     sidebar_width: f32,
+    show_sync: bool,
 ) -> Element {
     let chip = |label: &str, item: TabSidebarItem| {
         Element::new(label_font, ElementContent::Text(label.to_string()))
@@ -2283,17 +2294,23 @@ fn build_widget_dock(
             }))
     };
 
-    let chips = vec![
-        chip("+", TabSidebarItem::NewTabButton),
-        chip("theme", TabSidebarItem::ThemePickerButton),
-    ];
+    // Single glyphs, not words: three *text* chips overflowed this row and
+    // clipped the last one, which is why sync used to be its own full-width
+    // row. Each glyph is verified present in the rail font — an absent one
+    // rasterizes to nothing and leaves a silently dead button.
+    let mut chips = vec![];
+    if show_sync {
+        chips.push(chip("\u{21c4}", TabSidebarItem::TmuxRefreshButton)); // sync
+    }
+    chips.push(chip("+", TabSidebarItem::NewTabButton));
+    chips.push(chip("\u{25d1}", TabSidebarItem::ThemePickerButton)); // theme
 
     Element::new(font, ElementContent::Children(chips))
         .display(DisplayType::Block)
         .line_height(Some(1.3))
         .padding(BoxDimension {
-            left: Dimension::Pixels(4.),
-            right: Dimension::Pixels(2.),
+            left: Dimension::Pixels(10.),
+            right: Dimension::Pixels(10.),
             top: Dimension::Pixels(5.),
             bottom: Dimension::Pixels(5.),
         })
