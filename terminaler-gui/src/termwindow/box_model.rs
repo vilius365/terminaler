@@ -840,10 +840,22 @@ impl super::TermWindow {
                         Some(event) => {
                             let mouse_x = event.coords.x as f32;
                             let mouse_y = event.coords.y as f32;
-                            mouse_x >= element.bounds.min_x()
-                                && mouse_x <= element.bounds.max_x()
-                                && mouse_y >= element.bounds.min_y()
-                                && mouse_y <= element.bounds.max_y()
+                            // Test the same integer rect that ui_item_impl
+                            // registers for hit-testing, not the raw float
+                            // bounds. Testing the floats here lets the two
+                            // disagree on the sub-pixel edge: the pointer
+                            // resolves to the next element (firing a single
+                            // invalidate) while this test still paints the
+                            // previous one as hovered — and since no further
+                            // invalidate arrives until the next boundary, the
+                            // highlight only catches up a whole element later.
+                            let hx = element.bounds.min_x().max(0.) as isize;
+                            let hy = element.bounds.min_y().max(0.) as isize;
+                            let hw = element.bounds.width().max(0.) as isize;
+                            let hh = element.bounds.height().max(0.) as isize;
+                            let mx = mouse_x as isize;
+                            let my = mouse_y as isize;
+                            mx >= hx && mx <= hx + hw && my >= hy && my <= hy + hh
                         }
                         None => false,
                     } && matches!(self.current_mouse_capture, None | Some(MouseCapture::UI));
