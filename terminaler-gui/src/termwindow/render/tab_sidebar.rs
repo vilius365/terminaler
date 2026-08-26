@@ -393,8 +393,7 @@ impl crate::TermWindow {
 
         for snap in &snaps {
             // A box with no sessions comes FIRST — a box whose probe was
-            // Pending/Unreachable must still render its eyebrow + error line
-            // (the WebView shows the same).
+            // Pending/Unreachable must still render its eyebrow + error line.
             if snap.sessions.is_empty() {
                 if matches!(snap.status, crate::tmux_discovery::BoxStatus::Ok) {
                     continue;
@@ -943,10 +942,6 @@ impl crate::TermWindow {
 
         // Start the tmux discovery poller once the sidebar is live, so the
         // session list populates without the user opening the picker first.
-        // The WebView sidebar does the same from push_webview_sidebar_state();
-        // that function is #[cfg(windows)], so without this call the poller
-        // never started on the GPU-rendered (non-Windows) path and the tmux
-        // section stayed empty no matter how the boxes were configured.
         if self.config.tmux.as_ref().map_or(false, |t| t.enabled) {
             crate::tmux_discovery::ensure_running();
         }

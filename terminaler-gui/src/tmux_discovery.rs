@@ -2,7 +2,7 @@
 //!
 //! A single background thread periodically runs `tmux list-sessions` on every
 //! configured box (over ssh / wsl.exe / custom argv) and caches the results in
-//! a global snapshot that the GUI (launcher picker, WebView sidebar) reads
+//! a global snapshot that the GUI (launcher picker, sidebar) reads
 //! without ever blocking on the network.
 
 use config::tmux::TmuxBox;
