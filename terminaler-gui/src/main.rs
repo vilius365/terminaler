@@ -60,8 +60,6 @@ mod tabbar;
 mod termwindow;
 mod tmux_discovery;
 mod unicode_names;
-#[cfg(windows)]
-mod webview_sidebar;
 mod uniforms;
 mod update;
 mod utilsprites;

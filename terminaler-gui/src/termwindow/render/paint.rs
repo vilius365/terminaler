@@ -298,35 +298,8 @@ impl crate::TermWindow {
         self.update_agents_waiting();
 
         if self.show_tab_sidebar {
-            #[cfg(windows)]
-            let use_webview = self.webview_sidebar.is_some();
-            #[cfg(not(windows))]
-            let use_webview = false;
-
-            if use_webview {
-                #[cfg(windows)]
-                {
-                    let wv_start = Instant::now();
-                    self.update_sidebar_info();
-                    let info_elapsed = wv_start.elapsed();
-                    self.push_webview_sidebar_state();
-                    let push_elapsed = wv_start.elapsed() - info_elapsed;
-                    if wv_start.elapsed() > Duration::from_millis(200) {
-                        log::warn!(
-                            "SLOW sidebar: update_sidebar_info={:?}, push_webview_state={:?}, total={:?}",
-                            info_elapsed,
-                            push_elapsed,
-                            wv_start.elapsed()
-                        );
-                    }
-                    self.paint_sidebar_background(&mut layers)
-                        .context("webview sidebar background")?;
-                    self.register_sidebar_resize_handle();
-                }
-            } else {
-                self.paint_tab_sidebar(&mut layers)
-                    .context("paint_tab_sidebar")?;
-            }
+            self.paint_tab_sidebar(&mut layers)
+                .context("paint_tab_sidebar")?;
         }
 
         if self.show_tab_bar {
