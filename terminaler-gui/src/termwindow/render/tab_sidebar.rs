@@ -2294,15 +2294,39 @@ fn build_widget_dock(
             }))
     };
 
+    // New tab is the row's primary action, so it leads and is styled to
+    // outrank the two utilities beside it: the rail's brightest text against
+    // a filled chip, with wider padding to enlarge the hit target.
+    let primary = |label: &str, item: TabSidebarItem| {
+        Element::new(label_font, ElementContent::Text(label.to_string()))
+            .display(DisplayType::Inline)
+            .item_type(UIItemType::TabSidebar(item))
+            .padding(BoxDimension {
+                left: Dimension::Pixels(9.),
+                right: Dimension::Pixels(9.),
+                top: Dimension::Pixels(2.),
+                bottom: Dimension::Pixels(2.),
+            })
+            .colors(ElementColors {
+                border: BorderColor::default(),
+                bg: theme.bg_elevated.into(),
+                text: theme.text_primary.into(),
+            })
+            .hover_colors(Some(ElementColors {
+                border: BorderColor::default(),
+                bg: theme.accent_orange.into(),
+                text: theme.bg_surface.into(),
+            }))
+    };
+
     // Single glyphs, not words: three *text* chips overflowed this row and
     // clipped the last one, which is why sync used to be its own full-width
     // row. Each glyph is verified present in the rail font — an absent one
     // rasterizes to nothing and leaves a silently dead button.
-    let mut chips = vec![];
+    let mut chips = vec![primary("+", TabSidebarItem::NewTabButton)];
     if show_sync {
         chips.push(chip("\u{21c4}", TabSidebarItem::TmuxRefreshButton)); // sync
     }
-    chips.push(chip("+", TabSidebarItem::NewTabButton));
     chips.push(chip("\u{25d1}", TabSidebarItem::ThemePickerButton)); // theme
 
     Element::new(font, ElementContent::Children(chips))
