@@ -1806,6 +1806,12 @@ fn default_mux_env_remove() -> Vec<String> {
         "SSH_AUTH_SOCK".to_string(),
         "SSH_CLIENT".to_string(),
         "SSH_CONNECTION".to_string(),
+        // A pane we spawn is not inside whatever tmux session happened to
+        // launch us. Leaving these set makes tmux-aware tools (and tmux
+        // itself) act on that outer session: `tmux new-session` silently
+        // becomes a new window in it, landing somewhere the user cannot see.
+        "TMUX".to_string(),
+        "TMUX_PANE".to_string(),
     ]
 }
 
