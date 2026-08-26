@@ -45,6 +45,15 @@ const FLYOUT_CHROME: f32 = 26.;
 /// Gap the dock keeps above itself (its margin-top); also reserved when
 /// budgeting the section heights.
 const DOCK_TOP_MARGIN: f32 = 8.;
+/// Horizontal padding inside a dock chip, and the margin each chip keeps on
+/// both sides. The glyphs are ~6px wide at the reference rail, so without
+/// generous padding the hit targets are tiny, and without a gap the targets
+/// are flush against each other — crossing from one to the next never passes
+/// over dead space, so a few pixels of pointer travel can skip a chip
+/// entirely. Doubling the gap is cheap here: the row has ~110px of slack at
+/// the 180px rail.
+const CHIP_PAD_X: f32 = 7.;
+const CHIP_GAP: f32 = 5.;
 
 #[derive(Clone, Copy)]
 pub(crate) struct SidebarTheme {
@@ -2281,10 +2290,16 @@ fn build_widget_dock(
             .display(DisplayType::Inline)
             .item_type(UIItemType::TabSidebar(item))
             .padding(BoxDimension {
-                left: Dimension::Pixels(4.),
-                right: Dimension::Pixels(4.),
-                top: Dimension::Pixels(2.),
-                bottom: Dimension::Pixels(2.),
+                left: Dimension::Pixels(CHIP_PAD_X),
+                right: Dimension::Pixels(CHIP_PAD_X),
+                top: Dimension::Pixels(4.),
+                bottom: Dimension::Pixels(4.),
+            })
+            .margin(BoxDimension {
+                left: Dimension::Pixels(CHIP_GAP),
+                right: Dimension::Pixels(CHIP_GAP),
+                top: Dimension::Pixels(0.),
+                bottom: Dimension::Pixels(0.),
             })
             .colors(text_only(theme.text_tertiary))
             .hover_colors(Some(ElementColors {
@@ -2302,10 +2317,16 @@ fn build_widget_dock(
             .display(DisplayType::Inline)
             .item_type(UIItemType::TabSidebar(item))
             .padding(BoxDimension {
-                left: Dimension::Pixels(9.),
-                right: Dimension::Pixels(9.),
-                top: Dimension::Pixels(2.),
-                bottom: Dimension::Pixels(2.),
+                left: Dimension::Pixels(CHIP_PAD_X + 5.),
+                right: Dimension::Pixels(CHIP_PAD_X + 5.),
+                top: Dimension::Pixels(4.),
+                bottom: Dimension::Pixels(4.),
+            })
+            .margin(BoxDimension {
+                left: Dimension::Pixels(CHIP_GAP),
+                right: Dimension::Pixels(CHIP_GAP),
+                top: Dimension::Pixels(0.),
+                bottom: Dimension::Pixels(0.),
             })
             .colors(ElementColors {
                 border: BorderColor::default(),
