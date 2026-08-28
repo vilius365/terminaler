@@ -287,10 +287,11 @@ impl crate::TermWindow {
                 .context("paint_pane_remove_overlay")?;
         }
 
-        if self.hovered_pane_id.is_some() {
-            self.paint_toast_toolbar(&mut layers)
-                .context("paint_toast_toolbar")?;
-        }
+        // Called unconditionally: it returns early when there is nothing to
+        // draw, and that early return is what clears the stored toast rect.
+        // Gating the call here would leave a stale rect behind instead.
+        self.paint_toast_toolbar(&mut layers)
+            .context("paint_toast_toolbar")?;
 
         // Aggregate Claude-agent waiting count for the tab-bar badge. Runs
         // regardless of sidebar visibility (the badge lives on the tab bar),

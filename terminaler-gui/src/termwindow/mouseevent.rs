@@ -244,68 +244,45 @@ impl super::TermWindow {
                     return;
                 }
 
-                // Update hovered pane for toast toolbar
-                let new_hovered = self.pane_id_at_pixel_coords(event.coords.x, event.coords.y);
+                // Update hovered pane for toast toolbar. The pointer counts as
+                // still on a pane while it is within that pane's painted toast,
+                // which sits partly outside the pane's content rect — without
+                // this the toast vanished the moment the pointer reached it.
+                let in_toast =
+                    self.toast_zone_pane(event.coords.x as f32, event.coords.y as f32);
+                let new_hovered = in_toast
+                    .or_else(|| self.pane_id_at_pixel_coords(event.coords.x, event.coords.y));
                 if new_hovered != self.hovered_pane_id {
                     self.hovered_pane_id = new_hovered;
-                    self.toast_expanded_for = None;
+                    // Only drop the expansion when leaving the toast as well;
+                    // moving between panes still collapses it.
+                    if in_toast.is_none() || in_toast != self.toast_expanded_for {
+                        self.toast_expanded_for = None;
+                    }
                     context.invalidate();
                 }
 
                 // Toast expand/collapse logic
                 if let Some((pane_id, btn)) = self.toast_button_at(&event) {
                     if btn == "trigger" && self.toast_expanded_for != Some(pane_id) {
-                        self.toast_expanded_for = Some(pane_id);
+                        self.expand_toast(pane_id);
                         context.invalidate();
                     }
                     context.set_cursor(Some(MouseCursor::Hand));
                     return;
-                } else if let Some(expanded_id) = self.toast_expanded_for {
-                    // Collapse if cursor is outside expanded toast + margin
-                    use crate::termwindow::render::pane::{
-                        TOAST_COLLAPSE_MARGIN, TOAST_HEIGHT, TOAST_WIDTH,
-                    };
-                    let collapsed = 'collapse: {
-                        let panes = self.get_panes_to_render();
-                        let pos = match panes.iter().find(|p| p.pane.pane_id() == expanded_id) {
-                            Some(p) => p,
-                            None => break 'collapse true,
-                        };
-                        let cell_w = self.render_metrics.cell_size.width as f32;
-                        let cell_h = self.render_metrics.cell_size.height as f32;
-                        let (pad_l, pad_t) = self.padding_left_top();
-                        let tab_h = if self.show_tab_bar {
-                            self.tab_bar_pixel_height().unwrap_or(0.)
-                        } else { 0. };
-                        let top_h = if self.config.tab_bar_at_bottom { 0.0 } else { tab_h };
-                        let bdr = self.get_os_border();
-                        let top_py = top_h + pad_t + bdr.top.get() as f32;
-                        let t_bg_y = if pos.top == 0 {
-                            top_py - pad_t
-                        } else {
-                            top_py + (pos.top as f32 * cell_h) - (cell_h / 2.0)
-                        };
-                        let t_bg_right = if pos.left + pos.width >= self.terminal_size.cols as usize {
-                            self.effective_right_edge()
-                        } else {
-                            let (bx, wd) = if pos.left == 0 {
-                                (0.0f32, pad_l + bdr.left.get() as f32 + (cell_w / 2.0))
-                            } else {
-                                (pad_l + bdr.left.get() as f32 - (cell_w / 2.0)
-                                    + (pos.left as f32 * cell_w), cell_w)
-                            };
-                            bx + (pos.width as f32 * cell_w) + wd
-                        };
-                        let tl = t_bg_right - TOAST_WIDTH;
-                        let tt = t_bg_y;
-                        let mx = event.coords.x as f32;
-                        let my = event.coords.y as f32;
-                        mx < tl - TOAST_COLLAPSE_MARGIN
-                            || mx > t_bg_right + TOAST_COLLAPSE_MARGIN
-                            || my < tt - TOAST_COLLAPSE_MARGIN
-                            || my > tt + TOAST_HEIGHT + TOAST_COLLAPSE_MARGIN
-                    };
-                    if collapsed {
+                } else if self.toast_expanded_for.is_some() {
+                    // Collapse once the pointer is neither inside the painted
+                    // toast (plus its margin) nor over the owning pane. The
+                    // geometry comes from the rect stored at paint time, so it
+                    // cannot drift from what was actually drawn — the previous
+                    // inline re-computation omitted the sidebar offset and cut
+                    // 2px off the toast's own bottom edge.
+                    let mx = event.coords.x as f32;
+                    let my = event.coords.y as f32;
+                    let on_toast = self.toast_zone_pane(mx, my) == self.toast_expanded_for;
+                    let on_pane = self.pane_id_at_pixel_coords(event.coords.x, event.coords.y)
+                        == self.toast_expanded_for;
+                    if !on_toast && !on_pane {
                         self.toast_expanded_for = None;
                         context.invalidate();
                     }
@@ -318,7 +295,7 @@ impl super::TermWindow {
         if matches!(event.kind, WMEK::Press(MousePress::Left)) {
             if let Some((pane_id, btn)) = self.toast_button_at(&event) {
                 if btn == "trigger" {
-                    self.toast_expanded_for = Some(pane_id);
+                    self.expand_toast(pane_id);
                     context.invalidate();
                     return;
                 } else if btn == "close" {
@@ -345,8 +322,6 @@ impl super::TermWindow {
                         Mux::get().remove_pane(pane_id);
                     } else if btn == "move-to-tab" {
                         self.execute_pane_to_tab(pane_id);
-                    } else if btn == "flip-split" {
-                        self.toggle_split_direction(pane_id);
                     } else {
                         self.apply_snap_layout_to_pane(pane_id, btn);
                     }
@@ -457,6 +432,29 @@ impl super::TermWindow {
             self.current_mouse_capture,
             None | Some(MouseCapture::TerminalPane(_))
         ) {
+            // Ctrl+Right-click in the terminal area opens the pane layout
+            // overlay, and the event stops here. This must run BEFORE
+            // mouse_event_terminal: an application that has grabbed the mouse
+            // (tmux with `mouse on`) otherwise receives the forwarded SGR
+            // report and acts on it itself — which is where the paste came
+            // from, since no terminaler binding matches CTRL+Right at all.
+            // The release is swallowed with the press so the application never
+            // sees half a click.
+            if matches!(event.kind, WMEK::Press(MousePress::Right)) {
+                // Any right press re-decides the pairing, so a swallow armed by
+                // an earlier press can never outlive its own click.
+                self.swallow_right_release = event.modifiers.contains(Modifiers::CTRL)
+                    && self.start_pane_overlay(&event);
+                if self.swallow_right_release {
+                    context.invalidate();
+                    return;
+                }
+            } else if matches!(event.kind, WMEK::Release(MousePress::Right))
+                && std::mem::take(&mut self.swallow_right_release)
+            {
+                return;
+            }
+
             self.mouse_event_terminal(
                 pane,
                 ClickPosition {
@@ -469,14 +467,6 @@ impl super::TermWindow {
                 context,
                 capture_mouse,
             );
-
-            // Ctrl+Right-click in terminal area: show pane layout overlay
-            if matches!(event.kind, WMEK::Press(MousePress::Right))
-                && event.modifiers.contains(Modifiers::CTRL)
-            {
-                self.start_pane_overlay(&event);
-            }
-
         }
 
         if prior_ui_item != ui_item {
@@ -488,6 +478,7 @@ impl super::TermWindow {
         self.current_mouse_event = None;
         self.hovered_pane_id = None;
         self.toast_expanded_for = None;
+        self.toast_rect = None;
         self.sidebar_flyout = None;
         self.update_title();
         context.set_cursor(Some(MouseCursor::Arrow));
@@ -1618,10 +1609,13 @@ impl super::TermWindow {
         }
     }
 
-    fn start_pane_overlay(&mut self, event: &MouseEvent) {
+    /// Open the layout grid over the pane under the pointer. Returns true when
+    /// an overlay was opened, meaning the caller must swallow the event; false
+    /// when the pointer was over no pane, so normal handling should continue.
+    fn start_pane_overlay(&mut self, event: &MouseEvent) -> bool {
         let pane_id = match self.pane_id_at_pixel_coords(event.coords.x, event.coords.y) {
             Some(id) => id,
-            None => return,
+            None => return false,
         };
 
         self.toast_expanded_for = None;
@@ -1629,6 +1623,7 @@ impl super::TermWindow {
             pane_id,
             revealed: true,
         });
+        true
     }
 
     fn pane_id_at_pixel_coords(&self, px: isize, py: isize) -> Option<mux::pane::PaneId> {
@@ -1692,7 +1687,10 @@ impl super::TermWindow {
         event: &MouseEvent,
         pane_id: mux::pane::PaneId,
     ) -> Option<&'static str> {
-        const BUTTON_NAMES: [&str; 10] = [
+        // Exactly the 9 cells of the 3x3 grid, in row-major order, matching
+        // what paint_pane_remove_overlay draws. (flip-split lives on the
+        // 10-button toast, which has a cell for it; this grid does not.)
+        const BUTTON_NAMES: [&str; 9] = [
             "close",
             "hsplit",
             "vsplit",
@@ -1702,7 +1700,6 @@ impl super::TermWindow {
             "dev",
             "claude-code",
             "move-to-tab",
-            "flip-split",
         ];
 
         let panes = self.get_panes_to_render();
@@ -2051,6 +2048,42 @@ impl super::TermWindow {
                 }
             },
             _ => {}
+        }
+    }
+
+    /// Expand the toast for `pane_id`, widening the stored rect to the expanded
+    /// toolbar right away.
+    ///
+    /// The stored rect otherwise still describes the narrow collapsed pill until
+    /// the next paint, and a Move arriving in that gap would land outside it and
+    /// collapse the toast the instant it opened.
+    fn expand_toast(&mut self, pane_id: mux::pane::PaneId) {
+        use crate::termwindow::render::pane::TOAST_WIDTH;
+        self.toast_expanded_for = Some(pane_id);
+        if let Some((id, x, y, w, h)) = self.toast_rect {
+            if id == pane_id && w < TOAST_WIDTH {
+                // The toolbar is right-aligned with the pill, so it grows leftwards.
+                self.toast_rect = Some((id, x + w - TOAST_WIDTH, y, TOAST_WIDTH, h));
+            }
+        }
+    }
+
+    /// The pane whose toast toolbar was painted under (x, y), testing the rect
+    /// stored at paint time inflated by TOAST_COLLAPSE_MARGIN.
+    ///
+    /// The toast is painted against the pane's *visual* bounds, which include
+    /// padding, border and the sidebar offset and so extend beyond the content
+    /// rect that `pane_id_at_pixel_coords` tests. Re-deriving the hover from the
+    /// pointer therefore drops it while the pointer is still over the toast, so
+    /// the keep-open test has to be this stored rect.
+    fn toast_zone_pane(&self, x: f32, y: f32) -> Option<mux::pane::PaneId> {
+        use crate::termwindow::render::pane::TOAST_COLLAPSE_MARGIN;
+        let (pane_id, tx, ty, tw, th) = self.toast_rect?;
+        let m = TOAST_COLLAPSE_MARGIN;
+        if x >= tx - m && x <= tx + tw + m && y >= ty - m && y <= ty + th + m {
+            Some(pane_id)
+        } else {
+            None
         }
     }
 

@@ -553,6 +553,16 @@ pub struct TermWindow {
     /// Where the open flyout was painted last frame (x, y, w, h) — used by the
     /// mouse keep-open logic, which must not depend on pixel-perfect adjacency.
     pub sidebar_flyout_rect: Option<(f32, f32, f32, f32)>,
+    /// Where the toast toolbar was painted last frame: (pane, x, y, w, h).
+    /// The toast is drawn against the pane's *visual* bounds (padding, border
+    /// and sidebar included), which extend past the content rect that
+    /// `pane_id_at_pixel_coords` tests — so hover must be kept by this stored
+    /// rect, never by re-resolving the pane under the pointer.
+    pub toast_rect: Option<(mux::pane::PaneId, f32, f32, f32, f32)>,
+    /// Set when a ctrl+right press opened the layout grid, so the release that
+    /// pairs with it is swallowed too and a mouse-grabbing application (tmux)
+    /// never sees half a click. Cleared as it is consumed.
+    pub swallow_right_release: bool,
     /// Sidebar width when a resize drag began — the drag applies mouse deltas
     /// to this, so grabbing anywhere in the handle's hit strip cannot jump the
     /// width (and with it the live-scaled rail font) on the first press.
@@ -1044,6 +1054,8 @@ impl TermWindow {
             pane_long_press: None,
             hovered_pane_id: None,
             toast_expanded_for: None,
+            toast_rect: None,
+            swallow_right_release: false,
             last_ui_item: None,
             is_click_to_focus_window: false,
             key_table_state: KeyTableState::default(),
