@@ -1195,9 +1195,14 @@ impl crate::TermWindow {
         &mut self,
         layers: &mut crate::quad::TripleLayerQuadAllocator,
     ) -> anyhow::Result<()> {
+        // Every path that paints nothing must also drop the stored rect, or a
+        // stale one would keep the mouse code believing the toast is still there.
         let hovered_id = match self.hovered_pane_id {
             Some(id) => id,
-            None => return Ok(()),
+            None => {
+                self.toast_rect = None;
+                return Ok(());
+            }
         };
 
         // Don't show toast if long-press overlay is active on the same pane
@@ -1206,6 +1211,7 @@ impl crate::TermWindow {
             .as_ref()
             .map_or(false, |lp| lp.revealed && lp.pane_id == hovered_id)
         {
+            self.toast_rect = None;
             return Ok(());
         }
 
@@ -1215,13 +1221,17 @@ impl crate::TermWindow {
             .as_ref()
             .map_or(false, |td| td.threshold_exceeded)
         {
+            self.toast_rect = None;
             return Ok(());
         }
 
         let panes = self.get_panes_to_render();
         let target_pos = match panes.iter().find(|p| p.pane.pane_id() == hovered_id) {
             Some(pos) => pos,
-            None => return Ok(()),
+            None => {
+                self.toast_rect = None;
+                return Ok(());
+            }
         };
 
         let cell_width = self.render_metrics.cell_size.width as f32;
@@ -1282,6 +1292,7 @@ impl crate::TermWindow {
 
         // Skip if pane too small
         if pane_visual_width < TOAST_MIN_PANE_WIDTH || pane_visual_height < TOAST_MIN_PANE_HEIGHT {
+            self.toast_rect = None;
             return Ok(());
         }
 
@@ -1301,6 +1312,8 @@ impl crate::TermWindow {
             // --- Expanded: full 9-button toolbar ---
             let toast_left = bg_right - TOAST_WIDTH;
             let toast_top = bg_y + toast_top_offset;
+            self.toast_rect =
+                Some((hovered_id, toast_left, toast_top, TOAST_WIDTH, TOAST_HEIGHT));
 
             self.filled_rectangle(
                 layers, 2,
@@ -1369,6 +1382,13 @@ impl crate::TermWindow {
             // --- Collapsed: single trigger pill (quad layout icon) ---
             let pill_left = bg_right - TOAST_COLLAPSED_WIDTH;
             let pill_top = bg_y + toast_top_offset;
+            self.toast_rect = Some((
+                hovered_id,
+                pill_left,
+                pill_top,
+                TOAST_COLLAPSED_WIDTH,
+                TOAST_HEIGHT,
+            ));
 
             self.filled_rectangle(
                 layers, 2,
