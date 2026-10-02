@@ -909,6 +909,15 @@ impl Tab {
         self.inner.lock().toggle_split_direction_for_pane(pane_id)
     }
 
+    /// Rearrange every pane of the tab around `pane_id`: it takes
+    /// `main_percent` of the width on the left, and all other panes stack
+    /// top to bottom on the right in their current order. No pane is created
+    /// or closed. Returns false, leaving the layout untouched, when the tab
+    /// has hidden panes, fewer than two panes, or too few rows for the stack.
+    pub fn focus_layout(&self, pane_id: PaneId, main_percent: u8) -> bool {
+        self.inner.lock().focus_layout(pane_id, main_percent)
+    }
+
     /// Adjusts the size of the active pane in the specified direction
     /// by the specified amount.
     pub fn adjust_pane_size(&self, direction: PaneDirection, amount: usize) {
@@ -1765,6 +1774,86 @@ impl TabInner {
         // same sequence rotate_clockwise uses after it rearranges the tree.
         self.pane.replace(cursor.tree());
         let size = self.size;
+        apply_sizes_from_splits(self.pane.as_mut().unwrap(), &size);
+        Mux::try_get().map(|mux| mux.notify(MuxNotification::TabResized(self.id)));
+        true
+    }
+
+    fn focus_layout(&mut self, pane_id: PaneId, main_percent: u8) -> bool {
+        // A hidden pane has no place in a fresh tree that would keep it
+        // hidden, so leave such a tab alone rather than reveal it.
+        if !self.hidden.is_empty() {
+            return false;
+        }
+        self.set_zoomed(false);
+
+        let panes: Vec<Arc<dyn Pane>> = self
+            .iter_panes_ignoring_zoom()
+            .into_iter()
+            .map(|p| p.pane)
+            .collect();
+        let Some(main_idx) = panes.iter().position(|p| p.pane_id() == pane_id) else {
+            return false;
+        };
+        if panes.len() < 2 {
+            return false;
+        }
+        let mut others = panes.clone();
+        let main = others.remove(main_idx);
+
+        // Every stacked pane needs one row, plus one divider row between
+        // neighbours; the main pane and the stack need a column each.
+        let size = self.size;
+        if size.rows < 2 * others.len() - 1 || size.cols < 3 {
+            return false;
+        }
+        let cell = self.cell_dimensions();
+        let sized = |cols: usize, rows: usize| TerminalSize {
+            rows,
+            cols,
+            pixel_width: cols.saturating_mul(cell.pixel_width),
+            pixel_height: rows.saturating_mul(cell.pixel_height),
+            dpi: size.dpi,
+        };
+
+        // One column of the width is the divider between main and stack.
+        let usable = size.cols - 1;
+        let main_cols = (usable * main_percent.min(100) as usize / 100).clamp(1, usable - 1);
+        let stack_cols = usable - main_cols;
+
+        // Each split hands its first child an equal share of what remains,
+        // so the stack ends up evenly divided; a remainder goes to the last.
+        fn stack(panes: &[Arc<dyn Pane>], cols: usize, rows: usize, sized: &dyn Fn(usize, usize) -> TerminalSize) -> Tree {
+            if panes.len() == 1 {
+                return Tree::Leaf(Arc::clone(&panes[0]));
+            }
+            let n = panes.len();
+            let first_rows = ((rows - (n - 1)) / n).max(1);
+            let rest_rows = rows - first_rows - 1;
+            Tree::Node {
+                left: Box::new(Tree::Leaf(Arc::clone(&panes[0]))),
+                right: Box::new(stack(&panes[1..], cols, rest_rows, sized)),
+                data: Some(SplitDirectionAndSize {
+                    direction: SplitDirection::Vertical,
+                    first: sized(cols, first_rows),
+                    second: sized(cols, rest_rows),
+                }),
+            }
+        }
+
+        let root = Tree::Node {
+            left: Box::new(Tree::Leaf(main)),
+            right: Box::new(stack(&others, stack_cols, size.rows, &sized)),
+            data: Some(SplitDirectionAndSize {
+                direction: SplitDirection::Horizontal,
+                first: sized(main_cols, size.rows),
+                second: sized(stack_cols, size.rows),
+            }),
+        };
+
+        self.pane.replace(root);
+        // The main pane is the first leaf in preorder, so index 0.
+        self.active = 0;
         apply_sizes_from_splits(self.pane.as_mut().unwrap(), &size);
         Mux::try_get().map(|mux| mux.notify(MuxNotification::TabResized(self.id)));
         true
@@ -2855,6 +2944,55 @@ mod test {
         for p in &panes {
             assert!(p.height > 0 && p.width > 0, "pane {} collapsed", p.index);
         }
+    }
+
+    #[test]
+    fn focus_layout_puts_the_pane_left_and_stacks_the_rest() {
+        let size = TerminalSize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 800,
+            pixel_height: 600,
+            dpi: 96,
+        };
+        let tab = Tab::new(&size);
+        tab.assign_pane(&FakePane::new(1, size));
+        // A lone pane has nothing to stack.
+        assert!(!tab.focus_layout(1, 60));
+
+        // Three panes side by side: 1 | 2 | 3.
+        for (idx, id) in [(0, 2), (1, 3)] {
+            let req = SplitRequest {
+                direction: SplitDirection::Horizontal,
+                ..Default::default()
+            };
+            let split = tab.compute_split_size(idx, req).unwrap();
+            tab.split_and_insert(idx, req, FakePane::new(id, split.second))
+                .unwrap();
+        }
+
+        // Focus the middle pane.
+        assert!(tab.focus_layout(2, 60));
+        let panes = tab.iter_panes();
+        let ids: Vec<PaneId> = panes.iter().map(|p| p.pane.pane_id()).collect();
+        assert_eq!(ids, vec![2, 1, 3], "main first, then the others in order");
+
+        let (main, stack) = (&panes[0], &panes[1..]);
+        assert!(main.is_active);
+        assert_eq!((main.left, main.top, main.height), (0, 0, 24));
+        assert_eq!(main.width, 79 * 60 / 100);
+        for p in stack {
+            assert_eq!(p.left, main.width + 1, "stack sits right of the divider");
+            assert_eq!(p.width, 80 - main.width - 1);
+            assert!(p.height > 0);
+        }
+        assert_eq!(stack[0].top, 0);
+        assert_eq!(stack[1].top, stack[0].height + 1, "stacked top to bottom");
+        assert_eq!(stack[0].height + 1 + stack[1].height, 24, "stack fills the height");
+
+        // An unknown pane leaves the layout alone.
+        assert!(!tab.focus_layout(99, 60));
+        assert_eq!(tab.iter_panes()[0].pane.pane_id(), 2);
     }
 
     #[test]

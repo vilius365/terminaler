@@ -3174,7 +3174,32 @@ impl TermWindow {
         }
     }
 
+    /// Focus layout: `pane_id` large on the left (60% of the width), every
+    /// other pane of the tab stacked top to bottom on the right.
+    pub fn focus_layout(&mut self, pane_id: PaneId) {
+        let mux = Mux::get();
+        let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
+            Some(tab) => tab,
+            None => return,
+        };
+        if tab.focus_layout(pane_id, 60) {
+            drop(tab);
+            drop(mux);
+            self.invalidate_tab_sidebar();
+        } else {
+            log::info!("focus layout: nothing to rearrange around pane {}", pane_id);
+        }
+    }
+
     pub fn apply_snap_layout_to_pane(&mut self, pane_id: PaneId, name: &str) {
+        // Not presets: these rearrange the panes that already exist rather
+        // than splitting the target into new ones. flip-split used to fall
+        // through to apply_snap_layout and only log "Unknown snap layout".
+        match name {
+            "flip-split" => return self.toggle_split_direction(pane_id),
+            "focus" => return self.focus_layout(pane_id),
+            _ => {}
+        }
         let mux = Mux::get();
         let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
             Some(tab) => tab,
