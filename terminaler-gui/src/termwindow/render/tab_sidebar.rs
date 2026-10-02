@@ -499,7 +499,36 @@ impl crate::TermWindow {
                 px_used += eyebrow_px;
             }
 
-            for session in &snap.sessions {
+            // Persona sessions (ol-* instance ids, started by persona.sh) go
+            // last, under their own sub-heading, so the sessions the user
+            // started by hand do not get lost among them (user request,
+            // 2026-10-02). The heading renders only with room for a tile
+            // under it; otherwise every persona tile goes to the +N count.
+            let (personas, own): (Vec<_>, Vec<_>) =
+                snap.sessions.iter().partition(|s| s.is_persona());
+            let mut personas_heading: Option<bool> = None;
+            for session in own.into_iter().chain(personas) {
+                if session.is_persona() {
+                    let shown = *personas_heading.get_or_insert_with(|| {
+                        let fits = px_used + eyebrow_px + tile_px <= tile_budget_px;
+                        if fits {
+                            children.push(sidebar_eyebrow(
+                                title_font,
+                                "\u{00b7} personas",
+                                None,
+                                theme,
+                                sidebar_width,
+                                stale,
+                            ));
+                            px_used += eyebrow_px;
+                        }
+                        fits
+                    });
+                    if !shown {
+                        tiles_hidden += 1;
+                        continue;
+                    }
+                }
                 if px_used + tile_px > tile_budget_px {
                     tiles_hidden += 1;
                     continue;

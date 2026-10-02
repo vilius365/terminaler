@@ -47,6 +47,16 @@ pub struct TmuxSessionEntry {
     pub attachable: bool,
 }
 
+impl TmuxSessionEntry {
+    /// A persona session started through persona.sh: the interconnect daemon
+    /// gives those an `ol-` instance id (OVERLORD_PREFIX in registry.ts). The
+    /// sidebar lists them apart from the sessions the user started by hand.
+    pub fn is_persona(&self) -> bool {
+        self.agent_is_instance
+            && self.agent.as_deref().map_or(false, |a| a.starts_with("ol-"))
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct BoxSnapshot {
     pub box_name: String,
@@ -664,6 +674,24 @@ mod tests {
         assert_eq!(sessions[1].windows, 3);
         assert!(sessions[1].attached);
         assert_eq!(sessions[0].agent, None);
+    }
+
+    #[test]
+    fn persona_sessions_are_ol_instances_only() {
+        let entry = |agent: Option<&str>, is_instance: bool| TmuxSessionEntry {
+            session: "invade-genghis".to_string(),
+            windows: 1,
+            attached: false,
+            agent: agent.map(str::to_string),
+            agent_is_instance: is_instance,
+            attachable: true,
+        };
+        assert!(entry(Some("ol-vault"), true).is_persona());
+        // A bare word is a session started by hand, not by persona.sh.
+        assert!(!entry(Some("witch"), true).is_persona());
+        // A generic agent type is not an instance id, whatever it spells.
+        assert!(!entry(Some("ol-claude"), false).is_persona());
+        assert!(!entry(None, false).is_persona());
     }
 
     #[test]
