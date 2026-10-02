@@ -91,29 +91,38 @@ const ICON_CLOSE: &[Poly] = &[
 ];
 
 // ---------------------------------------------------------------------------
-// Toast toolbar constants (pub(crate) for hit-testing in mouseevent.rs)
+// Pane toolbar (toast) and ctrl+right-click grid geometry. Both are shared
+// with the hit-testing in mouseevent.rs, so painting and clicking cannot drift.
+//
+// Sizes are given at 96 DPI and scaled to the window's DPI, like the text.
+// They used to be raw pixels: on Wayland a fractionally scaled monitor reports
+// an integer output scale (2 for 1.25 and 1.33), the text doubled and the
+// toolbar did not, so it shrank to half size whenever the window sat on such a
+// monitor (user report, 2026-10-02). The scale never goes below 1.
 // ---------------------------------------------------------------------------
-pub(crate) const TOAST_BTN_SIZE: f32 = 30.0;
-pub(crate) const TOAST_ICON_SIZE: f32 = 24.0;
-pub(crate) const TOAST_ICON_INSET: f32 = (TOAST_BTN_SIZE - TOAST_ICON_SIZE) / 2.0;
-pub(crate) const TOAST_GAP: f32 = 2.0;
-pub(crate) const TOAST_PADDING: f32 = 4.0;
-pub(crate) const TOAST_COUNT: usize = 10;
-/// Total width: padding + 9*btn + 8*gap + padding
-pub(crate) const TOAST_WIDTH: f32 =
-    TOAST_PADDING * 2.0 + TOAST_COUNT as f32 * TOAST_BTN_SIZE + (TOAST_COUNT - 1) as f32 * TOAST_GAP;
-/// Total height: padding + btn + padding
-pub(crate) const TOAST_HEIGHT: f32 = TOAST_PADDING * 2.0 + TOAST_BTN_SIZE;
-/// Collapsed trigger: padding + one button + padding
-pub(crate) const TOAST_COLLAPSED_WIDTH: f32 = TOAST_PADDING * 2.0 + TOAST_BTN_SIZE;
-/// Extra margin around expanded toast before auto-collapse
-pub(crate) const TOAST_COLLAPSE_MARGIN: f32 = 8.0;
-/// Minimum pane pixel width to show the toast (collapsed trigger fits in small panes)
-pub(crate) const TOAST_MIN_PANE_WIDTH: f32 = TOAST_COLLAPSED_WIDTH + 10.0;
-/// Minimum pane pixel height to show the toast
-pub(crate) const TOAST_MIN_PANE_HEIGHT: f32 = TOAST_HEIGHT + 10.0;
 
-pub(crate) const TOAST_BUTTON_NAMES: [&str; TOAST_COUNT] = [
+/// The window's UI scale relative to 96 DPI, at least 1.
+pub(crate) fn ui_scale(dpi: usize) -> f32 {
+    (dpi as f32 / 96.0).max(1.0)
+}
+
+pub(crate) const TOAST_BUTTON_NAMES: [&str; 11] = [
+    "close",
+    "hsplit",
+    "vsplit",
+    "quad",
+    "triple-right",
+    "triple-bottom",
+    "dev",
+    "claude-code",
+    "focus",
+    "move-to-tab",
+    "flip-split",
+];
+
+/// The ctrl+right-click grid, row-major, three per row. The first nine are
+/// the original 3x3; "focus" opens a fourth row.
+pub(crate) const OVERLAY_BUTTON_NAMES: [&str; 10] = [
     "close",
     "hsplit",
     "vsplit",
@@ -123,31 +132,140 @@ pub(crate) const TOAST_BUTTON_NAMES: [&str; TOAST_COUNT] = [
     "dev",
     "claude-code",
     "move-to-tab",
-    "flip-split",
+    "focus",
 ];
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ToastGeom {
+    pub btn: f32,
+    pub icon: f32,
+    pub inset: f32,
+    pub gap: f32,
+    pub padding: f32,
+    /// Expanded toolbar: padding + n buttons + (n-1) gaps + padding.
+    pub width: f32,
+    /// padding + button + padding.
+    pub height: f32,
+    /// Collapsed trigger: padding + one button + padding.
+    pub collapsed_width: f32,
+    /// Extra margin around the expanded toolbar before it auto-collapses.
+    pub collapse_margin: f32,
+    /// Smallest pane that shows the toolbar at all.
+    pub min_pane_width: f32,
+    pub min_pane_height: f32,
+    /// Gap between the pane's top edge and the toolbar.
+    pub top_offset: f32,
+}
+
+impl ToastGeom {
+    pub fn for_dpi(dpi: usize) -> Self {
+        let s = ui_scale(dpi);
+        let (btn, icon, gap, padding) = (30.0 * s, 24.0 * s, 2.0 * s, 4.0 * s);
+        let n = TOAST_BUTTON_NAMES.len() as f32;
+        let height = padding * 2.0 + btn;
+        let collapsed_width = padding * 2.0 + btn;
+        Self {
+            btn,
+            icon,
+            inset: (btn - icon) / 2.0,
+            gap,
+            padding,
+            width: padding * 2.0 + n * btn + (n - 1.0) * gap,
+            height,
+            collapsed_width,
+            collapse_margin: 8.0 * s,
+            min_pane_width: collapsed_width + 10.0 * s,
+            min_pane_height: height + 10.0 * s,
+            top_offset: 10.0 * s,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct OverlayGrid {
+    pub btn: f32,
+    pub gap: f32,
+    pub inset: f32,
+    pub icon: f32,
+    pub cols: usize,
+    pub rows: usize,
+}
+
+impl OverlayGrid {
+    pub fn for_dpi(dpi: usize) -> Self {
+        let s = ui_scale(dpi);
+        let cols = 3;
+        Self {
+            btn: 60.0 * s,
+            gap: 8.0 * s,
+            inset: 6.0 * s,
+            icon: 48.0 * s,
+            cols,
+            rows: (OVERLAY_BUTTON_NAMES.len() + cols - 1) / cols,
+        }
+    }
+
+    pub fn size(&self) -> (f32, f32) {
+        (
+            self.cols as f32 * self.btn + (self.cols - 1) as f32 * self.gap,
+            self.rows as f32 * self.btn + (self.rows - 1) as f32 * self.gap,
+        )
+    }
+
+    /// Top-left of the grid centred in a pane.
+    pub fn origin(&self, pane_left: f32, pane_top: f32, pane_w: f32, pane_h: f32) -> (f32, f32) {
+        let (w, h) = self.size();
+        (pane_left + (pane_w - w) / 2.0, pane_top + (pane_h - h) / 2.0)
+    }
+
+    /// Top-left of button `idx`.
+    pub fn cell(&self, origin: (f32, f32), idx: usize) -> (f32, f32) {
+        let (col, row) = (idx % self.cols, idx / self.cols);
+        (
+            origin.0 + col as f32 * (self.btn + self.gap),
+            origin.1 + row as f32 * (self.btn + self.gap),
+        )
+    }
+
+    /// The button under (x, y), if any; gaps and empty cells are None.
+    pub fn button_at(&self, origin: (f32, f32), x: f32, y: f32) -> Option<&'static str> {
+        (0..OVERLAY_BUTTON_NAMES.len()).find_map(|idx| {
+            let (bl, bt) = self.cell(origin, idx);
+            (x >= bl && x < bl + self.btn && y >= bt && y < bt + self.btn)
+                .then(|| OVERLAY_BUTTON_NAMES[idx])
+        })
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Layout icons as fractional rectangles — rendered directly as GPU quads via
 // filled_rectangle, bypassing the poly rasteriser entirely.  Each rect is
 // (x_frac, y_frac, w_frac, h_frac) relative to the icon area.
 // ---------------------------------------------------------------------------
-const TOAST_LAYOUT_RECTS: [&[(f32, f32, f32, f32)]; 7] = [
-    // hsplit: two vertical halves
-    &[(0.0, 0.0, 0.46, 1.0), (0.54, 0.0, 0.46, 1.0)],
-    // vsplit: two horizontal halves
-    &[(0.0, 0.0, 1.0, 0.46), (0.0, 0.54, 1.0, 0.46)],
-    // quad: four quadrants
-    &[(0.0, 0.0, 0.46, 0.46), (0.54, 0.0, 0.46, 0.46),
-      (0.0, 0.54, 0.46, 0.46), (0.54, 0.54, 0.46, 0.46)],
-    // triple-right: big left + two right
-    &[(0.0, 0.0, 0.62, 1.0), (0.71, 0.0, 0.29, 0.46), (0.71, 0.54, 0.29, 0.46)],
-    // triple-bottom: big top + two bottom
-    &[(0.0, 0.0, 1.0, 0.62), (0.0, 0.71, 0.46, 0.29), (0.54, 0.71, 0.46, 0.29)],
-    // dev: left + right-top big + right-bottom small
-    &[(0.0, 0.0, 0.46, 1.0), (0.54, 0.0, 0.46, 0.62), (0.54, 0.71, 0.46, 0.29)],
-    // claude-code: big top + thin bottom
-    &[(0.0, 0.0, 1.0, 0.71), (0.0, 0.79, 1.0, 0.21)],
-];
+fn layout_icon_rects(name: &str) -> Option<&'static [(f32, f32, f32, f32)]> {
+    Some(match name {
+        // two vertical halves
+        "hsplit" => &[(0.0, 0.0, 0.46, 1.0), (0.54, 0.0, 0.46, 1.0)],
+        // two horizontal halves
+        "vsplit" => &[(0.0, 0.0, 1.0, 0.46), (0.0, 0.54, 1.0, 0.46)],
+        // four quadrants
+        "quad" => &[(0.0, 0.0, 0.46, 0.46), (0.54, 0.0, 0.46, 0.46),
+                    (0.0, 0.54, 0.46, 0.46), (0.54, 0.54, 0.46, 0.46)],
+        // big left + two right
+        "triple-right" => &[(0.0, 0.0, 0.62, 1.0), (0.71, 0.0, 0.29, 0.46), (0.71, 0.54, 0.29, 0.46)],
+        // big top + two bottom
+        "triple-bottom" => &[(0.0, 0.0, 1.0, 0.62), (0.0, 0.71, 0.46, 0.29), (0.54, 0.71, 0.46, 0.29)],
+        // left + right-top big + right-bottom small
+        "dev" => &[(0.0, 0.0, 0.46, 1.0), (0.54, 0.0, 0.46, 0.62), (0.54, 0.71, 0.46, 0.29)],
+        // big top + thin bottom
+        "claude-code" => &[(0.0, 0.0, 1.0, 0.71), (0.0, 0.79, 1.0, 0.21)],
+        // focus: wide main pane + three thin panes stacked on the right
+        "focus" => &[(0.0, 0.0, 0.6, 1.0), (0.68, 0.0, 0.32, 0.28),
+                     (0.68, 0.36, 0.32, 0.28), (0.68, 0.72, 0.32, 0.28)],
+        "flip-split" => ICON_FLIP_SPLIT,
+        _ => return None,
+    })
+}
 
 /// Flip-split icon: a tall half on the left and two stacked halves on the
 /// right, showing both split arrangements side by side.
@@ -171,6 +289,40 @@ const ICON_MOVE_TAB: &[Poly] = &[
 ];
 
 impl crate::TermWindow {
+    /// Draw the icon of toolbar/grid button `name` into a `size` square at
+    /// (x, y). Shared by the toast and the ctrl+right-click grid.
+    fn paint_button_icon(
+        &mut self,
+        layers: &mut crate::quad::TripleLayerQuadAllocator,
+        name: &str,
+        x: f32,
+        y: f32,
+        size: f32,
+        color: window::color::LinearRgba,
+    ) -> anyhow::Result<()> {
+        let sz: euclid::Size2D<f32, window::PixelUnit> = euclid::size2(size, size);
+        let poly = match name {
+            "close" => Some(ICON_CLOSE),
+            "move-to-tab" => Some(ICON_MOVE_TAB),
+            _ => None,
+        };
+        if let Some(poly) = poly {
+            self.poly_quad(layers, 2, euclid::point2(x, y), poly, 1, sz, color)
+                .with_context(|| format!("{} icon", name))?;
+        } else if let Some(rects) = layout_icon_rects(name) {
+            for &(xf, yf, wf, hf) in rects {
+                self.filled_rectangle(
+                    layers,
+                    2,
+                    euclid::rect(x + xf * size, y + yf * size, wf * size, hf * size),
+                    color,
+                )
+                .with_context(|| format!("{} icon", name))?;
+            }
+        }
+        Ok(())
+    }
+
     fn paint_pane_box_model(&mut self, pos: &PositionedPane) -> anyhow::Result<()> {
         let computed = self.build_pane(pos)?;
         let mut ui_items = computed.ui_items();
@@ -1116,76 +1268,25 @@ impl crate::TermWindow {
         )
         .context("paint_pane_remove_overlay dim")?;
 
-        // 3×3 button grid centered in pane
-        // Each button 60×60px, 8px gaps → grid 196×196
-        let btn_size = 60.0f32;
-        let gap = 8.0f32;
-        let cols = 3;
-        let rows = 3;
-        let grid_w = (cols as f32) * btn_size + ((cols - 1) as f32) * gap;
-        let grid_h = (rows as f32) * btn_size + ((rows - 1) as f32) * gap;
-        let cx = pane_left + pane_width / 2.0;
-        let cy = pane_top + pane_height / 2.0;
-        let grid_left = cx - grid_w / 2.0;
-        let grid_top = cy - grid_h / 2.0;
+        // Button grid centred in the pane, three per row (OverlayGrid).
+        let grid = OverlayGrid::for_dpi(self.dimensions.dpi);
+        let origin = grid.origin(pane_left, pane_top, pane_width, pane_height);
 
         let white = window::color::LinearRgba(1.0, 1.0, 1.0, 0.85);
         let close_bg = window::color::LinearRgba(0.973, 0.318, 0.286, 0.95);
         let layout_bg = window::color::LinearRgba(0.133, 0.133, 0.133, 0.95);
         let tab_bg = window::color::LinearRgba(0.302, 0.620, 1.0, 0.8);
-        let icon_sz: euclid::Size2D<f32, window::PixelUnit> = euclid::size2(48.0, 48.0);
-        let icon_area = 48.0f32;
 
-        for row in 0..rows {
-            for col in 0..cols {
-                let idx = row * cols + col;
-                let bl = grid_left + col as f32 * (btn_size + gap);
-                let bt = grid_top + row as f32 * (btn_size + gap);
-
-                // Button background (filled rect)
-                let bg = match idx {
-                    0 => close_bg,
-                    8 => tab_bg,
-                    _ => layout_bg,
-                };
-                self.filled_rectangle(
-                    layers, 2,
-                    euclid::rect(bl, bt, btn_size, btn_size),
-                    bg,
-                ).context("overlay button bg")?;
-
-                // Icon foreground (6px padding → 48×48 interior)
-                let ix = bl + 6.0;
-                let iy = bt + 6.0;
-
-                if idx == 0 {
-                    // Close: X shape via poly_quad
-                    self.poly_quad(
-                        layers, 2, euclid::point2(ix, iy),
-                        ICON_CLOSE, 1, icon_sz, white,
-                    ).context("overlay close icon")?;
-                } else if idx == 8 {
-                    // Move-to-tab: arrow via poly_quad
-                    self.poly_quad(
-                        layers, 2, euclid::point2(ix, iy),
-                        ICON_MOVE_TAB, 1, icon_sz, white,
-                    ).context("overlay move-tab icon")?;
-                } else if idx >= 1 && idx <= 7 {
-                    // Layout icons: filled_rectangle quads
-                    for &(xf, yf, wf, hf) in TOAST_LAYOUT_RECTS[idx - 1] {
-                        self.filled_rectangle(
-                            layers, 2,
-                            euclid::rect(
-                                ix + xf * icon_area,
-                                iy + yf * icon_area,
-                                wf * icon_area,
-                                hf * icon_area,
-                            ),
-                            white,
-                        ).context("overlay layout icon")?;
-                    }
-                }
-            }
+        for (idx, &name) in OVERLAY_BUTTON_NAMES.iter().enumerate() {
+            let (bl, bt) = grid.cell(origin, idx);
+            let bg = match name {
+                "close" => close_bg,
+                "move-to-tab" => tab_bg,
+                _ => layout_bg,
+            };
+            self.filled_rectangle(layers, 2, euclid::rect(bl, bt, grid.btn, grid.btn), bg)
+                .context("overlay button bg")?;
+            self.paint_button_icon(layers, name, bl + grid.inset, bt + grid.inset, grid.icon, white)?;
         }
 
         Ok(())
@@ -1290,138 +1391,109 @@ impl crate::TermWindow {
         let pane_visual_width = bg_right - bg_x;
         let pane_visual_height = bg_bottom - bg_y;
 
+        let geom = ToastGeom::for_dpi(self.dimensions.dpi);
+
         // Skip if pane too small
-        if pane_visual_width < TOAST_MIN_PANE_WIDTH || pane_visual_height < TOAST_MIN_PANE_HEIGHT {
+        if pane_visual_width < geom.min_pane_width || pane_visual_height < geom.min_pane_height {
             self.toast_rect = None;
             return Ok(());
         }
 
         let is_expanded = self.toast_expanded_for == Some(hovered_id)
-            && pane_visual_width >= TOAST_WIDTH + 10.0;
+            && pane_visual_width >= geom.width + 10.0;
 
         let bg_color = window::color::LinearRgba(0.102, 0.102, 0.102, 0.55);
         let btn_bg = window::color::LinearRgba(1.0, 1.0, 1.0, 0.10);
         let white = window::color::LinearRgba(1.0, 1.0, 1.0, 0.92);
-        let icon_sz: euclid::Size2D<f32, window::PixelUnit> =
-            euclid::size2(TOAST_ICON_SIZE, TOAST_ICON_SIZE);
-
-        // Offset toast from the top edge of the pane
-        let toast_top_offset = 10.0f32;
+        let toast_top = bg_y + geom.top_offset;
 
         if is_expanded {
-            // --- Expanded: full 9-button toolbar ---
-            let toast_left = bg_right - TOAST_WIDTH;
-            let toast_top = bg_y + toast_top_offset;
-            self.toast_rect =
-                Some((hovered_id, toast_left, toast_top, TOAST_WIDTH, TOAST_HEIGHT));
+            // --- Expanded: the full toolbar ---
+            let toast_left = bg_right - geom.width;
+            self.toast_rect = Some((hovered_id, toast_left, toast_top, geom.width, geom.height));
 
             self.filled_rectangle(
                 layers, 2,
-                euclid::rect(toast_left, toast_top, TOAST_WIDTH, TOAST_HEIGHT),
+                euclid::rect(toast_left, toast_top, geom.width, geom.height),
                 bg_color,
             ).context("toast toolbar bg")?;
 
             let close_btn_bg = window::color::LinearRgba(0.973, 0.318, 0.286, 0.45);
 
-            for i in 0..TOAST_COUNT {
-                let bx = toast_left + TOAST_PADDING + i as f32 * (TOAST_BTN_SIZE + TOAST_GAP);
-                let by = toast_top + TOAST_PADDING;
-
-                let bg = if i == 0 { close_btn_bg } else { btn_bg };
-                self.filled_rectangle(
-                    layers, 2,
-                    euclid::rect(bx, by, TOAST_BTN_SIZE, TOAST_BTN_SIZE),
-                    bg,
-                ).context("toast btn bg")?;
-
-                let ix = bx + TOAST_ICON_INSET;
-                let iy = by + TOAST_ICON_INSET;
-
-                if i == 0 {
-                    self.poly_quad(
-                        layers, 2, euclid::point2(ix, iy),
-                        ICON_CLOSE, 1, icon_sz, white,
-                    ).context("toast close icon")?;
-                } else if i == 8 {
-                    self.poly_quad(
-                        layers, 2, euclid::point2(ix, iy),
-                        ICON_MOVE_TAB, 1, icon_sz, white,
-                    ).context("toast move-tab icon")?;
-                } else if i == 9 {
-                    // Flip-split: one half upright and one laid on its side, so
-                    // the icon reads as the two arrangements the button swaps
-                    // between rather than as another layout preset.
-                    for &(xf, yf, wf, hf) in ICON_FLIP_SPLIT {
-                        self.filled_rectangle(
-                            layers, 2,
-                            euclid::rect(
-                                ix + xf * TOAST_ICON_SIZE,
-                                iy + yf * TOAST_ICON_SIZE,
-                                wf * TOAST_ICON_SIZE,
-                                hf * TOAST_ICON_SIZE,
-                            ),
-                            white,
-                        ).context("toast flip-split icon")?;
-                    }
-                } else {
-                    for &(xf, yf, wf, hf) in TOAST_LAYOUT_RECTS[i - 1] {
-                        self.filled_rectangle(
-                            layers, 2,
-                            euclid::rect(
-                                ix + xf * TOAST_ICON_SIZE,
-                                iy + yf * TOAST_ICON_SIZE,
-                                wf * TOAST_ICON_SIZE,
-                                hf * TOAST_ICON_SIZE,
-                            ),
-                            white,
-                        ).context("toast layout icon")?;
-                    }
-                }
+            for (i, &name) in TOAST_BUTTON_NAMES.iter().enumerate() {
+                let bx = toast_left + geom.padding + i as f32 * (geom.btn + geom.gap);
+                let by = toast_top + geom.padding;
+                let bg = if name == "close" { close_btn_bg } else { btn_bg };
+                self.filled_rectangle(layers, 2, euclid::rect(bx, by, geom.btn, geom.btn), bg)
+                    .context("toast btn bg")?;
+                self.paint_button_icon(layers, name, bx + geom.inset, by + geom.inset, geom.icon, white)?;
             }
         } else {
             // --- Collapsed: single trigger pill (quad layout icon) ---
-            let pill_left = bg_right - TOAST_COLLAPSED_WIDTH;
-            let pill_top = bg_y + toast_top_offset;
-            self.toast_rect = Some((
-                hovered_id,
-                pill_left,
-                pill_top,
-                TOAST_COLLAPSED_WIDTH,
-                TOAST_HEIGHT,
-            ));
+            let pill_left = bg_right - geom.collapsed_width;
+            self.toast_rect = Some((hovered_id, pill_left, toast_top, geom.collapsed_width, geom.height));
 
             self.filled_rectangle(
                 layers, 2,
-                euclid::rect(pill_left, pill_top, TOAST_COLLAPSED_WIDTH, TOAST_HEIGHT),
+                euclid::rect(pill_left, toast_top, geom.collapsed_width, geom.height),
                 bg_color,
             ).context("toast trigger bg")?;
 
-            let bx = pill_left + TOAST_PADDING;
-            let by = pill_top + TOAST_PADDING;
-            self.filled_rectangle(
-                layers, 2,
-                euclid::rect(bx, by, TOAST_BTN_SIZE, TOAST_BTN_SIZE),
-                btn_bg,
-            ).context("toast trigger btn bg")?;
-
-            // Quad layout icon (index 2 = TOAST_LAYOUT_RECTS[2])
-            let ix = bx + TOAST_ICON_INSET;
-            let iy = by + TOAST_ICON_INSET;
-            for &(xf, yf, wf, hf) in TOAST_LAYOUT_RECTS[2] {
-                self.filled_rectangle(
-                    layers, 2,
-                    euclid::rect(
-                        ix + xf * TOAST_ICON_SIZE,
-                        iy + yf * TOAST_ICON_SIZE,
-                        wf * TOAST_ICON_SIZE,
-                        hf * TOAST_ICON_SIZE,
-                    ),
-                    white,
-                ).context("toast trigger icon")?;
-            }
+            let bx = pill_left + geom.padding;
+            let by = toast_top + geom.padding;
+            self.filled_rectangle(layers, 2, euclid::rect(bx, by, geom.btn, geom.btn), btn_bg)
+                .context("toast trigger btn bg")?;
+            self.paint_button_icon(layers, "quad", bx + geom.inset, by + geom.inset, geom.icon, white)?;
         }
 
         Ok(())
     }
 
+}
+
+#[cfg(test)]
+mod geometry_tests {
+    use super::*;
+
+    #[test]
+    fn toolbar_scales_with_dpi_but_never_shrinks() {
+        let base = ToastGeom::for_dpi(96);
+        assert_eq!(base.width, 4.0 * 2.0 + 11.0 * 30.0 + 10.0 * 2.0);
+        let doubled = ToastGeom::for_dpi(192);
+        assert_eq!(doubled.btn, base.btn * 2.0);
+        assert_eq!(doubled.width, base.width * 2.0);
+        assert_eq!(doubled.top_offset, base.top_offset * 2.0);
+        // Below 96 DPI the 96-DPI size is the floor.
+        assert_eq!(ToastGeom::for_dpi(72).btn, base.btn);
+    }
+
+    #[test]
+    fn grid_hit_test_matches_the_painted_cells() {
+        let grid = OverlayGrid::for_dpi(192);
+        assert_eq!(grid.rows, 4, "focus opens a fourth row");
+        let origin = (100.0, 50.0);
+        for (idx, &name) in OVERLAY_BUTTON_NAMES.iter().enumerate() {
+            let (x, y) = grid.cell(origin, idx);
+            assert_eq!(grid.button_at(origin, x + 1.0, y + 1.0), Some(name));
+            assert_eq!(grid.button_at(origin, x + grid.btn - 1.0, y + grid.btn - 1.0), Some(name));
+        }
+        // focus sits at the start of the fourth row.
+        assert_eq!(grid.cell(origin, 9), (origin.0, origin.1 + 3.0 * (grid.btn + grid.gap)));
+        // Gaps and the empty cells after focus hit nothing.
+        let (x, y) = grid.cell(origin, 0);
+        assert_eq!(grid.button_at(origin, x + grid.btn + grid.gap / 2.0, y + 1.0), None);
+        let (x, y) = grid.cell(origin, 10);
+        assert_eq!(grid.button_at(origin, x + 1.0, y + 1.0), None);
+    }
+
+    #[test]
+    fn every_button_has_an_icon() {
+        for name in TOAST_BUTTON_NAMES.iter().chain(OVERLAY_BUTTON_NAMES.iter()) {
+            assert!(
+                matches!(*name, "close" | "move-to-tab") || layout_icon_rects(name).is_some(),
+                "no icon for {}",
+                name
+            );
+        }
+    }
 }

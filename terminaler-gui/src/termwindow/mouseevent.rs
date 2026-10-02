@@ -1687,20 +1687,9 @@ impl super::TermWindow {
         event: &MouseEvent,
         pane_id: mux::pane::PaneId,
     ) -> Option<&'static str> {
-        // Exactly the 9 cells of the 3x3 grid, in row-major order, matching
-        // what paint_pane_remove_overlay draws. (flip-split lives on the
-        // 10-button toast, which has a cell for it; this grid does not.)
-        const BUTTON_NAMES: [&str; 9] = [
-            "close",
-            "hsplit",
-            "vsplit",
-            "quad",
-            "triple-right",
-            "triple-bottom",
-            "dev",
-            "claude-code",
-            "move-to-tab",
-        ];
+        // Same OverlayGrid geometry and names paint_pane_remove_overlay draws.
+        use crate::termwindow::render::pane::OverlayGrid;
+        let grid = OverlayGrid::for_dpi(self.dimensions.dpi);
 
         let panes = self.get_panes_to_render();
         let (padding_left, padding_top) = self.padding_left_top();
@@ -1735,38 +1724,8 @@ impl super::TermWindow {
             let pane_width = pos.width as f32 * cell_width;
             let pane_height = pos.height as f32 * cell_height;
 
-            let btn_size = 60.0f32;
-            let gap = 8.0f32;
-            let cols = 3usize;
-            let rows = 3usize;
-            let grid_w = cols as f32 * btn_size + (cols - 1) as f32 * gap;
-            let grid_h = rows as f32 * btn_size + (rows - 1) as f32 * gap;
-            let cx = pane_left + pane_width / 2.0;
-            let cy = pane_top + pane_height / 2.0;
-            let grid_left = cx - grid_w / 2.0;
-            let grid_top = cy - grid_h / 2.0;
-
-            // Check if inside grid bounds
-            if mx < grid_left || mx >= grid_left + grid_w
-                || my < grid_top || my >= grid_top + grid_h
-            {
-                return None;
-            }
-
-            let rel_x = mx - grid_left;
-            let rel_y = my - grid_top;
-            let col = (rel_x / (btn_size + gap)) as usize;
-            let row = (rel_y / (btn_size + gap)) as usize;
-
-            // Check we're inside a button, not in a gap
-            let btn_left = col as f32 * (btn_size + gap);
-            let btn_top_y = row as f32 * (btn_size + gap);
-            if rel_x > btn_left + btn_size || rel_y > btn_top_y + btn_size {
-                return None;
-            }
-
-            let idx = row * cols + col;
-            return BUTTON_NAMES.get(idx).copied();
+            let origin = grid.origin(pane_left, pane_top, pane_width, pane_height);
+            return grid.button_at(origin, mx, my);
         }
         None
     }
@@ -1775,10 +1734,8 @@ impl super::TermWindow {
         &self,
         event: &MouseEvent,
     ) -> Option<(mux::pane::PaneId, &'static str)> {
-        use crate::termwindow::render::pane::{
-            TOAST_BTN_SIZE, TOAST_BUTTON_NAMES, TOAST_COLLAPSED_WIDTH, TOAST_COUNT, TOAST_GAP,
-            TOAST_HEIGHT, TOAST_MIN_PANE_HEIGHT, TOAST_MIN_PANE_WIDTH, TOAST_PADDING, TOAST_WIDTH,
-        };
+        use crate::termwindow::render::pane::{ToastGeom, TOAST_BUTTON_NAMES};
+        let g = ToastGeom::for_dpi(self.dimensions.dpi);
 
         let hovered_id = self.hovered_pane_id?;
 
@@ -1848,7 +1805,7 @@ impl super::TermWindow {
         let pane_visual_height = bg_bottom - bg_y;
 
         // Same size guard as rendering
-        if pane_visual_width < TOAST_MIN_PANE_WIDTH || pane_visual_height < TOAST_MIN_PANE_HEIGHT {
+        if pane_visual_width < g.min_pane_width || pane_visual_height < g.min_pane_height {
             return None;
         }
 
@@ -1856,51 +1813,49 @@ impl super::TermWindow {
         let my = event.coords.y as f32;
 
         let is_expanded = self.toast_expanded_for == Some(hovered_id)
-            && pane_visual_width >= TOAST_WIDTH + 10.0;
+            && pane_visual_width >= g.width + 10.0;
 
-        // Must match the offset used in paint_toast_toolbar
-        let toast_top_offset = 10.0f32;
+        let toast_top = bg_y + g.top_offset;
 
         if is_expanded {
-            // --- Expanded: full 9-button hit-test ---
-            let toast_left = bg_right - TOAST_WIDTH;
-            let toast_top = bg_y + toast_top_offset;
+            // --- Expanded: the full toolbar ---
+            let toast_left = bg_right - g.width;
 
             if mx < toast_left
-                || mx >= toast_left + TOAST_WIDTH
+                || mx >= toast_left + g.width
                 || my < toast_top
-                || my >= toast_top + TOAST_HEIGHT
+                || my >= toast_top + g.height
             {
                 return None;
             }
 
-            let rel_x = mx - toast_left - TOAST_PADDING;
-            let rel_y = my - toast_top - TOAST_PADDING;
+            let rel_x = mx - toast_left - g.padding;
+            let rel_y = my - toast_top - g.padding;
 
-            if rel_x < 0.0 || rel_y < 0.0 || rel_y >= TOAST_BTN_SIZE {
+            if rel_x < 0.0 || rel_y < 0.0 || rel_y >= g.btn {
                 return None;
             }
 
-            let idx = (rel_x / (TOAST_BTN_SIZE + TOAST_GAP)) as usize;
-            if idx >= TOAST_COUNT {
+            let idx = (rel_x / (g.btn + g.gap)) as usize;
+            if idx >= TOAST_BUTTON_NAMES.len() {
                 return None;
             }
 
-            let btn_left = idx as f32 * (TOAST_BTN_SIZE + TOAST_GAP);
-            if rel_x > btn_left + TOAST_BTN_SIZE {
+            let btn_left = idx as f32 * (g.btn + g.gap);
+            if rel_x > btn_left + g.btn {
                 return None;
             }
 
             Some((hovered_id, TOAST_BUTTON_NAMES[idx]))
         } else {
             // --- Collapsed: single trigger pill ---
-            let pill_left = bg_right - TOAST_COLLAPSED_WIDTH;
-            let pill_top = bg_y + toast_top_offset;
+            let pill_left = bg_right - g.collapsed_width;
+            let pill_top = toast_top;
 
             if mx >= pill_left
-                && mx < pill_left + TOAST_COLLAPSED_WIDTH
+                && mx < pill_left + g.collapsed_width
                 && my >= pill_top
-                && my < pill_top + TOAST_HEIGHT
+                && my < pill_top + g.height
             {
                 Some((hovered_id, "trigger"))
             } else {
@@ -2066,18 +2021,18 @@ impl super::TermWindow {
     /// the next paint, and a Move arriving in that gap would land outside it and
     /// collapse the toast the instant it opened.
     fn expand_toast(&mut self, pane_id: mux::pane::PaneId) {
-        use crate::termwindow::render::pane::TOAST_WIDTH;
+        let width = crate::termwindow::render::pane::ToastGeom::for_dpi(self.dimensions.dpi).width;
         self.toast_expanded_for = Some(pane_id);
         if let Some((id, x, y, w, h)) = self.toast_rect {
-            if id == pane_id && w < TOAST_WIDTH {
+            if id == pane_id && w < width {
                 // The toolbar is right-aligned with the pill, so it grows leftwards.
-                self.toast_rect = Some((id, x + w - TOAST_WIDTH, y, TOAST_WIDTH, h));
+                self.toast_rect = Some((id, x + w - width, y, width, h));
             }
         }
     }
 
     /// The pane whose toast toolbar was painted under (x, y), testing the rect
-    /// stored at paint time inflated by TOAST_COLLAPSE_MARGIN.
+    /// stored at paint time inflated by the toolbar's collapse margin.
     ///
     /// The toast is painted against the pane's *visual* bounds, which include
     /// padding, border and the sidebar offset and so extend beyond the content
@@ -2085,9 +2040,8 @@ impl super::TermWindow {
     /// pointer therefore drops it while the pointer is still over the toast, so
     /// the keep-open test has to be this stored rect.
     fn toast_zone_pane(&self, x: f32, y: f32) -> Option<mux::pane::PaneId> {
-        use crate::termwindow::render::pane::TOAST_COLLAPSE_MARGIN;
         let (pane_id, tx, ty, tw, th) = self.toast_rect?;
-        let m = TOAST_COLLAPSE_MARGIN;
+        let m = crate::termwindow::render::pane::ToastGeom::for_dpi(self.dimensions.dpi).collapse_margin;
         if x >= tx - m && x <= tx + tw + m && y >= ty - m && y <= ty + th + m {
             Some(pane_id)
         } else {
