@@ -876,6 +876,14 @@ impl crate::TermWindow {
         // children stack, and the per-tile bottom margin is TILE_GAP; adding
         // it to marginless rows only overestimates, the safe direction), and
         // trailing elements fold into a summary row.
+        //
+        // The LOCAL group is off unless tab_sidebar_show_local is set (user
+        // request, 2026-10-02: every pane read "devbox", which said nothing).
+        // Emptying it here leaves an empty, zero-height container, so the box
+        // sections start at the top and no hit areas are registered for it.
+        if !self.config.tab_sidebar_show_local {
+            tab_elements.clear();
+        }
         let tabs_avail = (window_height - dock_h - 40.).max(60.);
         let el_heights: Vec<f32> = tab_elements
             .iter()

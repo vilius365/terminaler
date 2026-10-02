@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-10-02
+
+### Changed
+- **Persona sessions get their own group in the sidebar.** Sessions started through `persona.sh` carry an `ol-` interconnect instance id; within each tmux box they now follow the sessions started by hand, under a dotless `· PERSONAS` sub-heading. The heading renders only when a tile fits under it, and under height pressure persona tiles fold into the `+N` count first.
+- **The LOCAL group is gone from the sidebar by default.** It listed this window's own tabs and panes, but every pane was titled after its SSH host (`devbox`), so the group said nothing the box tiles did not already show (attached sessions carry a `●`). Set `tab_sidebar_show_local: true` to bring it back, with its pane switcher, per-pane notification badges and close/mute flyout.
+
 ## 2026-08-26
 
 ### Added

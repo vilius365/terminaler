@@ -478,6 +478,12 @@ pub struct Config {
     #[dynamic(default = "default_tab_sidebar_width")]
     pub tab_sidebar_width: u16,
 
+    /// Show this window's own tabs and panes (the LOCAL group) at the top of
+    /// the tab sidebar. Off by default: pane titles carry only the SSH host,
+    /// and the tmux box tiles already mark the sessions attached here.
+    #[dynamic(default)]
+    pub tab_sidebar_show_local: bool,
+
     #[dynamic(default = "default_true")]
     pub mouse_wheel_scrolls_tabs: bool,
 
