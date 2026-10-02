@@ -3,7 +3,7 @@
 ## 2026-10-02
 
 ### Added
-- **A focus layout.** In the ctrl+right-click grid (new fourth row) and on the pane toolbar, `focus` gives the chosen pane 60% of the width on the left and stacks every other pane of the tab top to bottom on the right. Existing panes are rearranged, never created or closed; a tab with hidden panes or too few rows is left as it is.
+- **A focus layout.** In the ctrl+right-click grid (new fourth row) and on the pane toolbar, `focus` gives the chosen pane 60% of the width on the left and stacks every other pane of the tab top to bottom on the right. Existing panes are rearranged, never created or closed; a tab with hidden panes or too few rows is left as it is. The collapsed pane toolbar also carries a standalone focus button beside the layout trigger, so focus mode is one click away without opening the toolbar or the grid; it appears only on tabs with more than one pane.
 - **An opacity toggle in the sidebar dock.** Beside the `⊘` notification block, a chip switches the panes between the configured `window_background_opacity` (`▒`) and fully opaque (`█`). Session-only, like the notification block; it appears only when the configured opacity is below 1.
 
 ### Fixed

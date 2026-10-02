@@ -1749,6 +1749,7 @@ impl super::TermWindow {
         }
 
         let panes = self.get_panes_to_render();
+        let pane_count = panes.len();
         let pos = panes.iter().find(|p| p.pane.pane_id() == hovered_id)?;
 
         let cell_width = self.render_metrics.cell_size.width as f32;
@@ -1848,16 +1849,26 @@ impl super::TermWindow {
 
             Some((hovered_id, TOAST_BUTTON_NAMES[idx]))
         } else {
-            // --- Collapsed: single trigger pill ---
-            let pill_left = bg_right - g.collapsed_width;
+            // --- Collapsed: the layout trigger, plus the focus button beside it
+            // when the tab has other panes (same rule as the painter) ---
+            let with_focus = g.collapsed_with_focus(pane_count, pane_visual_width);
+            let pill_w = g.collapsed_width_for(with_focus);
+            let pill_left = bg_right - pill_w;
             let pill_top = toast_top;
 
             if mx >= pill_left
-                && mx < pill_left + g.collapsed_width
+                && mx < pill_left + pill_w
                 && my >= pill_top
                 && my < pill_top + g.height
             {
-                Some((hovered_id, "trigger"))
+                // The pill's padding counts toward the nearer button, so the
+                // hit area stays as forgiving as the old single pill.
+                let focus_right = pill_left + g.padding + g.btn + g.gap / 2.0;
+                if with_focus && mx < focus_right {
+                    Some((hovered_id, "focus"))
+                } else {
+                    Some((hovered_id, "trigger"))
+                }
             } else {
                 None
             }

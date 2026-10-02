@@ -158,6 +158,28 @@ pub(crate) struct ToastGeom {
 }
 
 impl ToastGeom {
+    /// Width of the collapsed toolbar: the layout trigger alone, or with the
+    /// standalone focus button to its left.
+    pub fn collapsed_width_for(&self, with_focus: bool) -> f32 {
+        if with_focus {
+            self.collapsed_width + self.btn + self.gap
+        } else {
+            self.collapsed_width
+        }
+    }
+
+    /// Whether the collapsed toolbar carries the focus button: only when the
+    /// tab has another pane to stack, and the pane is wide enough for both
+    /// buttons. Painting and hit-testing both ask this, so they agree.
+    pub fn collapsed_with_focus(&self, pane_count: usize, pane_visual_width: f32) -> bool {
+        pane_count >= 2
+            && pane_visual_width >= self.collapsed_width_for(true) + self.min_pane_margin()
+    }
+
+    fn min_pane_margin(&self) -> f32 {
+        self.min_pane_width - self.collapsed_width
+    }
+
     pub fn for_dpi(dpi: usize) -> Self {
         let s = ui_scale(dpi);
         let (btn, icon, gap, padding) = (30.0 * s, 24.0 * s, 2.0 * s, 4.0 * s);
@@ -1327,6 +1349,7 @@ impl crate::TermWindow {
         }
 
         let panes = self.get_panes_to_render();
+        let pane_count = panes.len();
         let target_pos = match panes.iter().find(|p| p.pane.pane_id() == hovered_id) {
             Some(pos) => pos,
             None => {
@@ -1429,21 +1452,28 @@ impl crate::TermWindow {
                 self.paint_button_icon(layers, name, bx + geom.inset, by + geom.inset, geom.icon, white)?;
             }
         } else {
-            // --- Collapsed: single trigger pill (quad layout icon) ---
-            let pill_left = bg_right - geom.collapsed_width;
-            self.toast_rect = Some((hovered_id, pill_left, toast_top, geom.collapsed_width, geom.height));
+            // --- Collapsed: the layout trigger (quad icon), with the focus
+            // button beside it so focus mode is one click away without opening
+            // the toolbar or the ctrl+right-click grid ---
+            let with_focus = geom.collapsed_with_focus(pane_count, pane_visual_width);
+            let pill_w = geom.collapsed_width_for(with_focus);
+            let pill_left = bg_right - pill_w;
+            self.toast_rect = Some((hovered_id, pill_left, toast_top, pill_w, geom.height));
 
             self.filled_rectangle(
                 layers, 2,
-                euclid::rect(pill_left, toast_top, geom.collapsed_width, geom.height),
+                euclid::rect(pill_left, toast_top, pill_w, geom.height),
                 bg_color,
             ).context("toast trigger bg")?;
 
-            let bx = pill_left + geom.padding;
+            let names: &[&str] = if with_focus { &["focus", "quad"] } else { &["quad"] };
             let by = toast_top + geom.padding;
-            self.filled_rectangle(layers, 2, euclid::rect(bx, by, geom.btn, geom.btn), btn_bg)
-                .context("toast trigger btn bg")?;
-            self.paint_button_icon(layers, "quad", bx + geom.inset, by + geom.inset, geom.icon, white)?;
+            for (i, &name) in names.iter().enumerate() {
+                let bx = pill_left + geom.padding + i as f32 * (geom.btn + geom.gap);
+                self.filled_rectangle(layers, 2, euclid::rect(bx, by, geom.btn, geom.btn), btn_bg)
+                    .context("toast trigger btn bg")?;
+                self.paint_button_icon(layers, name, bx + geom.inset, by + geom.inset, geom.icon, white)?;
+            }
         }
 
         Ok(())
@@ -1465,6 +1495,21 @@ mod geometry_tests {
         assert_eq!(doubled.top_offset, base.top_offset * 2.0);
         // Below 96 DPI the 96-DPI size is the floor.
         assert_eq!(ToastGeom::for_dpi(72).btn, base.btn);
+    }
+
+    #[test]
+    fn collapsed_toolbar_adds_the_focus_button_only_when_it_has_a_use() {
+        let g = ToastGeom::for_dpi(96);
+        assert_eq!(g.collapsed_width_for(false), g.collapsed_width);
+        assert_eq!(g.collapsed_width_for(true), g.collapsed_width + g.btn + g.gap);
+        let wide = 1000.0;
+        assert!(g.collapsed_with_focus(2, wide));
+        // A lone pane has nothing to stack: the button would be dead.
+        assert!(!g.collapsed_with_focus(1, wide));
+        // A pane too narrow for both buttons keeps just the trigger, which
+        // still fits it (min_pane_width).
+        assert!(!g.collapsed_with_focus(3, g.min_pane_width));
+        assert!(g.collapsed_with_focus(3, g.collapsed_width_for(true) + 10.0));
     }
 
     #[test]
