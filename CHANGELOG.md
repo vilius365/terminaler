@@ -4,6 +4,7 @@
 
 ### Added
 - **A focus layout.** In the ctrl+right-click grid (new fourth row) and on the pane toolbar, `focus` gives the chosen pane 60% of the width on the left and stacks every other pane of the tab top to bottom on the right. Existing panes are rearranged, never created or closed; a tab with hidden panes or too few rows is left as it is. The collapsed pane toolbar also carries a standalone focus button beside the layout trigger, so focus mode is one click away without opening the toolbar or the grid; it appears only on tabs with more than one pane.
+- **Mouse-driven pane moving.** In a tab with more than one pane, a grip (six dots) appears at the top-left of the hovered pane. Drag it over another pane: the middle half swaps the two panes (orange), an outer band docks the dragged pane against that side (blue half). The pane in hand is dimmed, and it keeps the focus afterwards. A swap keeps each slot's size, so the layout's shape does not change; a dock rebuilds the split around the target. Releasing over its own pane or outside the panes does nothing, and a press on the grip that does not move is harmless. A dock onto a pane too small to split is refused without taking the pane out.
 - **An opacity toggle in the sidebar dock.** Beside the `⊘` notification block, a chip switches the panes between the configured `window_background_opacity` (`▒`) and fully opaque (`█`). Session-only, like the notification block; it appears only when the configured opacity is below 1.
 
 ### Fixed

@@ -282,6 +282,11 @@ impl crate::TermWindow {
                 .context("paint_drop_zone_overlay")?;
         }
 
+        if self.pane_drag.is_some() {
+            self.paint_pane_drag_overlay(&mut layers)
+                .context("paint_pane_drag_overlay")?;
+        }
+
         if self.pane_long_press.as_ref().map_or(false, |lp| lp.revealed) {
             self.paint_pane_remove_overlay(&mut layers)
                 .context("paint_pane_remove_overlay")?;
@@ -292,6 +297,10 @@ impl crate::TermWindow {
         // Gating the call here would leave a stale rect behind instead.
         self.paint_toast_toolbar(&mut layers)
             .context("paint_toast_toolbar")?;
+        // Same: returns early unless the hovered pane (or the pane in hand)
+        // has a grip to show.
+        self.paint_pane_grip(&mut layers)
+            .context("paint_pane_grip")?;
 
         // Aggregate Claude-agent waiting count for the tab-bar badge. Runs
         // regardless of sidebar visibility (the badge lives on the tab bar),

@@ -209,6 +209,26 @@ pub struct TabDragState {
     pub threshold_exceeded: bool,
 }
 
+/// What releasing a dragged pane over another pane would do.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PaneDropTarget {
+    /// Over the middle of a pane: the two trade places.
+    Swap,
+    /// Over an edge: the dragged pane docks against that side of the target.
+    Dock(DropZone),
+}
+
+/// A pane being moved by its grip. Created on press and only becomes a drag
+/// once the pointer has travelled past a small threshold, so a plain click on
+/// the grip does nothing.
+#[derive(Clone, Debug)]
+pub struct PaneDragState {
+    pub pane_id: PaneId,
+    pub start_coords: (isize, isize),
+    pub threshold_exceeded: bool,
+    pub target: Option<(PaneId, PaneDropTarget)>,
+}
+
 #[derive(Clone, Debug)]
 pub struct PaneLongPress {
     pub pane_id: PaneId,
@@ -674,6 +694,8 @@ pub struct TermWindow {
     ui_items: Vec<UIItem>,
     dragging: Option<(UIItem, MouseEvent)>,
     pub tab_drag: Option<TabDragState>,
+    /// A pane being moved by its grip (see PaneDragState).
+    pub pane_drag: Option<PaneDragState>,
     pub pane_long_press: Option<PaneLongPress>,
     pub hovered_pane_id: Option<mux::pane::PaneId>,
     pub toast_expanded_for: Option<mux::pane::PaneId>,
@@ -782,6 +804,7 @@ impl TermWindow {
             self.current_mouse_capture = None;
             self.is_click_to_focus_window = false;
             self.tab_drag = None;
+            self.pane_drag = None;
             self.pane_long_press = None;
             // A sidebar resize drag must not survive focus loss: with the
             // button released elsewhere, the next plain Move would resume a
@@ -1087,6 +1110,7 @@ impl TermWindow {
             ui_items: vec![],
             dragging: None,
             tab_drag: None,
+            pane_drag: None,
             pane_long_press: None,
             hovered_pane_id: None,
             toast_expanded_for: None,

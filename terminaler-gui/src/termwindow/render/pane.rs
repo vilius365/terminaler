@@ -155,6 +155,12 @@ pub(crate) struct ToastGeom {
     pub min_pane_height: f32,
     /// Gap between the pane's top edge and the toolbar.
     pub top_offset: f32,
+    /// The UI scale these sizes were computed at.
+    pub scale: f32,
+    /// The pane grip, top-left of a pane: size and its gap to the pane edges.
+    pub grip_w: f32,
+    pub grip_h: f32,
+    pub grip_gap: f32,
 }
 
 impl ToastGeom {
@@ -180,6 +186,13 @@ impl ToastGeom {
         self.min_pane_width - self.collapsed_width
     }
 
+    /// Whether a pane of this content size has room for the grip beside the
+    /// collapsed toolbar, so the two never overlap.
+    pub fn fits_grip(&self, pane_w: f32, pane_h: f32) -> bool {
+        pane_w >= self.grip_gap * 2.0 + self.grip_w + self.collapsed_width_for(true) + 10.0 * self.scale
+            && pane_h >= self.grip_gap * 2.0 + self.grip_h + 10.0 * self.scale
+    }
+
     pub fn for_dpi(dpi: usize) -> Self {
         let s = ui_scale(dpi);
         let (btn, icon, gap, padding) = (30.0 * s, 24.0 * s, 2.0 * s, 4.0 * s);
@@ -199,6 +212,10 @@ impl ToastGeom {
             min_pane_width: collapsed_width + 10.0 * s,
             min_pane_height: height + 10.0 * s,
             top_offset: 10.0 * s,
+            scale: s,
+            grip_w: 30.0 * s,
+            grip_h: 22.0 * s,
+            grip_gap: 8.0 * s,
         }
     }
 }
@@ -342,6 +359,147 @@ impl crate::TermWindow {
                 .with_context(|| format!("{} icon", name))?;
             }
         }
+        Ok(())
+    }
+
+    /// A pane's content rect in window pixels: (left, top, width, height).
+    /// The same box the mouse code tests with pane_id_at_pixel_coords.
+    pub(crate) fn pane_content_rect(&self, pos: &PositionedPane) -> (f32, f32, f32, f32) {
+        let (padding_left, padding_top) = self.padding_left_top();
+        let tab_bar_height = if self.show_tab_bar {
+            self.tab_bar_pixel_height().unwrap_or(0.)
+        } else {
+            0.
+        };
+        let top_bar_height = if self.config.tab_bar_at_bottom { 0.0 } else { tab_bar_height };
+        let border = self.get_os_border();
+        let top_pixel_y = top_bar_height + padding_top + border.top.get() as f32;
+        let cell_width = self.render_metrics.cell_size.width as f32;
+        let cell_height = self.render_metrics.cell_size.height as f32;
+        (
+            padding_left + border.left.get() as f32 + self.sidebar_x_offset() + pos.left as f32 * cell_width,
+            top_pixel_y + pos.top as f32 * cell_height,
+            pos.width as f32 * cell_width,
+            pos.height as f32 * cell_height,
+        )
+    }
+
+    /// The pane grip to show, as (pane, left, top, width, height): at the
+    /// top-left of the hovered pane, or of the pane being dragged. Only tabs
+    /// with another pane to swap with get one, and only panes with room for
+    /// it beside the toolbar. Painting and hit-testing both use this.
+    pub(crate) fn pane_grip_rect(&self) -> Option<(mux::pane::PaneId, f32, f32, f32, f32)> {
+        let id = self
+            .pane_drag
+            .as_ref()
+            .map(|d| d.pane_id)
+            .or(self.hovered_pane_id)?;
+        if self
+            .pane_long_press
+            .as_ref()
+            .map_or(false, |lp| lp.revealed)
+            || self.tab_drag.as_ref().map_or(false, |td| td.threshold_exceeded)
+        {
+            return None;
+        }
+        let panes = self.get_panes_to_render();
+        if panes.len() < 2 {
+            return None;
+        }
+        let pos = panes.iter().find(|p| p.pane.pane_id() == id)?;
+        let (left, top, w, h) = self.pane_content_rect(pos);
+        let g = ToastGeom::for_dpi(self.dimensions.dpi);
+        if !g.fits_grip(w, h) {
+            return None;
+        }
+        Some((id, left + g.grip_gap, top + g.grip_gap, g.grip_w, g.grip_h))
+    }
+
+    /// Paint the pane grip: a small handle of six dots. It lights up while
+    /// its pane is being dragged.
+    pub fn paint_pane_grip(
+        &mut self,
+        layers: &mut crate::quad::TripleLayerQuadAllocator,
+    ) -> anyhow::Result<()> {
+        let Some((_, x, y, w, h)) = self.pane_grip_rect() else {
+            return Ok(());
+        };
+        let s = ToastGeom::for_dpi(self.dimensions.dpi).scale;
+        let held = self.pane_drag.as_ref().map_or(false, |d| d.threshold_exceeded);
+        let bg = if held {
+            window::color::LinearRgba(0.302, 0.620, 1.0, 0.85)
+        } else {
+            window::color::LinearRgba(0.102, 0.102, 0.102, 0.55)
+        };
+        let dot = window::color::LinearRgba(1.0, 1.0, 1.0, 0.92);
+        self.filled_rectangle(layers, 2, euclid::rect(x, y, w, h), bg)
+            .context("pane grip bg")?;
+
+        // Two columns by three rows, centred in the grip.
+        let (d, gap) = (3.0 * s, 3.0 * s);
+        let (cols, rows) = (2.0f32, 3.0f32);
+        let left = x + (w - (cols * d + (cols - 1.0) * gap)) / 2.0;
+        let top = y + (h - (rows * d + (rows - 1.0) * gap)) / 2.0;
+        for row in 0..3 {
+            for col in 0..2 {
+                self.filled_rectangle(
+                    layers,
+                    2,
+                    euclid::rect(
+                        left + col as f32 * (d + gap),
+                        top + row as f32 * (d + gap),
+                        d,
+                        d,
+                    ),
+                    dot,
+                )
+                .context("pane grip dot")?;
+            }
+        }
+        Ok(())
+    }
+
+    /// While a pane is being dragged: dim the pane in hand and highlight what
+    /// releasing would do to the pane under the pointer. Orange fills the whole
+    /// target (swap); blue fills the half being docked against (dock).
+    pub fn paint_pane_drag_overlay(
+        &mut self,
+        layers: &mut crate::quad::TripleLayerQuadAllocator,
+    ) -> anyhow::Result<()> {
+        let drag = match self.pane_drag.as_ref() {
+            Some(d) if d.threshold_exceeded => d.clone(),
+            _ => return Ok(()),
+        };
+        let panes = self.get_panes_to_render();
+        if let Some(pos) = panes.iter().find(|p| p.pane.pane_id() == drag.pane_id) {
+            let (l, t, w, h) = self.pane_content_rect(pos);
+            self.filled_rectangle(
+                layers,
+                2,
+                euclid::rect(l, t, w, h),
+                window::color::LinearRgba(0.0, 0.0, 0.0, 0.35),
+            )
+            .context("pane drag source dim")?;
+        }
+        let Some((target_id, kind)) = drag.target else {
+            return Ok(());
+        };
+        let Some(pos) = panes.iter().find(|p| p.pane.pane_id() == target_id) else {
+            return Ok(());
+        };
+        let (l, t, w, h) = self.pane_content_rect(pos);
+        let (rect, color) = match kind {
+            crate::termwindow::PaneDropTarget::Swap => (
+                euclid::rect(l, t, w, h),
+                window::color::LinearRgba(0.98, 0.69, 0.25, 0.30),
+            ),
+            crate::termwindow::PaneDropTarget::Dock(zone) => (
+                drop_zone_rect(zone, l, t, w, h),
+                window::color::LinearRgba(0.302, 0.620, 1.0, 0.30),
+            ),
+        };
+        self.filled_rectangle(layers, 2, rect, color)
+            .context("pane drag target")?;
         Ok(())
     }
 
@@ -1481,6 +1639,23 @@ impl crate::TermWindow {
 
 }
 
+/// The half of a pane a drop in `zone` would dock into.
+pub(crate) fn drop_zone_rect(
+    zone: crate::termwindow::DropZone,
+    left: f32,
+    top: f32,
+    w: f32,
+    h: f32,
+) -> euclid::Rect<f32, window::PixelUnit> {
+    use crate::termwindow::DropZone;
+    match zone {
+        DropZone::Left => euclid::rect(left, top, w / 2.0, h),
+        DropZone::Right => euclid::rect(left + w / 2.0, top, w / 2.0, h),
+        DropZone::Top => euclid::rect(left, top, w, h / 2.0),
+        DropZone::Bottom => euclid::rect(left, top + h / 2.0, w, h / 2.0),
+    }
+}
+
 #[cfg(test)]
 mod geometry_tests {
     use super::*;
@@ -1510,6 +1685,28 @@ mod geometry_tests {
         // still fits it (min_pane_width).
         assert!(!g.collapsed_with_focus(3, g.min_pane_width));
         assert!(g.collapsed_with_focus(3, g.collapsed_width_for(true) + 10.0));
+    }
+
+    #[test]
+    fn grip_needs_room_beside_the_toolbar() {
+        let g = ToastGeom::for_dpi(96);
+        let min_w = g.grip_gap * 2.0 + g.grip_w + g.collapsed_width_for(true) + 10.0;
+        assert!(g.fits_grip(min_w, 200.0));
+        assert!(!g.fits_grip(min_w - 1.0, 200.0), "would touch the toolbar");
+        assert!(!g.fits_grip(1000.0, g.grip_h), "too short for the grip");
+        // The grip scales like the rest of the toolbar.
+        let big = ToastGeom::for_dpi(192);
+        assert_eq!(big.grip_w, g.grip_w * 2.0);
+    }
+
+    #[test]
+    fn drop_zone_rects_are_the_docked_halves() {
+        use crate::termwindow::DropZone;
+        let r = |z| drop_zone_rect(z, 10.0, 20.0, 100.0, 60.0);
+        assert_eq!(r(DropZone::Left), euclid::rect(10.0, 20.0, 50.0, 60.0));
+        assert_eq!(r(DropZone::Right), euclid::rect(60.0, 20.0, 50.0, 60.0));
+        assert_eq!(r(DropZone::Top), euclid::rect(10.0, 20.0, 100.0, 30.0));
+        assert_eq!(r(DropZone::Bottom), euclid::rect(10.0, 50.0, 100.0, 30.0));
     }
 
     #[test]

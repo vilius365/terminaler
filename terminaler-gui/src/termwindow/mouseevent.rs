@@ -136,6 +136,14 @@ impl super::TermWindow {
                 self.current_mouse_capture = None;
                 self.current_mouse_buttons.retain(|p| p != press);
                 if press == &MousePress::Left {
+                    if let Some(pane_drag) = self.pane_drag.take() {
+                        if pane_drag.threshold_exceeded {
+                            self.execute_pane_drag_drop(pane_drag);
+                        }
+                        context.set_cursor(Some(MouseCursor::Arrow));
+                        context.invalidate();
+                        return;
+                    }
                     if let Some(tab_drag) = self.tab_drag.take() {
                         if tab_drag.threshold_exceeded
                             && tab_drag.target_pane.is_some()
@@ -218,6 +226,19 @@ impl super::TermWindow {
                     return;
                 }
 
+                // Pane drag by its grip. A release outside the window never
+                // reaches us, so a Move with the button already up ends it.
+                if self.pane_drag.is_some() {
+                    if self.current_mouse_buttons.contains(&MousePress::Left) {
+                        self.update_pane_drag(&event);
+                    } else {
+                        self.pane_drag = None;
+                    }
+                    context.set_cursor(Some(MouseCursor::Hand));
+                    context.invalidate();
+                    return;
+                }
+
                 if let Some(start) = self.window_drag_position.as_ref() {
                     // Dragging the window
                     // Compute the distance since the initial event
@@ -260,6 +281,11 @@ impl super::TermWindow {
                         self.toast_expanded_for = None;
                     }
                     context.invalidate();
+                }
+
+                if self.pane_grip_at(&event).is_some() {
+                    context.set_cursor(Some(MouseCursor::Hand));
+                    return;
                 }
 
                 // Toast expand/collapse logic
@@ -307,6 +333,22 @@ impl super::TermWindow {
                 }
                 self.toast_expanded_for = None;
                 self.hovered_pane_id = None;
+                context.invalidate();
+                return;
+            }
+        }
+
+        // Pane grip: pressing it arms a pane drag (it only starts moving once
+        // the pointer travels, so a plain click is harmless).
+        if matches!(event.kind, WMEK::Press(MousePress::Left)) {
+            if let Some(pane_id) = self.pane_grip_at(&event) {
+                self.pane_drag = Some(super::PaneDragState {
+                    pane_id,
+                    start_coords: (event.coords.x, event.coords.y),
+                    threshold_exceeded: false,
+                    target: None,
+                });
+                context.set_cursor(Some(MouseCursor::Hand));
                 context.invalidate();
                 return;
             }
@@ -1682,6 +1724,75 @@ impl super::TermWindow {
         .detach();
     }
 
+    /// The pane whose grip is under the pointer, if its grip is showing.
+    fn pane_grip_at(&self, event: &MouseEvent) -> Option<mux::pane::PaneId> {
+        let (id, x, y, w, h) = self.pane_grip_rect()?;
+        let (mx, my) = (event.coords.x as f32, event.coords.y as f32);
+        (mx >= x && mx < x + w && my >= y && my < y + h).then_some(id)
+    }
+
+    /// Advance a pane drag: arm it past the movement threshold, then track
+    /// what is under the pointer.
+    fn update_pane_drag(&mut self, event: &MouseEvent) {
+        let Some(drag) = self.pane_drag.as_mut() else {
+            return;
+        };
+        if !drag.threshold_exceeded {
+            let dx = (event.coords.x - drag.start_coords.0) as f64;
+            let dy = (event.coords.y - drag.start_coords.1) as f64;
+            if (dx * dx + dy * dy).sqrt() < 5.0 {
+                return;
+            }
+            drag.threshold_exceeded = true;
+        }
+        let source = drag.pane_id;
+        let (mx, my) = (event.coords.x as f32, event.coords.y as f32);
+
+        let mut target = None;
+        for pos in &self.get_panes_to_render() {
+            let (l, t, w, h) = self.pane_content_rect(pos);
+            if mx >= l && mx < l + w && my >= t && my < t + h {
+                // The pane in hand is not a target for itself.
+                if pos.pane.pane_id() != source {
+                    target = Some((pos.pane.pane_id(), pane_drop_target(mx, my, l, t, w, h)));
+                }
+                break;
+            }
+        }
+        if let Some(drag) = self.pane_drag.as_mut() {
+            drag.target = target;
+        }
+    }
+
+    /// Release of a pane drag over a target: swap the two panes, or dock the
+    /// dragged one against the target's edge.
+    fn execute_pane_drag_drop(&mut self, drag: super::PaneDragState) {
+        let Some((target_id, kind)) = drag.target else {
+            return;
+        };
+        let mux = Mux::get();
+        let Some(tab) = mux.get_active_tab_for_window(self.mux_window_id) else {
+            return;
+        };
+        let moved = match kind {
+            super::PaneDropTarget::Swap => tab.swap_panes(drag.pane_id, target_id),
+            super::PaneDropTarget::Dock(zone) => {
+                tab.dock_pane(drag.pane_id, target_id, split_request_for_zone(zone))
+            }
+        };
+        if !moved {
+            log::info!("pane drag: could not move pane {} onto {}", drag.pane_id, target_id);
+            return;
+        }
+        // The pane in hand keeps the focus. (dock_pane already does this.)
+        if let Some(pos) = tab.iter_panes().iter().find(|p| p.pane.pane_id() == drag.pane_id) {
+            tab.set_active_idx(pos.index);
+        }
+        drop(tab);
+        drop(mux);
+        self.invalidate_tab_sidebar();
+    }
+
     fn overlay_button_at(
         &self,
         event: &MouseEvent,
@@ -2203,10 +2314,79 @@ fn compute_drop_zone(
     }
 }
 
+/// What a pane dropped at (mouse_x, mouse_y) would do to the pane at
+/// (pane_left, pane_top, pane_width, pane_height): the middle half swaps, the
+/// outer band docks against the nearest side.
+pub(crate) fn pane_drop_target(
+    mouse_x: f32, mouse_y: f32,
+    pane_left: f32, pane_top: f32,
+    pane_width: f32, pane_height: f32,
+) -> super::PaneDropTarget {
+    let rx = (mouse_x - pane_left) / pane_width;
+    let ry = (mouse_y - pane_top) / pane_height;
+    if (0.25..0.75).contains(&rx) && (0.25..0.75).contains(&ry) {
+        super::PaneDropTarget::Swap
+    } else {
+        super::PaneDropTarget::Dock(compute_drop_zone(
+            mouse_x, mouse_y, pane_left, pane_top, pane_width, pane_height,
+        ))
+    }
+}
+
+/// The split a drop in `zone` asks for: the dragged pane takes the named side
+/// of the target, at half its size.
+fn split_request_for_zone(zone: DropZone) -> SplitRequest {
+    SplitRequest {
+        direction: match zone {
+            DropZone::Left | DropZone::Right => SplitDirection::Horizontal,
+            DropZone::Top | DropZone::Bottom => SplitDirection::Vertical,
+        },
+        target_is_second: matches!(zone, DropZone::Right | DropZone::Bottom),
+        top_level: false,
+        size: SplitSize::Percent(50),
+    }
+}
+
 fn mouse_press_to_tmb(press: &MousePress) -> TMB {
     match press {
         MousePress::Left => TMB::Left,
         MousePress::Right => TMB::Right,
         MousePress::Middle => TMB::Middle,
+    }
+}
+
+#[cfg(test)]
+mod pane_drag_tests {
+    use super::*;
+    use crate::termwindow::PaneDropTarget;
+
+    // A 200 x 100 pane at (10, 20).
+    fn at(x: f32, y: f32) -> PaneDropTarget {
+        pane_drop_target(x, y, 10.0, 20.0, 200.0, 100.0)
+    }
+
+    #[test]
+    fn the_middle_swaps_and_the_edges_dock() {
+        assert_eq!(at(110.0, 70.0), PaneDropTarget::Swap, "centre");
+        assert_eq!(at(70.0, 45.0), PaneDropTarget::Swap, "inner box corner");
+        // Just outside the inner box on each side.
+        assert_eq!(at(55.0, 70.0), PaneDropTarget::Dock(DropZone::Left));
+        assert_eq!(at(170.0, 70.0), PaneDropTarget::Dock(DropZone::Right));
+        assert_eq!(at(110.0, 30.0), PaneDropTarget::Dock(DropZone::Top));
+        assert_eq!(at(110.0, 110.0), PaneDropTarget::Dock(DropZone::Bottom));
+        // A corner picks the nearer diagonal side, never swap.
+        assert!(matches!(at(12.0, 22.0), PaneDropTarget::Dock(_)));
+    }
+
+    #[test]
+    fn zones_ask_for_the_split_that_puts_the_pane_on_that_side() {
+        let left = split_request_for_zone(DropZone::Left);
+        assert_eq!(left.direction, SplitDirection::Horizontal);
+        assert!(!left.target_is_second, "dragged pane goes first (left)");
+        let bottom = split_request_for_zone(DropZone::Bottom);
+        assert_eq!(bottom.direction, SplitDirection::Vertical);
+        assert!(bottom.target_is_second, "dragged pane goes second (below)");
+        assert!(!split_request_for_zone(DropZone::Top).target_is_second);
+        assert!(split_request_for_zone(DropZone::Right).target_is_second);
     }
 }

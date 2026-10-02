@@ -918,6 +918,68 @@ impl Tab {
         self.inner.lock().focus_layout(pane_id, main_percent)
     }
 
+    /// Trade the places of two panes. Each pane takes over the other's slot
+    /// and size, so the shape of the layout does not change. The active pane
+    /// stays the same pane. Returns false, leaving the layout untouched, when
+    /// the panes are the same or not both in the tab, or the tab is zoomed or
+    /// has hidden panes.
+    pub fn swap_panes(&self, a: PaneId, b: PaneId) -> bool {
+        self.inner.lock().swap_panes(a, b)
+    }
+
+    /// Move `source` out of its place and dock it against `target` as the
+    /// split `request` describes (the same request a drag-to-split builds).
+    /// The pane keeps running and becomes the active one. Returns false,
+    /// leaving the layout untouched, when the panes are the same or not both
+    /// in the tab, the tab is zoomed, or `target` is too small to split.
+    pub fn dock_pane(&self, source: PaneId, target: PaneId, request: SplitRequest) -> bool {
+        if source == target || self.get_zoomed_pane().is_some() {
+            return false;
+        }
+        let panes = self.iter_panes();
+        if !panes.iter().any(|p| p.pane.pane_id() == source) {
+            return false;
+        }
+        let Some(target_pos) = panes.iter().find(|p| p.pane.pane_id() == target) else {
+            return false;
+        };
+        // Removing the source only ever gives the target more room, so a
+        // target that can be split now can be split afterwards. Checking here
+        // keeps the pane from being taken out when the insert would then fail.
+        let extent = match request.direction {
+            SplitDirection::Horizontal => target_pos.width,
+            SplitDirection::Vertical => target_pos.height,
+        };
+        if extent < 3 {
+            return false;
+        }
+
+        let Some(pane) = self.remove_pane(source) else {
+            return false;
+        };
+        let docked = self
+            .iter_panes()
+            .iter()
+            .find(|p| p.pane.pane_id() == target)
+            .map(|p| p.index)
+            .ok_or_else(|| anyhow::anyhow!("target pane vanished"))
+            .and_then(|idx| self.split_and_insert(idx, request, Arc::clone(&pane)));
+        match docked {
+            Ok(_) => {
+                self.set_active_pane(&pane);
+                true
+            }
+            Err(err) => {
+                // Never lose a running pane: put it back somewhere.
+                log::error!("dock_pane failed, restoring the pane: {:#}", err);
+                if let Err(err) = self.split_and_insert(0, SplitRequest::default(), pane) {
+                    log::error!("dock_pane could not restore the pane: {:#}", err);
+                }
+                false
+            }
+        }
+    }
+
     /// Adjusts the size of the active pane in the specified direction
     /// by the specified amount.
     pub fn adjust_pane_size(&self, direction: PaneDirection, amount: usize) {
@@ -1775,6 +1837,58 @@ impl TabInner {
         self.pane.replace(cursor.tree());
         let size = self.size;
         apply_sizes_from_splits(self.pane.as_mut().unwrap(), &size);
+        Mux::try_get().map(|mux| mux.notify(MuxNotification::TabResized(self.id)));
+        true
+    }
+
+    fn swap_panes(&mut self, a: PaneId, b: PaneId) -> bool {
+        if a == b || self.zoomed.is_some() || !self.hidden.is_empty() {
+            return false;
+        }
+        let panes: Vec<Arc<dyn Pane>> = self
+            .iter_panes_ignoring_zoom()
+            .into_iter()
+            .map(|p| p.pane)
+            .collect();
+        let find = |id: PaneId| panes.iter().find(|p| p.pane_id() == id).cloned();
+        let (Some(pane_a), Some(pane_b)) = (find(a), find(b)) else {
+            return false;
+        };
+        let active_id = self.get_active_pane().map(|p| p.pane_id());
+
+        let mut cursor = self.pane.take().unwrap().cursor();
+        loop {
+            if cursor.is_leaf() {
+                let leaf = cursor.leaf_mut().unwrap();
+                // A replaced leaf is behind the cursor, so it is not visited
+                // again and cannot be swapped back.
+                if leaf.pane_id() == a {
+                    *leaf = Arc::clone(&pane_b);
+                } else if leaf.pane_id() == b {
+                    *leaf = Arc::clone(&pane_a);
+                }
+            }
+            match cursor.preorder_next() {
+                Ok(c) => cursor = c,
+                Err(c) => {
+                    self.pane.replace(c.tree());
+                    break;
+                }
+            }
+        }
+
+        // The slots keep their sizes; the panes in them are resized to match.
+        let size = self.size;
+        apply_sizes_from_splits(self.pane.as_mut().unwrap(), &size);
+        if let Some(id) = active_id {
+            if let Some(p) = self
+                .iter_panes_ignoring_zoom()
+                .into_iter()
+                .find(|p| p.pane.pane_id() == id)
+            {
+                self.active = p.index;
+            }
+        }
         Mux::try_get().map(|mux| mux.notify(MuxNotification::TabResized(self.id)));
         true
     }
@@ -2993,6 +3107,133 @@ mod test {
         // An unknown pane leaves the layout alone.
         assert!(!tab.focus_layout(99, 60));
         assert_eq!(tab.iter_panes()[0].pane.pane_id(), 2);
+    }
+
+    /// Three panes side by side, ids 1 | 2 | 3.
+    fn three_across() -> (Tab, TerminalSize) {
+        let size = TerminalSize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 800,
+            pixel_height: 600,
+            dpi: 96,
+        };
+        let tab = Tab::new(&size);
+        tab.assign_pane(&FakePane::new(1, size));
+        for (idx, id) in [(0, 2), (1, 3)] {
+            let req = SplitRequest {
+                direction: SplitDirection::Horizontal,
+                ..Default::default()
+            };
+            let split = tab.compute_split_size(idx, req).unwrap();
+            tab.split_and_insert(idx, req, FakePane::new(id, split.second))
+                .unwrap();
+        }
+        (tab, size)
+    }
+
+    fn ids(tab: &Tab) -> Vec<PaneId> {
+        tab.iter_panes().iter().map(|p| p.pane.pane_id()).collect()
+    }
+
+    #[test]
+    fn swap_panes_trades_places_and_keeps_the_layout_shape() {
+        let (tab, _) = three_across();
+        let before: Vec<(usize, usize, usize, usize)> = tab
+            .iter_panes()
+            .iter()
+            .map(|p| (p.left, p.top, p.width, p.height))
+            .collect();
+        let active_id = |tab: &Tab| -> Vec<PaneId> {
+            tab.iter_panes()
+                .iter()
+                .filter(|p| p.is_active)
+                .map(|p| p.pane.pane_id())
+                .collect()
+        };
+        // Pane 3 is the active one: the last split made it so. (Moving focus
+        // with set_active_idx needs a live Mux, which unit tests do not have.)
+        assert_eq!(active_id(&tab), vec![3]);
+
+        assert!(tab.swap_panes(1, 3));
+        assert_eq!(ids(&tab), vec![3, 2, 1], "outer panes traded places");
+        let after: Vec<(usize, usize, usize, usize)> = tab
+            .iter_panes()
+            .iter()
+            .map(|p| (p.left, p.top, p.width, p.height))
+            .collect();
+        assert_eq!(before, after, "the slots did not move or change size");
+        // Pane 3 was active and still is, now in the first slot.
+        assert_eq!(active_id(&tab), vec![3]);
+        assert!(tab.iter_panes()[0].is_active);
+
+        // Swapping back restores the original order.
+        assert!(tab.swap_panes(3, 1));
+        assert_eq!(ids(&tab), vec![1, 2, 3]);
+
+        // Nothing to do: same pane, or a pane that is not in the tab.
+        assert!(!tab.swap_panes(2, 2));
+        assert!(!tab.swap_panes(2, 99));
+        assert_eq!(ids(&tab), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn dock_pane_moves_a_pane_next_to_another_and_activates_it() {
+        let (tab, _) = three_across();
+        let below = SplitRequest {
+            direction: SplitDirection::Vertical,
+            target_is_second: true,
+            top_level: false,
+            size: SplitSize::Percent(50),
+        };
+
+        // Pane 1 goes under pane 3: 2 | (3 over 1).
+        assert!(tab.dock_pane(1, 3, below));
+        assert_eq!(ids(&tab), vec![2, 3, 1]);
+        let panes = tab.iter_panes();
+        let by_id = |id: PaneId| panes.iter().find(|p| p.pane.pane_id() == id).unwrap();
+        let (p2, p3, p1) = (by_id(2), by_id(3), by_id(1));
+        assert_eq!(p2.left, 0);
+        assert_eq!(p3.left, p1.left, "docked pane shares the target's column");
+        assert!(p1.top > p3.top, "and sits below it");
+        for p in &panes {
+            assert!(p.width > 0 && p.height > 0, "pane {} collapsed", p.index);
+        }
+        assert!(p1.is_active, "the moved pane takes focus");
+
+        // Docking onto itself, or onto a pane that is not there, changes nothing.
+        assert!(!tab.dock_pane(1, 1, below));
+        assert!(!tab.dock_pane(1, 99, below));
+        assert!(!tab.dock_pane(99, 1, below));
+        assert_eq!(ids(&tab), vec![2, 3, 1]);
+    }
+
+    #[test]
+    fn dock_pane_refuses_a_target_too_small_to_split_without_losing_the_pane() {
+        let size = TerminalSize {
+            rows: 24,
+            cols: 5,
+            pixel_width: 50,
+            pixel_height: 600,
+            dpi: 96,
+        };
+        let tab = Tab::new(&size);
+        tab.assign_pane(&FakePane::new(1, size));
+        let req = SplitRequest {
+            direction: SplitDirection::Horizontal,
+            ..Default::default()
+        };
+        let split = tab.compute_split_size(0, req).unwrap();
+        tab.split_and_insert(0, req, FakePane::new(2, split.second)).unwrap();
+
+        // Each pane is about two columns wide: too narrow to split again.
+        let left_of = SplitRequest {
+            direction: SplitDirection::Horizontal,
+            target_is_second: false,
+            ..req
+        };
+        assert!(!tab.dock_pane(1, 2, left_of));
+        assert_eq!(ids(&tab), vec![1, 2], "nothing was taken out");
     }
 
     #[test]
