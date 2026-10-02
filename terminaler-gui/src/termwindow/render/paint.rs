@@ -184,7 +184,7 @@ impl crate::TermWindow {
         let panes = self.get_panes_to_render();
         let focused = self.focused.is_some();
         let window_is_transparent =
-            !self.window_background.is_empty() || self.config.window_background_opacity != 1.0;
+            !self.window_background.is_empty() || crate::termwindow::effective_window_opacity(self.config.window_background_opacity) != 1.0;
 
         let start = Instant::now();
         let gl_state = self.render_state.as_ref().unwrap();
@@ -242,7 +242,7 @@ impl crate::TermWindow {
                 self.palette().background
             }
             .to_linear()
-            .mul_alpha(self.config.window_background_opacity);
+            .mul_alpha(crate::termwindow::effective_window_opacity(self.config.window_background_opacity));
 
             self.filled_rectangle(
                 &mut layers,

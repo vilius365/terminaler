@@ -859,6 +859,10 @@ impl crate::TermWindow {
             sidebar_width,
             show_sync,
             crate::termwindow::notifications_blocked(),
+            // The toggle only means something when the panes are translucent.
+            (self.config.window_background_opacity < 1.0).then(|| {
+                crate::termwindow::OPAQUE_OVERRIDE.load(std::sync::atomic::Ordering::Relaxed)
+            }),
         );
 
         // Measure the row rather than reserving a guess for it. Its measured
@@ -2328,8 +2332,8 @@ fn sidebar_eyebrow(
         .min_width(Some(Dimension::Pixels(sidebar_width)))
 }
 
-/// Bottom widget dock: new terminal, theme picker, and the global
-/// notification block. Text labels in the rail
+/// Bottom widget dock: new terminal, theme picker, the global
+/// notification block and the opacity toggle. Text labels in the rail
 /// font rather than icon glyphs: two different refresh glyphs (U+27F3,
 /// U+21BB) failed to shape in the field, and at this size words read better
 /// than symbols anyway. Three text chips overflow 90px ("sync" clipped to
@@ -2341,6 +2345,8 @@ fn build_widget_dock(
     sidebar_width: f32,
     show_sync: bool,
     notifications_blocked: bool,
+    // Some(forced_opaque) when the opacity toggle is shown.
+    opacity_toggle: Option<bool>,
 ) -> Element {
     // Chip padding is budgeted, not fixed. The box model has no wrapping, so a
     // row that overflows silently clips its last chip — measured at the 100px
@@ -2348,7 +2354,7 @@ fn build_widget_dock(
     // content edge and swallowed the last button. Divide the space the chips
     // don't need for glyphs among them instead, with a floor that keeps the
     // hit target usable.
-    let chip_count = 1 + show_sync as u32 + 2;
+    let chip_count = 1 + show_sync as u32 + 2 + opacity_toggle.is_some() as u32;
     let content_w = sidebar_width - 2. * DOCK_PAD_X;
     // Glyph advances are ~8px at rail sizes; the primary chip carries +5 each
     // side. Solve the remaining budget per chip side, then clamp.
@@ -2438,6 +2444,13 @@ fn build_widget_dock(
     } else {
         chip("\u{2298}", TabSidebarItem::NotificationsBlockButton) // block notifications
     });
+    // Opacity toggle beside the notification block. The glyph is the state:
+    // a medium shade while the panes are translucent, a full block while
+    // forced opaque. Block elements are in every monospace rail font.
+    if let Some(forced_opaque) = opacity_toggle {
+        let glyph = if forced_opaque { "\u{2588}" } else { "\u{2592}" };
+        chips.push(chip(glyph, TabSidebarItem::OpacityToggleButton));
+    }
 
     Element::new(font, ElementContent::Children(chips))
         .display(DisplayType::Block)

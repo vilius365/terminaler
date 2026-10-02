@@ -1969,6 +1969,13 @@ impl super::TermWindow {
                         log::info!("Notifications globally blocked: {}", blocked);
                         self.invalidate_tab_sidebar();
                     }
+                    TabSidebarItem::OpacityToggleButton => {
+                        use std::sync::atomic::Ordering;
+                        let opaque = !crate::termwindow::OPAQUE_OVERRIDE
+                            .fetch_xor(true, Ordering::Relaxed);
+                        log::info!("Panes forced opaque: {}", opaque);
+                        self.invalidate_tab_sidebar();
+                    }
                 }
             }
             WMEK::Press(MousePress::Middle) => match sidebar_item {
@@ -2003,7 +2010,8 @@ impl super::TermWindow {
                 | TabSidebarItem::MuteNotifications { .. }
                 | TabSidebarItem::ThemePickerButton
                 | TabSidebarItem::TmuxRefreshButton
-                | TabSidebarItem::NotificationsBlockButton => {
+                | TabSidebarItem::NotificationsBlockButton
+                | TabSidebarItem::OpacityToggleButton => {
                     context.set_cursor(Some(MouseCursor::Hand));
                 }
                 TabSidebarItem::Flyout => {

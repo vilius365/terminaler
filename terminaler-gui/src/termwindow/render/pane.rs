@@ -396,7 +396,7 @@ impl crate::TermWindow {
         let filled_box = gl_state.util_sprites.filled_box.texture_coords();
 
         let window_is_transparent =
-            !self.window_background.is_empty() || config.window_background_opacity != 1.0;
+            !self.window_background.is_empty() || crate::termwindow::effective_window_opacity(config.window_background_opacity) != 1.0;
 
         let default_bg = palette
             .resolve_bg(ColorAttribute::Default)
@@ -465,7 +465,7 @@ impl crate::TermWindow {
                     palette
                         .background
                         .to_linear()
-                        .mul_alpha(config.window_background_opacity),
+                        .mul_alpha(crate::termwindow::effective_window_opacity(config.window_background_opacity)),
                 )
                 .context("filled_rectangle")?;
             quad.set_hsv(if pos.is_active {
@@ -524,7 +524,7 @@ impl crate::TermWindow {
                     let (r1, g1, b1, a) = palette
                         .background
                         .to_linear()
-                        .mul_alpha(config.window_background_opacity)
+                        .mul_alpha(crate::termwindow::effective_window_opacity(config.window_background_opacity))
                         .tuple();
                     LinearRgba::with_components(
                         r1 + (r - r1) * intensity,
@@ -1118,7 +1118,7 @@ impl crate::TermWindow {
                     palette
                         .background
                         .to_linear()
-                        .mul_alpha(self.config.window_background_opacity)
+                        .mul_alpha(crate::termwindow::effective_window_opacity(self.config.window_background_opacity))
                         .into()
                 } else {
                     InheritableColor::Inherited

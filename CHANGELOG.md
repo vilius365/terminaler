@@ -2,6 +2,14 @@
 
 ## 2026-10-02
 
+### Added
+- **A focus layout.** In the ctrl+right-click grid (new fourth row) and on the pane toolbar, `focus` gives the chosen pane 60% of the width on the left and stacks every other pane of the tab top to bottom on the right. Existing panes are rearranged, never created or closed; a tab with hidden panes or too few rows is left as it is.
+- **An opacity toggle in the sidebar dock.** Beside the `⊘` notification block, a chip switches the panes between the configured `window_background_opacity` (`▒`) and fully opaque (`█`). Session-only, like the notification block; it appears only when the configured opacity is below 1.
+
+### Fixed
+- **The pane toolbar and the layout grid shrank on scaled monitors.** Both were sized in raw pixels while text follows the window's DPI. On Wayland a fractionally scaled output (1.25, 1.33) reports an integer scale of 2, so the text doubled and the toolbar did not, halving it whenever the window sat on such a monitor. Their geometry now scales with the DPI (never below the 96-DPI size), and painting and hit-testing share it.
+- **The toolbar's flip-split button did nothing.** It fell through to the preset lookup and only logged "Unknown snap layout: flip-split"; it now flips the split.
+
 ### Changed
 - **Persona sessions get their own group in the sidebar.** Sessions started through `persona.sh` carry an `ol-` interconnect instance id; within each tmux box they now follow the sessions started by hand, under a dotless `· PERSONAS` sub-heading. The heading renders only when a tile fits under it, and under height pressure persona tiles fold into the `+N` count first.
 - **The LOCAL group is gone from the sidebar by default.** It listed this window's own tabs and panes, but every pane was titled after its SSH host (`devbox`), so the group said nothing the box tiles did not already show (attached sessions carry a `●`). Set `tab_sidebar_show_local: true` to bring it back, with its pane switcher, per-pane notification badges and close/mute flyout.

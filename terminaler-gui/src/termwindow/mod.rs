@@ -115,6 +115,23 @@ pub fn notifications_blocked() -> bool {
     NOTIFICATIONS_BLOCKED.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// Session-only opacity override, toggled from the sidebar dock: when set,
+/// every pane paints fully opaque whatever `window_background_opacity` says.
+/// Like the notification block it is not written to the config, so a restart
+/// returns to the configured translucency (user request, 2026-10-02).
+pub static OPAQUE_OVERRIDE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// The background opacity to paint with: `configured` unless the dock's
+/// opacity toggle has forced the panes opaque.
+pub fn effective_window_opacity(configured: f32) -> f32 {
+    if OPAQUE_OVERRIDE.load(std::sync::atomic::Ordering::Relaxed) {
+        1.0
+    } else {
+        configured
+    }
+}
+
 pub const ICON_DATA: &'static [u8] = include_bytes!("../../../assets/icon/terminal.png");
 
 pub fn set_window_position(pos: GuiPosition) {
@@ -349,6 +366,9 @@ pub enum TabSidebarItem {
     ResizeHandle,
     /// Widget-dock button: toggles the global notification block.
     NotificationsBlockButton,
+    /// Widget-dock button: toggles panes between the configured translucency
+    /// and fully opaque. Only shown when the configured opacity is below 1.
+    OpacityToggleButton,
     /// A discovered tmux session in the AGENTS section; clicking attaches to it.
     TmuxSession { box_name: String, session: String },
     /// The hover flyout panel itself. Registered so reverse hit-testing gives
