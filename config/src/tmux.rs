@@ -25,6 +25,17 @@ pub struct TmuxConfig {
     /// generic agent type. Empty disables the lookup.
     #[dynamic(default = "default_interconnect_url")]
     pub interconnect_url: String,
+
+    /// Path to a file holding the daemon's shared secret, sent as the
+    /// `x-interconnect-secret` header on the instance lookup. Accepts the
+    /// daemon's own env-style file (a `CLAUDE_INTERCONNECT_SECRET=...` line,
+    /// e.g. a copy of `~/.claude/machines/env/interconnect.env`) or a file
+    /// holding just the secret. A leading `~/` is expanded. The
+    /// `CLAUDE_INTERCONNECT_SECRET` environment variable takes precedence.
+    /// Unset or unreadable: the lookup is sent without a header, which an
+    /// enforcing daemon answers with 401 (sessions then show the agent type).
+    #[dynamic(default)]
+    pub interconnect_secret_file: Option<String>,
 }
 
 fn default_interconnect_url() -> String {
@@ -39,6 +50,7 @@ impl Default for TmuxConfig {
             probe_timeout_seconds: default_probe_timeout(),
             boxes: vec![],
             interconnect_url: default_interconnect_url(),
+            interconnect_secret_file: None,
         }
     }
 }
@@ -457,6 +469,31 @@ mod tests {
         // Unset -> falls back to the box name; set -> the registry's name.
         assert_eq!(cfg.boxes[0].interconnect_machine_name(), "devbox");
         assert_eq!(cfg.boxes[1].interconnect_machine_name(), "home");
+    }
+
+    /// The secret file key must parse through the STRICT pipeline, and stay
+    /// optional so existing configs keep working.
+    #[test]
+    fn parses_interconnect_secret_file_key() {
+        let json = r#"{ "interconnect_secret_file": "~/.config/terminaler/interconnect.env", "boxes": [] }"#;
+        let value: serde_json::Value = serde_json::from_str(json).unwrap();
+        let cfg = TmuxConfig::from_dynamic(
+            &crate::json_to_dynamic(&value),
+            terminaler_dynamic::FromDynamicOptions {
+                unknown_fields: terminaler_dynamic::UnknownFieldAction::Deny,
+                deprecated_fields: terminaler_dynamic::UnknownFieldAction::Deny,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            cfg.interconnect_secret_file.as_deref(),
+            Some("~/.config/terminaler/interconnect.env")
+        );
+
+        let value: serde_json::Value = serde_json::from_str(r#"{"boxes": []}"#).unwrap();
+        let cfg =
+            TmuxConfig::from_dynamic(&crate::json_to_dynamic(&value), Default::default()).unwrap();
+        assert_eq!(cfg.interconnect_secret_file, None);
     }
 
     /// The lookup is opt-out: omitting the key must leave it enabled at the

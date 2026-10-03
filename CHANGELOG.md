@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-10-03
+
+### Fixed
+- **Sidebar and picker rows showed `claude` instead of the interconnect instance name.** The daemon now enforces its shared secret (`x-interconnect-secret`) and answers an unauthenticated `/instances` with 401, which discovery treated as "no instances registered" and silently fell back to the agent type. The lookup now sends the secret, read from the new `tmux.interconnect_secret_file` (the daemon's env-style file or a bare secret) or the `CLAUDE_INTERCONNECT_SECRET` environment variable, and a 401 now logs one warning that names the fix. The secret is never logged.
+
 ## 2026-10-02
 
 ### Added

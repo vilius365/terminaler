@@ -122,8 +122,10 @@ fn poller_loop() {
             // Fetched once per cycle and shared by every box probe: the
             // registry is global, and this keeps it to one local request
             // per poll however many boxes are configured.
+            let secret = resolve_interconnect_secret(tmux.interconnect_secret_file.as_deref());
             let instances = std::sync::Arc::new(fetch_interconnect_instances(
                 &tmux.interconnect_url,
+                secret.as_deref(),
                 Duration::from_secs(2),
             ));
             for tmux_box in tmux.boxes.iter().filter(|b| b.enabled) {
@@ -430,12 +432,29 @@ struct InterconnectInstance {
     status: Option<String>,
 }
 
+/// Header the daemon reads its shared secret from.
+const INTERCONNECT_SECRET_HEADER: &str = "x-interconnect-secret";
+
+/// Env-file key (and environment variable) holding the daemon's secret.
+const INTERCONNECT_SECRET_KEY: &str = "CLAUDE_INTERCONNECT_SECRET";
+
+/// Warn once, not every poll, when the daemon rejects the lookup as
+/// unauthorized: a 401 otherwise looks exactly like "no instance names".
+static UNAUTHORIZED_WARNED: AtomicBool = AtomicBool::new(false);
+
 /// Fetch registered instances from the interconnect daemon.
 ///
 /// Deliberately short-timeout and failure-tolerant: the daemon is often not
 /// running (it is a separate opt-in tool), so every failure path returns an
 /// empty map and the caller silently falls back to the agent type.
-fn fetch_interconnect_instances(base_url: &str, timeout: Duration) -> Vec<InterconnectInstance> {
+///
+/// `secret` is sent as `x-interconnect-secret` when present; an enforcing
+/// daemon answers 401 without it. The secret is never logged.
+fn fetch_interconnect_instances(
+    base_url: &str,
+    secret: Option<&str>,
+    timeout: Duration,
+) -> Vec<InterconnectInstance> {
     if base_url.trim().is_empty() {
         return vec![];
     }
@@ -450,13 +469,16 @@ fn fetch_interconnect_instances(base_url: &str, timeout: Duration) -> Vec<Interc
     };
 
     let mut body = Vec::new();
-    match http_req::request::Request::new(&uri)
+    let mut request = http_req::request::Request::new(&uri);
+    request
         .timeout(timeout)
         .connect_timeout(Some(timeout))
         .read_timeout(Some(timeout))
-        .header("User-Agent", "terminaler-tmux-discovery")
-        .send(&mut body)
-    {
+        .header("User-Agent", "terminaler-tmux-discovery");
+    if let Some(secret) = secret {
+        request.header(INTERCONNECT_SECRET_HEADER, secret);
+    }
+    match request.send(&mut body) {
         Ok(res) if res.status_code().is_success() => {
             serde_json::from_slice::<Vec<InterconnectInstance>>(&body).unwrap_or_else(|err| {
                 log::debug!("tmux discovery: interconnect JSON unreadable: {}", err);
@@ -464,7 +486,17 @@ fn fetch_interconnect_instances(base_url: &str, timeout: Duration) -> Vec<Interc
             })
         }
         Ok(res) => {
-            log::debug!("tmux discovery: interconnect returned {}", res.status_code());
+            let code = u16::from(res.status_code());
+            if code == 401 && !UNAUTHORIZED_WARNED.swap(true, Ordering::Relaxed) {
+                log::warn!(
+                    "tmux discovery: the interconnect daemon rejected the instance lookup (401); \
+                     sessions will show the agent type. Set tmux.interconnect_secret_file (or the \
+                     {} environment variable) to the daemon's secret.",
+                    INTERCONNECT_SECRET_KEY
+                );
+            } else {
+                log::debug!("tmux discovery: interconnect returned {}", res.status_code());
+            }
             vec![]
         }
         Err(err) => {
@@ -473,6 +505,77 @@ fn fetch_interconnect_instances(base_url: &str, timeout: Duration) -> Vec<Interc
             vec![]
         }
     }
+}
+
+/// The daemon secret for the instance lookup: the environment variable wins,
+/// then the configured file. `None` sends the lookup without a header.
+fn resolve_interconnect_secret(secret_file: Option<&str>) -> Option<String> {
+    if let Ok(value) = std::env::var(INTERCONNECT_SECRET_KEY) {
+        let value = value.trim();
+        if !value.is_empty() {
+            return Some(value.to_string());
+        }
+    }
+    let path = expand_home(secret_file?.trim());
+    if path.is_empty() {
+        return None;
+    }
+    match std::fs::read_to_string(&path) {
+        Ok(contents) => {
+            let secret = parse_interconnect_secret(&contents);
+            if secret.is_none() {
+                log::debug!("tmux discovery: no interconnect secret found in {}", path);
+            }
+            secret
+        }
+        Err(err) => {
+            log::debug!("tmux discovery: cannot read interconnect secret file {}: {}", path, err);
+            None
+        }
+    }
+}
+
+/// Expand a leading `~/` using HOME (or USERPROFILE on Windows).
+fn expand_home(path: &str) -> String {
+    if let Some(rest) = path.strip_prefix("~/") {
+        if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
+            return std::path::Path::new(&home)
+                .join(rest)
+                .to_string_lossy()
+                .into_owned();
+        }
+    }
+    path.to_string()
+}
+
+/// Read the secret from either the daemon's env-style file (a
+/// `CLAUDE_INTERCONNECT_SECRET=...` line) or a file holding only the secret.
+fn parse_interconnect_secret(contents: &str) -> Option<String> {
+    let prefix = format!("{}=", INTERCONNECT_SECRET_KEY);
+    for line in contents.lines() {
+        if let Some(value) = line.trim().strip_prefix(prefix.as_str()) {
+            let value = value.trim().trim_matches('"').trim_matches('\'');
+            return if value.is_empty() { None } else { Some(value.to_string()) };
+        }
+    }
+    let mut lines = contents
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'));
+    let first = lines.next()?;
+    if lines.next().is_some() || first.chars().any(char::is_whitespace) {
+        return None;
+    }
+    // `OTHER_KEY=value` is an env line for a different key, not a bare secret
+    // (a bare base64 secret may still end in `=`).
+    if let Some((key, _)) = first.split_once('=') {
+        if !key.is_empty()
+            && key.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+        {
+            return None;
+        }
+    }
+    Some(first.to_string())
 }
 
 /// Build pseudo-snapshots for machines that appear in the interconnect
@@ -662,6 +765,89 @@ fn agent_label(command: &str) -> Option<&'static str> {
 mod tests {
     use super::*;
 
+    /// Serve one canned response on a loopback port and return the raw
+    /// (lower-cased) request the lookup sent.
+    fn serve_once(status_line: &str) -> (u16, std::thread::JoinHandle<String>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let response = format!(
+            "HTTP/1.1 {}\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n[]",
+            status_line
+        );
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 4096];
+            let n = stream.read(&mut buf).unwrap();
+            stream.write_all(response.as_bytes()).unwrap();
+            String::from_utf8_lossy(&buf[..n]).to_lowercase()
+        });
+        (port, handle)
+    }
+
+    #[test]
+    fn lookup_sends_the_secret_header_when_configured() {
+        let (port, server) = serve_once("200 OK");
+        let url = format!("http://127.0.0.1:{}", port);
+        let got = fetch_interconnect_instances(&url, Some("s3cret-value"), Duration::from_secs(2));
+        assert!(got.is_empty());
+        let request = server.join().unwrap();
+        assert!(request.starts_with("get /instances "), "{request}");
+        assert!(request.contains("x-interconnect-secret: s3cret-value"), "{request}");
+    }
+
+    #[test]
+    fn lookup_sends_no_secret_header_when_unconfigured() {
+        let (port, server) = serve_once("200 OK");
+        let url = format!("http://127.0.0.1:{}", port);
+        let _ = fetch_interconnect_instances(&url, None, Duration::from_secs(2));
+        let request = server.join().unwrap();
+        assert!(!request.contains("x-interconnect-secret"), "{request}");
+    }
+
+    #[test]
+    fn a_401_falls_back_to_no_instances_without_panicking() {
+        let (port, server) = serve_once("401 Unauthorized");
+        let url = format!("http://127.0.0.1:{}", port);
+        let got = fetch_interconnect_instances(&url, None, Duration::from_secs(2));
+        assert!(got.is_empty());
+        let _ = server.join().unwrap();
+    }
+
+    #[test]
+    fn parses_secret_from_the_daemons_env_file() {
+        let env = "# interconnect\nOTHER=1\nCLAUDE_INTERCONNECT_SECRET=abc123\n";
+        assert_eq!(parse_interconnect_secret(env).as_deref(), Some("abc123"));
+        let quoted = "CLAUDE_INTERCONNECT_SECRET=\"abc123\"\n";
+        assert_eq!(parse_interconnect_secret(quoted).as_deref(), Some("abc123"));
+        assert_eq!(parse_interconnect_secret("CLAUDE_INTERCONNECT_SECRET=\n"), None);
+    }
+
+    #[test]
+    fn parses_a_bare_secret_file() {
+        assert_eq!(parse_interconnect_secret("abc123\n").as_deref(), Some("abc123"));
+        assert_eq!(
+            parse_interconnect_secret("# comment\nabc123==\n").as_deref(),
+            Some("abc123==")
+        );
+    }
+
+    #[test]
+    fn rejects_files_with_no_usable_secret() {
+        assert_eq!(parse_interconnect_secret(""), None);
+        assert_eq!(parse_interconnect_secret("# only a comment\n"), None);
+        assert_eq!(parse_interconnect_secret("OTHER_KEY=value\n"), None);
+        assert_eq!(parse_interconnect_secret("two\nlines\n"), None);
+        assert_eq!(parse_interconnect_secret("has space\n"), None);
+    }
+
+    #[test]
+    fn expands_a_leading_tilde_only() {
+        assert_eq!(expand_home("/abs/path"), "/abs/path");
+        assert_eq!(expand_home("rel/path"), "rel/path");
+        assert_eq!(expand_home(""), "");
+    }
+
     #[test]
     fn parses_list_sessions_lines() {
         let out = "1 0 1722860000 dark-factory\n3 1 1722860001 invade team toolkit\n";
@@ -813,14 +999,14 @@ mod tests {
     #[test]
     fn empty_interconnect_url_skips_the_request() {
         // Must not attempt a request (and must not panic) when disabled.
-        assert!(fetch_interconnect_instances("", Duration::from_millis(50)).is_empty());
-        assert!(fetch_interconnect_instances("   ", Duration::from_millis(50)).is_empty());
+        assert!(fetch_interconnect_instances("", None, Duration::from_millis(50)).is_empty());
+        assert!(fetch_interconnect_instances("   ", None, Duration::from_millis(50)).is_empty());
     }
 
     #[test]
     fn unreachable_interconnect_yields_no_instances() {
         // Nothing listens here; the lookup must degrade quietly, not error.
-        let got = fetch_interconnect_instances("http://127.0.0.1:1", Duration::from_millis(300));
+        let got = fetch_interconnect_instances("http://127.0.0.1:1", None, Duration::from_millis(300));
         assert!(got.is_empty());
     }
 

@@ -230,6 +230,16 @@ The `Wsl` tmux connection variant is Windows-only; on Linux use `Ssh`, or
         // interconnect_url must be reachable FROM the machine running the GUI;
         // the 127.0.0.1 default is wrong whenever the daemon is on another box.
         "interconnect_url": "http://127.0.0.1:7799",
+        // interconnect_secret_file: the daemon rejects requests without its
+        // shared secret (401), and a 401 looks exactly like "no instance
+        // names": every row falls back to "claude". Point this at a file with
+        // a CLAUDE_INTERCONNECT_SECRET=... line (a copy of the daemon's
+        // ~/.claude/machines/env/interconnect.env works) or a bare secret.
+        // The CLAUDE_INTERCONNECT_SECRET env var takes precedence. A `~/` is
+        // expanded. Keep the file out of git. A bare secret written entirely
+        // in UPPERCASE and ending in `=` is read as an env line: use the
+        // env-file form for those.
+        "interconnect_secret_file": "~/.config/terminaler/interconnect.env",
         "boxes": [
             { "name": "devbox", "connection": { "Ssh": { "target": "devbox" } } },
             // interconnect_machine: this box's CLAUDE_MACHINE_NAME, when the
