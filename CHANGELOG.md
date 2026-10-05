@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-10-05
+
+### Changed
+- **The focus layout remembers the width you give it.** Drag the divider between the main pane and the stack (or resize with the keyboard), and the next `focus` (on any pane, in any tab of the window's process) uses that width instead of resetting to 60%. A resize only counts while the tab is still in the arrangement `focus` built; splitting a new pane into it ends that. The memory lasts until Terminaler restarts. Stack row heights are not remembered.
+
 ## 2026-10-03
 
 ### Fixed

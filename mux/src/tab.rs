@@ -51,6 +51,10 @@ struct TabInner {
     /// Hidden panes remain alive but don't take up visual space;
     /// their sibling expands to fill the parent allocation.
     hidden: HashSet<PaneId>,
+    /// Set by focus_layout and cleared when a split adds a pane, so a
+    /// resize is only read as a focus width while the tree is one that
+    /// focus_layout built.
+    focus_arranged: bool,
 }
 
 /// A Tab is a container of Panes
@@ -899,7 +903,9 @@ impl Tab {
     /// The adjusted size is propogated downwards to contained children and
     /// their panes are resized accordingly.
     pub fn resize_split_by(&self, split_index: usize, delta: isize) {
-        self.inner.lock().resize_split_by(split_index, delta)
+        let mut inner = self.inner.lock();
+        inner.resize_split_by(split_index, delta);
+        inner.remember_focus_width();
     }
 
     /// Flip the split containing `pane_id` between a left/right and a
@@ -910,12 +916,18 @@ impl Tab {
     }
 
     /// Rearrange every pane of the tab around `pane_id`: it takes
-    /// `main_percent` of the width on the left, and all other panes stack
+    /// `main_fraction` of the width on the left, and all other panes stack
     /// top to bottom on the right in their current order. No pane is created
     /// or closed. Returns false, leaving the layout untouched, when the tab
     /// has hidden panes, fewer than two panes, or too few rows for the stack.
-    pub fn focus_layout(&self, pane_id: PaneId, main_percent: u8) -> bool {
-        self.inner.lock().focus_layout(pane_id, main_percent)
+    pub fn focus_layout(&self, pane_id: PaneId, main_fraction: f32) -> bool {
+        self.inner.lock().focus_layout(pane_id, main_fraction)
+    }
+
+    /// The main pane's share of the width while the tab is still in the
+    /// arrangement focus_layout built, or `None` once it is not.
+    pub fn focus_main_fraction(&self) -> Option<f32> {
+        self.inner.lock().focus_main_fraction()
     }
 
     /// Trade the places of two panes. Each pane takes over the other's slot
@@ -983,7 +995,9 @@ impl Tab {
     /// Adjusts the size of the active pane in the specified direction
     /// by the specified amount.
     pub fn adjust_pane_size(&self, direction: PaneDirection, amount: usize) {
-        self.inner.lock().adjust_pane_size(direction, amount)
+        let mut inner = self.inner.lock();
+        inner.adjust_pane_size(direction, amount);
+        inner.remember_focus_width();
     }
 
     /// Activate an adjacent pane in the specified direction.
@@ -1105,6 +1119,7 @@ impl TabInner {
             title: String::new(),
             recency: Recency::default(),
             hidden: HashSet::new(),
+            focus_arranged: false,
         }
     }
 
@@ -1893,7 +1908,47 @@ impl TabInner {
         true
     }
 
-    fn focus_layout(&mut self, pane_id: PaneId, main_percent: u8) -> bool {
+    fn focus_main_fraction(&self) -> Option<f32> {
+        if !self.focus_arranged || self.zoomed.is_some() {
+            return None;
+        }
+        // The shape focus_layout builds: one leaf on the left of a
+        // left/right split, and only top/bottom splits on the right.
+        fn all_stacked(tree: &Tree) -> bool {
+            match tree {
+                Tree::Empty => false,
+                Tree::Leaf(_) => true,
+                Tree::Node { left, right, data } => {
+                    matches!(data, Some(d) if d.direction == SplitDirection::Vertical)
+                        && all_stacked(left)
+                        && all_stacked(right)
+                }
+            }
+        }
+        match self.pane.as_ref()? {
+            Tree::Node {
+                left,
+                right,
+                data: Some(data),
+            } if data.direction == SplitDirection::Horizontal
+                && matches!(**left, Tree::Leaf(_))
+                && all_stacked(right) =>
+            {
+                let usable = data.first.cols + data.second.cols;
+                (usable > 0).then(|| data.first.cols as f32 / usable as f32)
+            }
+            _ => None,
+        }
+    }
+
+    /// After a resize, keep the focus layout's main width for next time.
+    fn remember_focus_width(&self) {
+        if let Some(fraction) = self.focus_main_fraction() {
+            Mux::try_get().map(|mux| mux.set_focus_main_fraction(fraction));
+        }
+    }
+
+    fn focus_layout(&mut self, pane_id: PaneId, main_fraction: f32) -> bool {
         // A hidden pane has no place in a fresh tree that would keep it
         // hidden, so leave such a tab alone rather than reveal it.
         if !self.hidden.is_empty() {
@@ -1932,7 +1987,8 @@ impl TabInner {
 
         // One column of the width is the divider between main and stack.
         let usable = size.cols - 1;
-        let main_cols = (usable * main_percent.min(100) as usize / 100).clamp(1, usable - 1);
+        let main_cols =
+            ((usable as f32 * main_fraction.clamp(0.0, 1.0)).round() as usize).clamp(1, usable - 1);
         let stack_cols = usable - main_cols;
 
         // Each split hands its first child an equal share of what remains,
@@ -1966,6 +2022,7 @@ impl TabInner {
         };
 
         self.pane.replace(root);
+        self.focus_arranged = true;
         // The main pane is the first leaf in preorder, so index 0.
         self.active = 0;
         apply_sizes_from_splits(self.pane.as_mut().unwrap(), &size);
@@ -2648,6 +2705,9 @@ impl TabInner {
         if self.zoomed.is_some() {
             anyhow::bail!("cannot split while zoomed");
         }
+        // A new pane makes this some other layout, even when it happens to
+        // keep focus_layout's shape.
+        self.focus_arranged = false;
 
         {
             let split_info = self
@@ -3072,7 +3132,7 @@ mod test {
         let tab = Tab::new(&size);
         tab.assign_pane(&FakePane::new(1, size));
         // A lone pane has nothing to stack.
-        assert!(!tab.focus_layout(1, 60));
+        assert!(!tab.focus_layout(1, 0.6));
 
         // Three panes side by side: 1 | 2 | 3.
         for (idx, id) in [(0, 2), (1, 3)] {
@@ -3086,7 +3146,7 @@ mod test {
         }
 
         // Focus the middle pane.
-        assert!(tab.focus_layout(2, 60));
+        assert!(tab.focus_layout(2, 0.6));
         let panes = tab.iter_panes();
         let ids: Vec<PaneId> = panes.iter().map(|p| p.pane.pane_id()).collect();
         assert_eq!(ids, vec![2, 1, 3], "main first, then the others in order");
@@ -3105,8 +3165,47 @@ mod test {
         assert_eq!(stack[0].height + 1 + stack[1].height, 24, "stack fills the height");
 
         // An unknown pane leaves the layout alone.
-        assert!(!tab.focus_layout(99, 60));
+        assert!(!tab.focus_layout(99, 0.6));
         assert_eq!(tab.iter_panes()[0].pane.pane_id(), 2);
+    }
+
+    #[test]
+    fn focus_layout_reports_the_width_the_user_resized_it_to() {
+        let (tab, _) = three_across();
+        // Not a focus arrangement yet, even though it is a left/right split.
+        assert_eq!(tab.focus_main_fraction(), None);
+
+        assert!(tab.focus_layout(1, 0.6));
+        let main_cols = tab.iter_panes()[0].width;
+        assert_eq!(tab.focus_main_fraction(), Some(main_cols as f32 / 79.0));
+
+        // Drag the main divider (the root split, index 0) 10 columns right,
+        // as a user widening the main pane and shrinking the stack would.
+        tab.resize_split_by(0, 10);
+        let widened = tab.iter_panes()[0].width;
+        assert_eq!(widened, main_cols + 10);
+        let fraction = tab.focus_main_fraction().unwrap();
+        assert_eq!(fraction, widened as f32 / 79.0);
+
+        // Re-focusing another pane with that fraction keeps the width.
+        assert!(tab.focus_layout(3, fraction));
+        assert_eq!(tab.iter_panes()[0].pane.pane_id(), 3);
+        assert_eq!(tab.iter_panes()[0].width, widened);
+
+        // Swapping keeps the shape, so it is still a focus arrangement.
+        assert!(tab.swap_panes(3, 1));
+        assert!(tab.focus_main_fraction().is_some());
+
+        // Splitting in a new pane makes it some other layout.
+        let idx = tab.iter_panes()[0].index;
+        let req = SplitRequest {
+            direction: SplitDirection::Vertical,
+            ..Default::default()
+        };
+        let split = tab.compute_split_size(idx, req).unwrap();
+        tab.split_and_insert(idx, req, FakePane::new(4, split.second))
+            .unwrap();
+        assert_eq!(tab.focus_main_fraction(), None);
     }
 
     /// Three panes side by side, ids 1 | 2 | 3.

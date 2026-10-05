@@ -112,6 +112,10 @@ pub struct Mux {
     clients: RwLock<HashMap<ClientId, ClientInfo>>,
     identity: RwLock<Option<Arc<ClientId>>>,
     num_panes_by_workspace: RwLock<HashMap<String, usize>>,
+    /// Share of the width the focus layout last gave its main pane, as the
+    /// user left it by resizing; shared by every tab so a re-focus anywhere
+    /// keeps the width.
+    focus_main_fraction: RwLock<Option<f32>>,
     main_thread_id: std::thread::ThreadId,
     // STRIPPED: agent: Option<AgentProxy>,
 }
@@ -443,6 +447,7 @@ impl Mux {
             clients: RwLock::new(HashMap::new()),
             identity: RwLock::new(None),
             num_panes_by_workspace: RwLock::new(HashMap::new()),
+            focus_main_fraction: RwLock::new(None),
             main_thread_id: std::thread::current().id(),
         }
     }
@@ -1104,6 +1109,16 @@ impl Mux {
 
     pub fn set_banner(&self, banner: Option<String>) {
         *self.banner.write() = banner;
+    }
+
+    /// The main pane's share of the width for the next focus layout, if the
+    /// user has resized one; `None` means use the default.
+    pub fn focus_main_fraction(&self) -> Option<f32> {
+        *self.focus_main_fraction.read()
+    }
+
+    pub fn set_focus_main_fraction(&self, fraction: f32) {
+        *self.focus_main_fraction.write() = Some(fraction);
     }
 
     pub fn resolve_spawn_tab_domain(

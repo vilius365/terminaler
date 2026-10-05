@@ -3218,15 +3218,17 @@ impl TermWindow {
         }
     }
 
-    /// Focus layout: `pane_id` large on the left (60% of the width), every
-    /// other pane of the tab stacked top to bottom on the right.
+    /// Focus layout: `pane_id` large on the left, every other pane of the
+    /// tab stacked top to bottom on the right. The main pane gets the width
+    /// the user last resized a focus layout to, or 60% until they have.
     pub fn focus_layout(&mut self, pane_id: PaneId) {
         let mux = Mux::get();
         let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
             Some(tab) => tab,
             None => return,
         };
-        if tab.focus_layout(pane_id, 60) {
+        let fraction = mux.focus_main_fraction().unwrap_or(0.6);
+        if tab.focus_layout(pane_id, fraction) {
             drop(tab);
             drop(mux);
             self.invalidate_tab_sidebar();
