@@ -159,6 +159,8 @@ Two-process model: GUI client renders and handles input, daemon holds PTY sessio
 | `mux/src/tmux.rs` | TmuxDomain — tmux -CC control mode; windows become tabs (restored from upstream) |
 | `config/src/tmux.rs` | TmuxConfig/TmuxBox — multibox tmux discovery config + attach argv builders |
 | `terminaler-gui/src/tmux_discovery.rs` | Background tmux session poller (ssh/wsl probes, cached snapshots, agent/instance labelling) |
+| `terminaler-gui/src/brief_bar.rs` | Brief bar feed poller (runs `brief_bar.command`, parses rows) and the row → tmux session matcher |
+| `terminaler-gui/src/termwindow/render/brief_bar.rs` | Brief bar strip: grid layout, cell fitting, paint, click items. Height is reserved in `get_os_border_impl` (borders.rs) |
 | `bintree/src/lib.rs` | Binary tree (Tree<L,N> enum, cursors) |
 | `terminaler-web/src/lib.rs` | Web server public API |
 | `terminaler-web/src/ws_session.rs` | WebSocket session management |
@@ -255,6 +257,22 @@ The `Wsl` tmux connection variant is Windows-only; on Linux use `Ssh`, or
             { "name": "wsl", "interconnect_machine": "home",
               "connection": { "Wsl": { "distribution": "Ubuntu" } } }
         ]
+    },
+
+    // Brief bar: a fixed-height strip across the top of the window, one cell
+    // per live Claude Code session ("name [epic] goal — now"). Off unless
+    // enabled. The command must print `brief --json` rows on stdout; it runs
+    // on the GUI's machine, so from homepc it ssh-es to devbox. Clicking a
+    // cell focuses this window's pane on that session's tmux session, or
+    // splits the active pane and attaches it (needs the tmux section above).
+    // Height is fixed by "rows" (default 3, 1..=4), so panes never reflow.
+    "brief_bar": {
+        "enabled": true,
+        "command": ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
+                    "devbox", "~/.claude/scripts/brief", "--json"],
+        "poll_interval_seconds": 20,
+        "timeout_seconds": 10,
+        "rows": 3
     }
 }
 
