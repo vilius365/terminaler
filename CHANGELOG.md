@@ -3,6 +3,7 @@
 ## 2026-10-05
 
 ### Changed
+- **The pane header carries only the grip and the focus button.** The layout trigger and the 11-button toolbar it expanded into are gone from the top of each pane. Close, move-to-tab and every layout are now reachable only from the ctrl+right-click grid, which gains `flip-split` (previously on the toolbar only) in its fourth row beside `focus`. The focus button still appears only on tabs with more than one pane.
 - **The focus layout remembers the width you give it.** Drag the divider between the main pane and the stack (or resize with the keyboard), and the next `focus` (on any pane, in any tab of the window's process) uses that width instead of resetting to 60%. A resize only counts while the tab is still in the arrangement `focus` built; splitting a new pane into it ends that. The width survives restarts: it is saved to `focus-layout.json` in the data directory (`~/.local/share/terminaler/` on Linux) when a divider drag ends or after a keyboard resize. Stack row heights are not remembered.
 
 ## 2026-10-03
