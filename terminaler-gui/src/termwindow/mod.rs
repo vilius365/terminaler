@@ -2053,6 +2053,7 @@ impl TermWindow {
         self.fancy_tab_bar.take();
         self.invalidate_fancy_tab_bar();
         self.invalidate_tab_sidebar();
+        self.brief_bar_cache = None;
         self.invalidate_modal();
         self.input_map = InputMap::new(&config);
         self.leader_is_down = None;
@@ -3548,6 +3549,7 @@ impl TermWindow {
         self.fancy_tab_bar.take();
         self.invalidate_fancy_tab_bar();
         self.invalidate_tab_sidebar();
+        self.brief_bar_cache = None;
         self.invalidate_modal();
         if let Some(window) = self.window.as_ref().map(|w| w.clone()) {
             window.invalidate();
