@@ -459,7 +459,10 @@ impl crate::TermWindow {
             bounds: euclid::rect(0., 0., max_w, max_h),
             metrics,
             gl_state: self.render_state.as_ref().unwrap(),
-            zindex: 0,
+            // Not 0: paint_impl holds zindex 0's quad layers mapped for the
+            // whole frame, so rendering an element there panics with
+            // already-borrowed. The sidebar uses 10 for the same reason.
+            zindex: 10,
         }
     }
 }
