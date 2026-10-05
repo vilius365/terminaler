@@ -68,6 +68,11 @@ live (the stub would say "not supported on this platform").
 
 ### Shipping a Windows build (pCloud)
 
+> **Defunct until further notice (2026-10-05).** The Windows build is not
+> maintained: do not rebuild, stage or promote it, and do not list Windows
+> validation as a next step. The live exes predate the 2026-10-02 changes. The
+> notes below are kept for when Vilius revives it.
+
 `~/pCloudDrive/terminaler-windows-build/` **is** the folder the Windows exes run
 from — it is not a staging area. Copying into it *is* deploying, and Windows
 locks running exes, so a direct build requires quitting Terminaler first.
