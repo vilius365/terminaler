@@ -609,8 +609,8 @@ pub struct TermWindow {
     /// Where the open flyout was painted last frame (x, y, w, h) — used by the
     /// mouse keep-open logic, which must not depend on pixel-perfect adjacency.
     pub sidebar_flyout_rect: Option<(f32, f32, f32, f32)>,
-    /// Where the toast toolbar was painted last frame: (pane, x, y, w, h).
-    /// The toast is drawn against the pane's *visual* bounds (padding, border
+    /// Where the focus pill was painted last frame: (pane, x, y, w, h).
+    /// The pill is drawn against the pane's *visual* bounds (padding, border
     /// and sidebar included), which extend past the content rect that
     /// `pane_id_at_pixel_coords` tests — so hover must be kept by this stored
     /// rect, never by re-resolving the pane under the pointer.
@@ -698,7 +698,6 @@ pub struct TermWindow {
     pub pane_drag: Option<PaneDragState>,
     pub pane_long_press: Option<PaneLongPress>,
     pub hovered_pane_id: Option<mux::pane::PaneId>,
-    pub toast_expanded_for: Option<mux::pane::PaneId>,
 
     modal: RefCell<Option<Rc<dyn Modal>>>,
 
@@ -1113,7 +1112,6 @@ impl TermWindow {
             pane_drag: None,
             pane_long_press: None,
             hovered_pane_id: None,
-            toast_expanded_for: None,
             toast_rect: None,
             swallow_right_release: false,
             last_ui_item: None,

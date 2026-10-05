@@ -268,21 +268,16 @@ impl super::TermWindow {
                     return;
                 }
 
-                // Update hovered pane for toast toolbar. The pointer counts as
-                // still on a pane while it is within that pane's painted toast,
-                // which sits partly outside the pane's content rect — without
-                // this the toast vanished the moment the pointer reached it.
+                // Update hovered pane for the header's focus pill. The pointer
+                // counts as still on a pane while it is within that pane's
+                // painted pill, which sits partly outside the pane's content
+                // rect — without this the pill vanished as the pointer reached it.
                 let in_toast =
                     self.toast_zone_pane(event.coords.x as f32, event.coords.y as f32);
                 let new_hovered = in_toast
                     .or_else(|| self.pane_id_at_pixel_coords(event.coords.x, event.coords.y));
                 if new_hovered != self.hovered_pane_id {
                     self.hovered_pane_id = new_hovered;
-                    // Only drop the expansion when leaving the toast as well;
-                    // moving between panes still collapses it.
-                    if in_toast.is_none() || in_toast != self.toast_expanded_for {
-                        self.toast_expanded_for = None;
-                    }
                     context.invalidate();
                 }
 
@@ -291,50 +286,18 @@ impl super::TermWindow {
                     return;
                 }
 
-                // Toast expand/collapse logic
-                if let Some((pane_id, btn)) = self.toast_button_at(&event) {
-                    if btn == "trigger" && self.toast_expanded_for != Some(pane_id) {
-                        self.expand_toast(pane_id);
-                        context.invalidate();
-                    }
+                if self.toast_button_at(&event).is_some() {
                     context.set_cursor(Some(MouseCursor::Hand));
                     return;
-                } else if self.toast_expanded_for.is_some() {
-                    // Collapse once the pointer is neither inside the painted
-                    // toast (plus its margin) nor over the owning pane. The
-                    // geometry comes from the rect stored at paint time, so it
-                    // cannot drift from what was actually drawn — the previous
-                    // inline re-computation omitted the sidebar offset and cut
-                    // 2px off the toast's own bottom edge.
-                    let mx = event.coords.x as f32;
-                    let my = event.coords.y as f32;
-                    let on_toast = self.toast_zone_pane(mx, my) == self.toast_expanded_for;
-                    let on_pane = self.pane_id_at_pixel_coords(event.coords.x, event.coords.y)
-                        == self.toast_expanded_for;
-                    if !on_toast && !on_pane {
-                        self.toast_expanded_for = None;
-                        context.invalidate();
-                    }
                 }
             }
             _ => {}
         }
 
-        // Toast toolbar: intercept clicks on toast buttons
+        // Header focus pill: the only pane button besides the grip.
         if matches!(event.kind, WMEK::Press(MousePress::Left)) {
             if let Some((pane_id, btn)) = self.toast_button_at(&event) {
-                if btn == "trigger" {
-                    self.expand_toast(pane_id);
-                    context.invalidate();
-                    return;
-                } else if btn == "close" {
-                    Mux::get().remove_pane(pane_id);
-                } else if btn == "move-to-tab" {
-                    self.execute_pane_to_tab(pane_id);
-                } else {
-                    self.apply_snap_layout_to_pane(pane_id, btn);
-                }
-                self.toast_expanded_for = None;
+                self.apply_snap_layout_to_pane(pane_id, btn);
                 self.hovered_pane_id = None;
                 context.invalidate();
                 return;
@@ -522,7 +485,6 @@ impl super::TermWindow {
     pub fn mouse_leave_impl(&mut self, context: &dyn WindowOps) {
         self.current_mouse_event = None;
         self.hovered_pane_id = None;
-        self.toast_expanded_for = None;
         self.toast_rect = None;
         self.sidebar_flyout = None;
         self.update_title();
@@ -1663,7 +1625,6 @@ impl super::TermWindow {
             None => return false,
         };
 
-        self.toast_expanded_for = None;
         self.pane_long_press = Some(super::PaneLongPress {
             pane_id,
             revealed: true,
@@ -1848,7 +1809,7 @@ impl super::TermWindow {
         &self,
         event: &MouseEvent,
     ) -> Option<(mux::pane::PaneId, &'static str)> {
-        use crate::termwindow::render::pane::{ToastGeom, TOAST_BUTTON_NAMES};
+        use crate::termwindow::render::pane::ToastGeom;
         let g = ToastGeom::for_dpi(self.dimensions.dpi);
 
         let hovered_id = self.hovered_pane_id?;
@@ -1919,74 +1880,17 @@ impl super::TermWindow {
         let pane_visual_width = bg_right - bg_x;
         let pane_visual_height = bg_bottom - bg_y;
 
-        // Same size guard as rendering
-        if pane_visual_width < g.min_pane_width || pane_visual_height < g.min_pane_height {
+        // Same rule as the painter.
+        if !g.shows_focus(pane_count, pane_visual_width, pane_visual_height) {
             return None;
         }
 
         let mx = event.coords.x as f32;
         let my = event.coords.y as f32;
-
-        let is_expanded = self.toast_expanded_for == Some(hovered_id)
-            && pane_visual_width >= g.width + 10.0;
-
-        let toast_top = bg_y + g.top_offset;
-
-        if is_expanded {
-            // --- Expanded: the full toolbar ---
-            let toast_left = bg_right - g.width;
-
-            if mx < toast_left
-                || mx >= toast_left + g.width
-                || my < toast_top
-                || my >= toast_top + g.height
-            {
-                return None;
-            }
-
-            let rel_x = mx - toast_left - g.padding;
-            let rel_y = my - toast_top - g.padding;
-
-            if rel_x < 0.0 || rel_y < 0.0 || rel_y >= g.btn {
-                return None;
-            }
-
-            let idx = (rel_x / (g.btn + g.gap)) as usize;
-            if idx >= TOAST_BUTTON_NAMES.len() {
-                return None;
-            }
-
-            let btn_left = idx as f32 * (g.btn + g.gap);
-            if rel_x > btn_left + g.btn {
-                return None;
-            }
-
-            Some((hovered_id, TOAST_BUTTON_NAMES[idx]))
-        } else {
-            // --- Collapsed: the layout trigger, plus the focus button beside it
-            // when the tab has other panes (same rule as the painter) ---
-            let with_focus = g.collapsed_with_focus(pane_count, pane_visual_width);
-            let pill_w = g.collapsed_width_for(with_focus);
-            let pill_left = bg_right - pill_w;
-            let pill_top = toast_top;
-
-            if mx >= pill_left
-                && mx < pill_left + pill_w
-                && my >= pill_top
-                && my < pill_top + g.height
-            {
-                // The pill's padding counts toward the nearer button, so the
-                // hit area stays as forgiving as the old single pill.
-                let focus_right = pill_left + g.padding + g.btn + g.gap / 2.0;
-                if with_focus && mx < focus_right {
-                    Some((hovered_id, "focus"))
-                } else {
-                    Some((hovered_id, "trigger"))
-                }
-            } else {
-                None
-            }
-        }
+        let left = bg_right - g.width;
+        let top = bg_y + g.top_offset;
+        (mx >= left && mx < left + g.width && my >= top && my < top + g.height)
+            .then_some((hovered_id, "focus"))
     }
 
     pub fn mouse_event_tab_sidebar(
@@ -2147,25 +2051,8 @@ impl super::TermWindow {
         }
     }
 
-    /// Expand the toast for `pane_id`, widening the stored rect to the expanded
-    /// toolbar right away.
-    ///
-    /// The stored rect otherwise still describes the narrow collapsed pill until
-    /// the next paint, and a Move arriving in that gap would land outside it and
-    /// collapse the toast the instant it opened.
-    fn expand_toast(&mut self, pane_id: mux::pane::PaneId) {
-        let width = crate::termwindow::render::pane::ToastGeom::for_dpi(self.dimensions.dpi).width;
-        self.toast_expanded_for = Some(pane_id);
-        if let Some((id, x, y, w, h)) = self.toast_rect {
-            if id == pane_id && w < width {
-                // The toolbar is right-aligned with the pill, so it grows leftwards.
-                self.toast_rect = Some((id, x + w - width, y, width, h));
-            }
-        }
-    }
-
-    /// The pane whose toast toolbar was painted under (x, y), testing the rect
-    /// stored at paint time inflated by the toolbar's collapse margin.
+    /// The pane whose focus pill was painted under (x, y), testing the rect
+    /// stored at paint time inflated by the pill's hover margin.
     ///
     /// The toast is painted against the pane's *visual* bounds, which include
     /// padding, border and the sidebar offset and so extend beyond the content

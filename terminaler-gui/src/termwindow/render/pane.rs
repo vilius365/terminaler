@@ -91,7 +91,7 @@ const ICON_CLOSE: &[Poly] = &[
 ];
 
 // ---------------------------------------------------------------------------
-// Pane toolbar (toast) and ctrl+right-click grid geometry. Both are shared
+// Pane header (grip + focus pill) and ctrl+right-click grid geometry. Both are shared
 // with the hit-testing in mouseevent.rs, so painting and clicking cannot drift.
 //
 // Sizes are given at 96 DPI and scaled to the window's DPI, like the text.
@@ -106,23 +106,11 @@ pub(crate) fn ui_scale(dpi: usize) -> f32 {
     (dpi as f32 / 96.0).max(1.0)
 }
 
-pub(crate) const TOAST_BUTTON_NAMES: [&str; 11] = [
-    "close",
-    "hsplit",
-    "vsplit",
-    "quad",
-    "triple-right",
-    "triple-bottom",
-    "dev",
-    "claude-code",
-    "focus",
-    "move-to-tab",
-    "flip-split",
-];
-
 /// The ctrl+right-click grid, row-major, three per row. The first nine are
-/// the original 3x3; "focus" opens a fourth row.
-pub(crate) const OVERLAY_BUTTON_NAMES: [&str; 10] = [
+/// the original 3x3; "focus" and "flip-split" form a fourth row. Close and
+/// every layout live only here: the pane header carries just the grip and the
+/// focus button.
+pub(crate) const OVERLAY_BUTTON_NAMES: [&str; 11] = [
     "close",
     "hsplit",
     "vsplit",
@@ -133,6 +121,7 @@ pub(crate) const OVERLAY_BUTTON_NAMES: [&str; 10] = [
     "claude-code",
     "move-to-tab",
     "focus",
+    "flip-split",
 ];
 
 #[derive(Debug, Clone, Copy)]
@@ -140,20 +129,16 @@ pub(crate) struct ToastGeom {
     pub btn: f32,
     pub icon: f32,
     pub inset: f32,
-    pub gap: f32,
     pub padding: f32,
-    /// Expanded toolbar: padding + n buttons + (n-1) gaps + padding.
+    /// The focus pill: padding + one button + padding, both ways.
     pub width: f32,
-    /// padding + button + padding.
     pub height: f32,
-    /// Collapsed trigger: padding + one button + padding.
-    pub collapsed_width: f32,
-    /// Extra margin around the expanded toolbar before it auto-collapses.
+    /// Extra margin around the pill that still counts as hovering it.
     pub collapse_margin: f32,
-    /// Smallest pane that shows the toolbar at all.
+    /// Smallest pane that shows the focus pill at all.
     pub min_pane_width: f32,
     pub min_pane_height: f32,
-    /// Gap between the pane's top edge and the toolbar.
+    /// Gap between the pane's top edge and the pill.
     pub top_offset: f32,
     /// The UI scale these sizes were computed at.
     pub scale: f32,
@@ -164,53 +149,34 @@ pub(crate) struct ToastGeom {
 }
 
 impl ToastGeom {
-    /// Width of the collapsed toolbar: the layout trigger alone, or with the
-    /// standalone focus button to its left.
-    pub fn collapsed_width_for(&self, with_focus: bool) -> f32 {
-        if with_focus {
-            self.collapsed_width + self.btn + self.gap
-        } else {
-            self.collapsed_width
-        }
-    }
-
-    /// Whether the collapsed toolbar carries the focus button: only when the
-    /// tab has another pane to stack, and the pane is wide enough for both
-    /// buttons. Painting and hit-testing both ask this, so they agree.
-    pub fn collapsed_with_focus(&self, pane_count: usize, pane_visual_width: f32) -> bool {
-        pane_count >= 2
-            && pane_visual_width >= self.collapsed_width_for(true) + self.min_pane_margin()
-    }
-
-    fn min_pane_margin(&self) -> f32 {
-        self.min_pane_width - self.collapsed_width
+    /// Whether a pane shows the focus pill: only when the tab has another
+    /// pane to stack, and the pane is big enough. Painting and hit-testing
+    /// both ask this, so they agree.
+    pub fn shows_focus(&self, pane_count: usize, pane_w: f32, pane_h: f32) -> bool {
+        pane_count >= 2 && pane_w >= self.min_pane_width && pane_h >= self.min_pane_height
     }
 
     /// Whether a pane of this content size has room for the grip beside the
-    /// collapsed toolbar, so the two never overlap.
+    /// focus pill, so the two never overlap.
     pub fn fits_grip(&self, pane_w: f32, pane_h: f32) -> bool {
-        pane_w >= self.grip_gap * 2.0 + self.grip_w + self.collapsed_width_for(true) + 10.0 * self.scale
+        pane_w >= self.grip_gap * 2.0 + self.grip_w + self.width + 10.0 * self.scale
             && pane_h >= self.grip_gap * 2.0 + self.grip_h + 10.0 * self.scale
     }
 
     pub fn for_dpi(dpi: usize) -> Self {
         let s = ui_scale(dpi);
-        let (btn, icon, gap, padding) = (30.0 * s, 24.0 * s, 2.0 * s, 4.0 * s);
-        let n = TOAST_BUTTON_NAMES.len() as f32;
-        let height = padding * 2.0 + btn;
-        let collapsed_width = padding * 2.0 + btn;
+        let (btn, icon, padding) = (30.0 * s, 24.0 * s, 4.0 * s);
+        let width = padding * 2.0 + btn;
         Self {
             btn,
             icon,
             inset: (btn - icon) / 2.0,
-            gap,
             padding,
-            width: padding * 2.0 + n * btn + (n - 1.0) * gap,
-            height,
-            collapsed_width,
+            width,
+            height: width,
             collapse_margin: 8.0 * s,
-            min_pane_width: collapsed_width + 10.0 * s,
-            min_pane_height: height + 10.0 * s,
+            min_pane_width: width + 10.0 * s,
+            min_pane_height: width + 10.0 * s,
             top_offset: 10.0 * s,
             scale: s,
             grip_w: 30.0 * s,
@@ -1573,66 +1539,26 @@ impl crate::TermWindow {
         let pane_visual_height = bg_bottom - bg_y;
 
         let geom = ToastGeom::for_dpi(self.dimensions.dpi);
-
-        // Skip if pane too small
-        if pane_visual_width < geom.min_pane_width || pane_visual_height < geom.min_pane_height {
+        if !geom.shows_focus(pane_count, pane_visual_width, pane_visual_height) {
             self.toast_rect = None;
             return Ok(());
         }
 
-        let is_expanded = self.toast_expanded_for == Some(hovered_id)
-            && pane_visual_width >= geom.width + 10.0;
-
+        // The focus pill, top-right. Close and the layouts are on the
+        // ctrl+right-click grid only.
         let bg_color = window::color::LinearRgba(0.102, 0.102, 0.102, 0.55);
         let btn_bg = window::color::LinearRgba(1.0, 1.0, 1.0, 0.10);
         let white = window::color::LinearRgba(1.0, 1.0, 1.0, 0.92);
-        let toast_top = bg_y + geom.top_offset;
+        let left = bg_right - geom.width;
+        let top = bg_y + geom.top_offset;
+        self.toast_rect = Some((hovered_id, left, top, geom.width, geom.height));
 
-        if is_expanded {
-            // --- Expanded: the full toolbar ---
-            let toast_left = bg_right - geom.width;
-            self.toast_rect = Some((hovered_id, toast_left, toast_top, geom.width, geom.height));
-
-            self.filled_rectangle(
-                layers, 2,
-                euclid::rect(toast_left, toast_top, geom.width, geom.height),
-                bg_color,
-            ).context("toast toolbar bg")?;
-
-            let close_btn_bg = window::color::LinearRgba(0.973, 0.318, 0.286, 0.45);
-
-            for (i, &name) in TOAST_BUTTON_NAMES.iter().enumerate() {
-                let bx = toast_left + geom.padding + i as f32 * (geom.btn + geom.gap);
-                let by = toast_top + geom.padding;
-                let bg = if name == "close" { close_btn_bg } else { btn_bg };
-                self.filled_rectangle(layers, 2, euclid::rect(bx, by, geom.btn, geom.btn), bg)
-                    .context("toast btn bg")?;
-                self.paint_button_icon(layers, name, bx + geom.inset, by + geom.inset, geom.icon, white)?;
-            }
-        } else {
-            // --- Collapsed: the layout trigger (quad icon), with the focus
-            // button beside it so focus mode is one click away without opening
-            // the toolbar or the ctrl+right-click grid ---
-            let with_focus = geom.collapsed_with_focus(pane_count, pane_visual_width);
-            let pill_w = geom.collapsed_width_for(with_focus);
-            let pill_left = bg_right - pill_w;
-            self.toast_rect = Some((hovered_id, pill_left, toast_top, pill_w, geom.height));
-
-            self.filled_rectangle(
-                layers, 2,
-                euclid::rect(pill_left, toast_top, pill_w, geom.height),
-                bg_color,
-            ).context("toast trigger bg")?;
-
-            let names: &[&str] = if with_focus { &["focus", "quad"] } else { &["quad"] };
-            let by = toast_top + geom.padding;
-            for (i, &name) in names.iter().enumerate() {
-                let bx = pill_left + geom.padding + i as f32 * (geom.btn + geom.gap);
-                self.filled_rectangle(layers, 2, euclid::rect(bx, by, geom.btn, geom.btn), btn_bg)
-                    .context("toast trigger btn bg")?;
-                self.paint_button_icon(layers, name, bx + geom.inset, by + geom.inset, geom.icon, white)?;
-            }
-        }
+        self.filled_rectangle(layers, 2, euclid::rect(left, top, geom.width, geom.height), bg_color)
+            .context("focus pill bg")?;
+        let (bx, by) = (left + geom.padding, top + geom.padding);
+        self.filled_rectangle(layers, 2, euclid::rect(bx, by, geom.btn, geom.btn), btn_bg)
+            .context("focus pill btn bg")?;
+        self.paint_button_icon(layers, "focus", bx + geom.inset, by + geom.inset, geom.icon, white)?;
 
         Ok(())
     }
@@ -1661,9 +1587,9 @@ mod geometry_tests {
     use super::*;
 
     #[test]
-    fn toolbar_scales_with_dpi_but_never_shrinks() {
+    fn header_scales_with_dpi_but_never_shrinks() {
         let base = ToastGeom::for_dpi(96);
-        assert_eq!(base.width, 4.0 * 2.0 + 11.0 * 30.0 + 10.0 * 2.0);
+        assert_eq!(base.width, 4.0 * 2.0 + 30.0);
         let doubled = ToastGeom::for_dpi(192);
         assert_eq!(doubled.btn, base.btn * 2.0);
         assert_eq!(doubled.width, base.width * 2.0);
@@ -1673,28 +1599,23 @@ mod geometry_tests {
     }
 
     #[test]
-    fn collapsed_toolbar_adds_the_focus_button_only_when_it_has_a_use() {
+    fn focus_pill_shows_only_when_it_has_a_use() {
         let g = ToastGeom::for_dpi(96);
-        assert_eq!(g.collapsed_width_for(false), g.collapsed_width);
-        assert_eq!(g.collapsed_width_for(true), g.collapsed_width + g.btn + g.gap);
-        let wide = 1000.0;
-        assert!(g.collapsed_with_focus(2, wide));
+        assert!(g.shows_focus(2, 1000.0, 1000.0));
         // A lone pane has nothing to stack: the button would be dead.
-        assert!(!g.collapsed_with_focus(1, wide));
-        // A pane too narrow for both buttons keeps just the trigger, which
-        // still fits it (min_pane_width).
-        assert!(!g.collapsed_with_focus(3, g.min_pane_width));
-        assert!(g.collapsed_with_focus(3, g.collapsed_width_for(true) + 10.0));
+        assert!(!g.shows_focus(1, 1000.0, 1000.0));
+        assert!(!g.shows_focus(3, g.min_pane_width - 1.0, 1000.0));
+        assert!(!g.shows_focus(3, 1000.0, g.min_pane_height - 1.0));
     }
 
     #[test]
-    fn grip_needs_room_beside_the_toolbar() {
+    fn grip_needs_room_beside_the_focus_pill() {
         let g = ToastGeom::for_dpi(96);
-        let min_w = g.grip_gap * 2.0 + g.grip_w + g.collapsed_width_for(true) + 10.0;
+        let min_w = g.grip_gap * 2.0 + g.grip_w + g.width + 10.0;
         assert!(g.fits_grip(min_w, 200.0));
-        assert!(!g.fits_grip(min_w - 1.0, 200.0), "would touch the toolbar");
+        assert!(!g.fits_grip(min_w - 1.0, 200.0), "would touch the focus pill");
         assert!(!g.fits_grip(1000.0, g.grip_h), "too short for the grip");
-        // The grip scales like the rest of the toolbar.
+        // The grip scales like the rest of the header.
         let big = ToastGeom::for_dpi(192);
         assert_eq!(big.grip_w, g.grip_w * 2.0);
     }
@@ -1712,7 +1633,7 @@ mod geometry_tests {
     #[test]
     fn grid_hit_test_matches_the_painted_cells() {
         let grid = OverlayGrid::for_dpi(192);
-        assert_eq!(grid.rows, 4, "focus opens a fourth row");
+        assert_eq!(grid.rows, 4, "focus and flip-split form a fourth row");
         let origin = (100.0, 50.0);
         for (idx, &name) in OVERLAY_BUTTON_NAMES.iter().enumerate() {
             let (x, y) = grid.cell(origin, idx);
@@ -1721,16 +1642,16 @@ mod geometry_tests {
         }
         // focus sits at the start of the fourth row.
         assert_eq!(grid.cell(origin, 9), (origin.0, origin.1 + 3.0 * (grid.btn + grid.gap)));
-        // Gaps and the empty cells after focus hit nothing.
+        // Gaps and the empty cell after flip-split hit nothing.
         let (x, y) = grid.cell(origin, 0);
         assert_eq!(grid.button_at(origin, x + grid.btn + grid.gap / 2.0, y + 1.0), None);
-        let (x, y) = grid.cell(origin, 10);
+        let (x, y) = grid.cell(origin, 11);
         assert_eq!(grid.button_at(origin, x + 1.0, y + 1.0), None);
     }
 
     #[test]
     fn every_button_has_an_icon() {
-        for name in TOAST_BUTTON_NAMES.iter().chain(OVERLAY_BUTTON_NAMES.iter()) {
+        for name in OVERLAY_BUTTON_NAMES.iter().chain(["focus"].iter()) {
             assert!(
                 matches!(*name, "close" | "move-to-tab") || layout_icon_rects(name).is_some(),
                 "no icon for {}",
