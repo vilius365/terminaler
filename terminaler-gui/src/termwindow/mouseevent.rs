@@ -167,8 +167,11 @@ impl super::TermWindow {
                             return;
                         }
                     }
-                    if self.dragging.take().is_some() {
+                    if let Some((item, _)) = self.dragging.take() {
                         // Completed a drag
+                        if matches!(item.item_type, UIItemType::Split(_)) {
+                            self.save_focus_width();
+                        }
                         return;
                     }
                 }

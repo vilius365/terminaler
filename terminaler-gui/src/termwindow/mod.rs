@@ -3218,16 +3218,36 @@ impl TermWindow {
         }
     }
 
+    /// Save the focus layout's main width to disk if the active tab is in
+    /// the focus arrangement. Called when a resize finishes, not on every
+    /// step of a drag, so a drag writes the file once.
+    pub fn save_focus_width(&self) {
+        let mux = Mux::get();
+        let Some(tab) = mux.get_active_tab_for_window(self.mux_window_id) else {
+            return;
+        };
+        let Some(fraction) = tab.focus_main_fraction() else {
+            return;
+        };
+        if let Err(err) = save_focus_fraction(fraction) {
+            log::warn!("focus layout: could not save the main width: {:#}", err);
+        }
+    }
+
     /// Focus layout: `pane_id` large on the left, every other pane of the
     /// tab stacked top to bottom on the right. The main pane gets the width
-    /// the user last resized a focus layout to, or 60% until they have.
+    /// the user last resized a focus layout to (kept across restarts in
+    /// focus-layout.json), or 60% until they have.
     pub fn focus_layout(&mut self, pane_id: PaneId) {
         let mux = Mux::get();
         let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
             Some(tab) => tab,
             None => return,
         };
-        let fraction = mux.focus_main_fraction().unwrap_or(0.6);
+        let fraction = mux
+            .focus_main_fraction()
+            .or_else(load_focus_fraction)
+            .unwrap_or(0.6);
         if tab.focus_layout(pane_id, fraction) {
             drop(tab);
             drop(mux);
@@ -4509,6 +4529,9 @@ impl TermWindow {
 
                 if self.tab_state(tab_id).overlay.is_none() {
                     tab.adjust_pane_size(*direction, *amount);
+                    drop(tab);
+                    drop(mux);
+                    self.save_focus_width();
                 }
             }
             ActivatePaneByIndex(index) => {
@@ -5345,4 +5368,32 @@ impl Drop for TermWindow {
             }
         }
     }
+}
+
+fn focus_layout_file() -> std::path::PathBuf {
+    config::DATA_DIR.join("focus-layout.json")
+}
+
+/// The focus layout's main width saved by an earlier run, if it is usable.
+fn load_focus_fraction() -> Option<f32> {
+    let text = std::fs::read_to_string(focus_layout_file()).ok()?;
+    let value: serde_json::Value = match serde_json::from_str(&text) {
+        Ok(value) => value,
+        Err(err) => {
+            log::warn!("focus layout: ignoring unreadable focus-layout.json: {:#}", err);
+            return None;
+        }
+    };
+    let fraction = value.get("main_fraction")?.as_f64()? as f32;
+    (fraction > 0.0 && fraction < 1.0).then_some(fraction)
+}
+
+fn save_focus_fraction(fraction: f32) -> anyhow::Result<()> {
+    let file = focus_layout_file();
+    if let Some(dir) = file.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let json = serde_json::json!({ "main_fraction": fraction }).to_string();
+    std::fs::write(&file, json).with_context(|| format!("writing {}", file.display()))?;
+    Ok(())
 }
