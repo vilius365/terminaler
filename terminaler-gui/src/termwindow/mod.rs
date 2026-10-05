@@ -3416,7 +3416,8 @@ impl TermWindow {
     }
 
     /// Brief bar click: focus the pane this window already attached to
-    /// `box_name:session`, otherwise plain `tmux attach` in a NEW tab.
+    /// `box_name:session`, otherwise plain `tmux attach` in a split of the
+    /// active pane (the `TmuxAttachMode::SplitPlain` behaviour).
     pub fn activate_brief_session(&mut self, box_name: &str, session: &str) {
         use crate::spawn::SpawnWhere;
 
@@ -3456,7 +3457,13 @@ impl TermWindow {
             return;
         };
         let args = tmux_box.attach_plain_argv(session);
-        self.spawn_tmux_attach(box_name, session, args, SpawnWhere::NewTab);
+        let spawn_where = SpawnWhere::SplitPane(SplitRequest {
+            direction: SplitDirection::Horizontal,
+            target_is_second: true,
+            size: MuxSplitSize::Percent(50),
+            top_level: false,
+        });
+        self.spawn_tmux_attach(box_name, session, args, spawn_where);
     }
 
     /// Apply a named color scheme: persist it to the config file (which the

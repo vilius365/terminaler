@@ -74,6 +74,8 @@ pub fn plan_grid(n: usize, rows: usize, width_chars: usize) -> GridPlan {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct CellText {
     pub name: String,
+    /// Bracketed epic tag, e.g. `[Terminaler terminal app]`; empty when absent.
+    pub epic: String,
     pub goal: String,
     pub now: String,
 }
@@ -89,22 +91,58 @@ fn truncate(s: &str, max_chars: usize) -> String {
     }
 }
 
-/// Fit name, goal and now into `budget` characters (the dot is excluded).
-/// Truncation eats from the right: `now` is dropped before `goal`, and `goal`
-/// before `name`. Separators cost one char before the goal and 3 (` — `)
-/// before the step.
-pub fn fit_cell(name: &str, goal: Option<&str>, now: Option<&str>, budget: usize) -> CellText {
+/// Longest epic tag, brackets included.
+const EPIC_TAG_MAX: usize = 32;
+/// Goal characters kept in preference to epic characters.
+const GOAL_MIN: usize = 8;
+/// Shortest epic tag worth drawing (`[a\u{2026}]` plus a little).
+const EPIC_TAG_MIN: usize = 5;
+
+/// `[title]` clipped to `max` characters, ellipsis inside the brackets.
+fn epic_tag(title: &str, max: usize) -> String {
+    let max = max.min(EPIC_TAG_MAX);
+    if max < 3 {
+        return String::new();
+    }
+    format!("[{}]", truncate(title, max - 2))
+}
+
+/// Fit name, epic tag, goal and now into `budget` characters (the dot is
+/// excluded), laid out `name [epic] goal \u{2014} now`. When space is short,
+/// `now` goes first, then the goal shrinks (down to `GOAL_MIN`), then the epic
+/// tag shrinks or disappears; the name is only clipped when it alone does not
+/// fit. Separators cost one char each, and 3 for ` \u{2014} `.
+pub fn fit_cell(
+    name: &str,
+    epic: Option<&str>,
+    goal: Option<&str>,
+    now: Option<&str>,
+    budget: usize,
+) -> CellText {
     let name_t = truncate(name, budget);
     let mut used = name_t.chars().count();
     let mut out = CellText {
         name: name_t,
         ..Default::default()
     };
+    let goal = goal.filter(|g| !g.is_empty());
+    let epic = epic.filter(|e| !e.is_empty());
+
+    if let Some(epic) = epic {
+        let goal_min = goal.map_or(0, |g| 1 + g.chars().count().min(GOAL_MIN));
+        let room = budget.saturating_sub(used + 1 + goal_min);
+        if room >= EPIC_TAG_MIN.min(epic.chars().count() + 2) && room >= 3 {
+            let tag = epic_tag(epic, room);
+            used += 1 + tag.chars().count();
+            out.epic = tag;
+        }
+    }
+
     let goal = match goal {
-        Some(g) if !g.is_empty() => g,
-        _ => return out,
+        Some(g) => g,
+        None => return out,
     };
-    // One space after the name, and at least one visible goal char.
+    // One space before the goal, and at least one visible goal char.
     if budget < used + 2 {
         return out;
     }
@@ -113,7 +151,7 @@ pub fn fit_cell(name: &str, goal: Option<&str>, now: Option<&str>, budget: usize
     let goal_full = goal_t == goal;
     out.goal = goal_t;
     if let Some(now) = now.filter(|n| !n.is_empty()) {
-        // ` — ` plus at least one visible char, and only once goal fits whole.
+        // ` \u{2014} ` plus at least one visible char, and only once goal fits whole.
         if goal_full && budget >= used + 4 {
             out.now = truncate(now, budget - used - 3);
         }
@@ -167,8 +205,8 @@ fn fingerprint(
     let mut fp = format!("{}x{}@{}r{}|", width as i64, height as i64, dpi, rows);
     for r in &snap.rows {
         fp.push_str(&format!(
-            "{:?}\u{1}{:?}\u{1}{:?}\u{1}{:?}\u{1}{:?}\n",
-            r.name, r.goal, r.now, r.inferred, r.stale
+            "{:?}\u{1}{:?}\u{1}{:?}\u{1}{:?}\u{1}{:?}\u{1}{:?}\u{1}{:?}\n",
+            r.name, r.goal, r.now, r.inferred, r.stale, r.epic, r.epic_title
         ));
     }
     fp.push_str(&format!("targets={:?}|", targets));
@@ -362,15 +400,19 @@ impl crate::TermWindow {
                 let row = &snap.rows[i];
                 let name = row.name.as_deref().unwrap_or("?");
                 let has_goal = row.goal.is_some();
+                let epic = row.epic_title.as_deref().or(row.epic.as_deref());
                 let fitted = if has_goal {
-                    fit_cell(name, row.goal.as_deref(), row.now.as_deref(), budget)
+                    fit_cell(name, epic, row.goal.as_deref(), row.now.as_deref(), budget)
                 } else {
-                    fit_cell(name, Some("no brief"), None, budget)
+                    fit_cell(name, None, Some("no brief"), None, budget)
                 };
                 let mut parts = vec![
                     part(&font, "\u{25cf} ".to_string(), dot_color(row, theme)),
                     part(&font, fitted.name, theme.accent_orange),
                 ];
+                if !fitted.epic.is_empty() {
+                    parts.push(part(&font, format!(" {}", fitted.epic), theme.accent_blue));
+                }
                 if !fitted.goal.is_empty() {
                     let color = if has_goal {
                         theme.text_primary
@@ -502,21 +544,68 @@ mod tests {
 
     #[test]
     fn fit_drops_now_before_goal_before_name() {
-        let full = fit_cell("notch", Some("Slim the buttons"), Some("Wrapping up"), 60);
+        let full = fit_cell("notch", None, Some("Slim the buttons"), Some("Wrapping up"), 60);
         assert_eq!(full.goal, "Slim the buttons");
         assert_eq!(full.now, "Wrapping up");
-        // Goal fits (22 chars) but not the step.
-        let t = fit_cell("notch", Some("Slim the buttons"), Some("Wrapping up"), 24);
+        let t = fit_cell("notch", None, Some("Slim the buttons"), Some("Wrapping up"), 24);
         assert_eq!(t.goal, "Slim the buttons");
         assert_eq!(t.now, "");
-        // Goal truncated, no step.
-        let t = fit_cell("notch", Some("Slim the buttons"), Some("Wrapping up"), 14);
+        let t = fit_cell("notch", None, Some("Slim the buttons"), Some("Wrapping up"), 14);
         assert!(t.goal.ends_with('\u{2026}'));
         assert_eq!(t.now, "");
-        // Only the name survives.
-        let t = fit_cell("notch", Some("Slim"), None, 5);
+        let t = fit_cell("notch", None, Some("Slim"), None, 5);
         assert_eq!((t.name.as_str(), t.goal.as_str()), ("notch", ""));
-        let t = fit_cell("notch", Some("Slim"), None, 3);
+        let t = fit_cell("notch", None, Some("Slim"), None, 3);
         assert_eq!(t.name, "no\u{2026}");
+    }
+
+    #[test]
+    fn fit_epic_everything_fits() {
+        let t = fit_cell(
+            "notch",
+            Some("Terminaler app"),
+            Some("Slim the buttons"),
+            Some("Wrapping up"),
+            100,
+        );
+        assert_eq!(t.epic, "[Terminaler app]");
+        assert_eq!(t.goal, "Slim the buttons");
+        assert_eq!(t.now, "Wrapping up");
+    }
+
+    #[test]
+    fn fit_epic_tag_is_capped() {
+        let t = fit_cell("n", Some("An extremely long epic title indeed"), Some("g"), None, 100);
+        assert_eq!(t.epic.chars().count(), EPIC_TAG_MAX);
+        assert!(t.epic.ends_with("\u{2026}]"));
+    }
+
+    #[test]
+    fn fit_epic_priority_now_then_goal_then_epic_never_name() {
+        let epic = Some("Terminaler terminal app, long edition"); // tag 38 -> capped to 32
+        let goal = Some("Slim the per-pane buttons");
+        let now = Some("Wrapping up");
+        // 5 + 1 + 32 + 1 + 25 = 64 fits goal; now needs 3 + 1 more.
+        let t = fit_cell("notch", epic, goal, now, 64);
+        assert_eq!(t.goal, "Slim the per-pane buttons");
+        assert_eq!(t.now, "");
+        // Goal shrinks while the epic stays at its capped length.
+        let t = fit_cell("notch", epic, goal, now, 53);
+        assert_eq!(t.epic.chars().count(), EPIC_TAG_MAX);
+        assert!(t.goal.ends_with('\u{2026}'));
+        assert_eq!(t.now, "");
+        // Tighter: goal bottoms out at GOAL_MIN before the epic shrinks.
+        let t = fit_cell("notch", epic, goal, now, 5 + 1 + 32 + 1 + 8);
+        assert_eq!(t.epic.chars().count(), EPIC_TAG_MAX);
+        assert_eq!(t.goal.chars().count(), 8);
+        let t = fit_cell("notch", epic, goal, now, 5 + 1 + 14 + 1 + 8);
+        assert_eq!(t.epic.chars().count(), 14);
+        assert_eq!(t.goal.chars().count(), 8);
+        // Name only: no room for anything else.
+        let t = fit_cell("notch", epic, goal, now, 5);
+        assert_eq!(t.name, "notch");
+        assert_eq!((t.epic.as_str(), t.goal.as_str()), ("", ""));
+        // Name is clipped only when it alone does not fit.
+        assert_eq!(fit_cell("notch", epic, goal, now, 3).name, "no\u{2026}");
     }
 }

@@ -19,6 +19,8 @@ use std::time::{Duration, Instant};
 pub struct BriefRow {
     pub name: Option<String>,
     pub machine: Option<String>,
+    pub epic: Option<String>,
+    pub epic_title: Option<String>,
     pub goal: Option<String>,
     pub now: Option<String>,
     pub active_at: Option<String>,
@@ -109,7 +111,13 @@ pub fn parse_rows(stdout: &str) -> Result<Vec<BriefRow>, String> {
     let mut rows: Vec<BriefRow> =
         serde_json::from_str(stdout.trim()).map_err(|e| format!("bad brief JSON: {}", e))?;
     for row in &mut rows {
-        for field in [&mut row.name, &mut row.goal, &mut row.now] {
+        for field in [
+            &mut row.name,
+            &mut row.goal,
+            &mut row.now,
+            &mut row.epic,
+            &mut row.epic_title,
+        ] {
             if let Some(text) = field.as_mut() {
                 *text = collapse_whitespace(text);
                 if text.is_empty() {
@@ -226,6 +234,17 @@ mod tests {
         assert_eq!(rows[0].name.as_deref(), Some("notch"));
         assert_eq!(rows[0].goal.as_deref(), Some("Slim the buttons"));
         assert_eq!(rows[1].goal, None);
+    }
+
+    #[test]
+    fn parses_epic_fields() {
+        let rows = parse_rows(
+            r#"[{"name":"notch","epic":"terminaler-terminal-app","epic_title":"Terminaler terminal app"},{"name":"x","epic":null,"epic_title":null}]"#,
+        )
+        .unwrap();
+        assert_eq!(rows[0].epic.as_deref(), Some("terminaler-terminal-app"));
+        assert_eq!(rows[0].epic_title.as_deref(), Some("Terminaler terminal app"));
+        assert_eq!(rows[1].epic, None);
     }
 
     #[test]
