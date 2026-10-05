@@ -110,6 +110,9 @@ fn collapse_whitespace(s: &str) -> String {
 pub fn parse_rows(stdout: &str) -> Result<Vec<BriefRow>, String> {
     let mut rows: Vec<BriefRow> =
         serde_json::from_str(stdout.trim()).map_err(|e| format!("bad brief JSON: {}", e))?;
+    // Overlord slots are named `ol-<word>`; they are plumbing, not work the
+    // strip is meant to surface.
+    rows.retain(|r| !r.name.as_deref().is_some_and(|n| n.starts_with("ol-")));
     for row in &mut rows {
         for field in [
             &mut row.name,
@@ -234,6 +237,16 @@ mod tests {
         assert_eq!(rows[0].name.as_deref(), Some("notch"));
         assert_eq!(rows[0].goal.as_deref(), Some("Slim the buttons"));
         assert_eq!(rows[1].goal, None);
+    }
+
+    #[test]
+    fn drops_overlord_rows() {
+        let rows = parse_rows(
+            r#"[{"name":"ol-otter","goal":"x"},{"name":"spell","goal":"y"}]"#,
+        )
+        .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].name.as_deref(), Some("spell"));
     }
 
     #[test]

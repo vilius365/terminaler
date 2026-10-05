@@ -159,6 +159,12 @@ pub fn fit_cell(
     out
 }
 
+/// The sidebar surfaces are 80% alpha so a translucent window shows through
+/// the rail; the strip carries text, so it paints fully opaque.
+fn opaque(c: LinearRgba) -> LinearRgba {
+    LinearRgba(c.0, c.1, c.2, 1.0)
+}
+
 fn dot_color(row: &BriefRow, theme: &SidebarTheme) -> LinearRgba {
     if row.goal.is_none() || row.inferred == Some(true) {
         theme.text_tertiary
@@ -280,7 +286,7 @@ impl crate::TermWindow {
             layers,
             1,
             euclid::rect(0., y0, width, strip_h),
-            theme.bg_surface,
+            opaque(theme.bg_surface),
         )
         .context("brief bar background")?;
         self.filled_rectangle(
@@ -469,7 +475,7 @@ impl crate::TermWindow {
                 })
                 .colors(ElementColors {
                     border: BorderColor::default(),
-                    bg: theme.bg_surface.into(),
+                    bg: opaque(theme.bg_surface).into(),
                     text: theme.accent_red.into(),
                 })
                 .min_width(Some(Dimension::Pixels(w)));
