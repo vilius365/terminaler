@@ -67,7 +67,7 @@ pub struct BoxSnapshot {
     pub last_success: Option<Instant>,
     /// True when `last_success` is older than 3 poll intervals.
     pub stale: bool,
-    updating: bool,
+    pub(crate) updating: bool,
 }
 
 static STATE: OnceLock<Mutex<Vec<BoxSnapshot>>> = OnceLock::new();
@@ -360,7 +360,7 @@ fn run_tmux(argv: &[String], timeout_secs: u64) -> Result<Option<String>, String
 
 /// `Child::wait` with a deadline: ssh's ConnectTimeout covers connection
 /// stalls, but a wedged remote command would hang forever without this.
-fn wait_with_timeout(
+pub(crate) fn wait_with_timeout(
     mut child: std::process::Child,
     timeout: Duration,
 ) -> Result<std::process::Output, String> {

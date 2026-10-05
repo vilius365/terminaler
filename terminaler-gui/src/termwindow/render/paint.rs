@@ -316,6 +316,9 @@ impl crate::TermWindow {
             self.paint_tab_bar(&mut layers).context("paint_tab_bar")?;
         }
 
+        self.paint_brief_bar(&mut layers)
+            .context("paint_brief_bar")?;
+
         self.paint_window_borders(&mut layers)
             .context("paint_window_borders")?;
         drop(layers);

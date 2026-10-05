@@ -18,7 +18,9 @@ impl crate::TermWindow {
             let height = self.dimensions.pixel_height as f32;
             let width = self.dimensions.pixel_width as f32;
 
-            let border_top = border_dimensions.top.get() as f32;
+            // The brief bar owns the bottom of the top border; it paints its
+            // own background there.
+            let border_top = (border_dimensions.top.get() as f32 - self.brief_bar_height()).max(0.0);
             if border_top > 0.0 {
                 self.filled_rectangle(
                     layers,
@@ -133,6 +135,9 @@ impl crate::TermWindow {
                 })
                 .ceil() as usize,
         );
+
+        // Reserve the brief bar strip last, so it sits directly above the tab bar.
+        border.top += ULength::new(Self::brief_bar_height_for(config, render_metrics).ceil() as usize);
 
         border
     }

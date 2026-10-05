@@ -438,6 +438,10 @@ pub enum UIItemType {
     Split(PositionedSplit),
     ProfileDropdownItem(usize),
     TabSidebar(TabSidebarItem),
+    /// The brief bar strip; inert, it only swallows clicks.
+    BriefBar,
+    /// A brief bar cell that resolves to an attachable tmux session.
+    BriefBarSession { box_name: String, session: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -601,6 +605,8 @@ pub struct TermWindow {
     tab_bar: TabBarState,
     fancy_tab_bar: Option<box_model::ComputedElement>,
     tab_sidebar: Option<box_model::ComputedElement>,
+    /// Brief bar elements keyed by the fingerprint of everything they paint.
+    brief_bar_cache: Option<(String, Vec<box_model::ComputedElement>)>,
     tab_sidebar_info: HashMap<TabId, SidebarTabInfo>,
     /// Hover flyout over the compact sidebar rail; None = closed. The flyout
     /// element itself is rebuilt each paint while open (its data is live), so
@@ -1023,6 +1029,7 @@ impl TermWindow {
             tab_bar: TabBarState::default(),
             fancy_tab_bar: None,
             tab_sidebar: None,
+            brief_bar_cache: None,
             tab_sidebar_info: HashMap::new(),
             sidebar_flyout: None,
             sidebar_flyout_rect: None,
@@ -3371,20 +3378,6 @@ impl TermWindow {
             }
             TmuxAttachMode::ControlTab => tmux_box.attach_argv(session),
         };
-        let spawn = SpawnCommand {
-            label: Some(format!("tmux {}:{}", box_name, session)),
-            args: Some(args),
-            // Deliberately NOT DefaultDomain: the default domain prefers WSL,
-            // which would wrap ssh.exe/wsl.exe in another `wsl.exe --exec`.
-            domain: SpawnTabDomain::DomainName("local".to_string()),
-            ..Default::default()
-        };
-        log::info!(
-            "Attaching tmux session {}:{} ({:?})",
-            box_name,
-            session,
-            mode
-        );
         let spawn_where = match mode {
             TmuxAttachMode::SplitPlain | TmuxAttachMode::CurrentPane => {
                 SpawnWhere::SplitPane(SplitRequest {
@@ -3396,7 +3389,73 @@ impl TermWindow {
             }
             TmuxAttachMode::ControlTab => SpawnWhere::NewTab,
         };
+        self.spawn_tmux_attach(box_name, session, args, spawn_where);
+    }
+
+    /// Spawn `args` (an attach argv) in the "local" domain, labelled so the
+    /// spawned pane is recorded for `activate_brief_session`.
+    fn spawn_tmux_attach(
+        &mut self,
+        box_name: &str,
+        session: &str,
+        args: Vec<String>,
+        spawn_where: crate::spawn::SpawnWhere,
+    ) {
+        use config::keyassignment::{SpawnCommand, SpawnTabDomain};
+        let spawn = SpawnCommand {
+            label: Some(crate::spawn::tmux_attach_label(box_name, session)),
+            args: Some(args),
+            // Deliberately NOT DefaultDomain: the default domain prefers WSL,
+            // which would wrap ssh.exe/wsl.exe in another `wsl.exe --exec`.
+            domain: SpawnTabDomain::DomainName("local".to_string()),
+            ..Default::default()
+        };
+        log::info!("Attaching tmux session {}:{}", box_name, session);
         self.spawn_command(&spawn, spawn_where);
+    }
+
+    /// Brief bar click: focus the pane this window already attached to
+    /// `box_name:session`, otherwise plain `tmux attach` in a NEW tab.
+    pub fn activate_brief_session(&mut self, box_name: &str, session: &str) {
+        use crate::spawn::SpawnWhere;
+
+        if let Some(pane_id) = crate::spawn::live_tmux_attach_pane(box_name, session) {
+            let mux = Mux::get();
+            if let Some((_domain, window_id, tab_id)) = mux.resolve_pane_id(pane_id) {
+                if window_id == self.mux_window_id {
+                    let tab = mux.get_window(window_id).and_then(|w| {
+                        w.iter()
+                            .enumerate()
+                            .find(|(_, t)| t.tab_id() == tab_id)
+                            .map(|(idx, t)| (idx, t.clone()))
+                    });
+                    if let (Some((idx, tab)), Some(pane)) = (tab, mux.get_pane(pane_id)) {
+                        if self.activate_tab(idx as isize).is_ok() {
+                            tab.set_active_pane(&pane);
+                            log::info!(
+                                "brief bar: focused existing pane {} for {}:{}",
+                                pane_id,
+                                box_name,
+                                session
+                            );
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+
+        let tmux = self.config.tmux.clone().unwrap_or_default();
+        let Some(tmux_box) = tmux
+            .boxes
+            .iter()
+            .find(|b| b.enabled && b.name == box_name)
+        else {
+            log::info!("brief bar: no enabled tmux box {:?}; not attaching", box_name);
+            return;
+        };
+        let args = tmux_box.attach_plain_argv(session);
+        self.spawn_tmux_attach(box_name, session, args, SpawnWhere::NewTab);
     }
 
     /// Apply a named color scheme: persist it to the config file (which the

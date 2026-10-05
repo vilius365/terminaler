@@ -38,6 +38,7 @@ use terminaler_mux_server_impl::update_mux_domains;
 use terminaler_toast_notification::*;
 
 mod agent_color;
+mod brief_bar;
 mod colorease;
 mod commands;
 mod customglyph;

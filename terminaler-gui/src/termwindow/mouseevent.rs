@@ -44,6 +44,8 @@ impl super::TermWindow {
             | UIItemType::ScrollThumb { .. }
             | UIItemType::Split(_)
             | UIItemType::ProfileDropdownItem(_)
+            | UIItemType::BriefBar
+            | UIItemType::BriefBarSession { .. }
             | UIItemType::TabSidebar(_) => {}
         }
     }
@@ -57,6 +59,8 @@ impl super::TermWindow {
             | UIItemType::ScrollThumb { .. }
             | UIItemType::Split(_)
             | UIItemType::ProfileDropdownItem(_)
+            | UIItemType::BriefBar
+            | UIItemType::BriefBarSession { .. }
             | UIItemType::TabSidebar(_) => {}
         }
     }
@@ -633,6 +637,22 @@ impl super::TermWindow {
             UIItemType::ProfileDropdownItem(idx) => {
                 self.mouse_event_profile_dropdown_item(idx, event, context);
             }
+            UIItemType::BriefBar => {
+                if matches!(event.kind, WMEK::Move) {
+                    context.set_cursor(Some(MouseCursor::Arrow));
+                }
+            }
+            UIItemType::BriefBarSession {
+                ref box_name,
+                ref session,
+            } => match event.kind {
+                WMEK::Move => context.set_cursor(Some(MouseCursor::Hand)),
+                WMEK::Press(MousePress::Left) => {
+                    let (box_name, session) = (box_name.clone(), session.clone());
+                    self.activate_brief_session(&box_name, &session);
+                }
+                _ => {}
+            },
             UIItemType::TabSidebar(ref sidebar_item) => {
                 self.mouse_event_tab_sidebar(item.clone(), sidebar_item.clone(), event, context);
             }

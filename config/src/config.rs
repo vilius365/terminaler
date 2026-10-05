@@ -19,6 +19,7 @@ use crate::keys::{Key, LeaderKey, Mouse};
 use crate::units::Dimension;
 // STRIPPED: use crate::unix::UnixDomain;
 use crate::claude_agent::ClaudeAgentConfig;
+use crate::brief_bar::BriefBarConfig;
 use crate::tmux::TmuxConfig;
 use crate::web::WebAccessConfig;
 use crate::wsl::WslDomain;
@@ -919,6 +920,11 @@ pub struct Config {
     /// (TmuxSessionPicker action, sidebar session list)
     #[dynamic(default)]
     pub tmux: Option<TmuxConfig>,
+
+    /// Always-visible session/epic summary strip across the top of the
+    /// window. Absent or `enabled: false` means the feature is off.
+    #[dynamic(default)]
+    pub brief_bar: Option<BriefBarConfig>,
 }
 
 fn default_freetype_load_target() -> FreeTypeLoadTarget {

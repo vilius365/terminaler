@@ -36,6 +36,40 @@ pub fn spawn_command_impl(
     .detach();
 }
 
+/// Panes this GUI spawned to attach a tmux session, keyed by pane id. Panes
+/// attached by hand outside Terminaler are not recorded.
+static TMUX_ATTACH_PANES: parking_lot::Mutex<Vec<(mux::pane::PaneId, (String, String))>> =
+    parking_lot::Mutex::new(Vec::new());
+
+/// Label given to a tmux attach spawn; `parse_tmux_attach_label` reverses it.
+pub fn tmux_attach_label(box_name: &str, session: &str) -> String {
+    format!("tmux {}:{}", box_name, session)
+}
+
+/// tmux session names cannot contain `:`, so the last `:` splits the label.
+pub fn parse_tmux_attach_label(label: &str) -> Option<(String, String)> {
+    let rest = label.strip_prefix("tmux ")?;
+    let (box_name, session) = rest.rsplit_once(':')?;
+    Some((box_name.to_string(), session.to_string()))
+}
+
+/// Live pane previously spawned to attach `box_name:session`, dropping
+/// records for panes that no longer exist.
+pub fn live_tmux_attach_pane(box_name: &str, session: &str) -> Option<mux::pane::PaneId> {
+    let mux = Mux::try_get()?;
+    let mut panes = TMUX_ATTACH_PANES.lock();
+    panes.retain(|(id, _)| mux.get_pane(*id).is_some());
+    panes
+        .iter()
+        .rev()
+        .find(|(_, (b, s))| b == box_name && s == session)
+        .map(|(id, _)| *id)
+}
+
+fn record_tmux_attach_pane(pane_id: mux::pane::PaneId, key: (String, String)) {
+    TMUX_ATTACH_PANES.lock().push((pane_id, key));
+}
+
 pub async fn spawn_command_internal(
     spawn: SpawnCommand,
     spawn_where: SpawnWhere,
@@ -45,6 +79,7 @@ pub async fn spawn_command_internal(
 ) -> anyhow::Result<()> {
     let mux = Mux::get();
     let activity = Activity::new();
+    let attach_key = spawn.label.as_deref().and_then(parse_tmux_attach_label);
 
     let current_pane_id = match src_window_id {
         Some(window_id) => {
@@ -117,6 +152,9 @@ pub async fn spawn_command_internal(
                     )
                     .await
                     .context("split_pane")?;
+                if let Some(key) = attach_key.clone() {
+                    record_tmux_attach_pane(pane.pane_id(), key);
+                }
                 pane.set_config(term_config);
             } else {
                 bail!("there is no active tab while splitting pane!?");
@@ -139,6 +177,10 @@ pub async fn spawn_command_internal(
                 )
                 .await
                 .context("spawn_tab_or_window")?;
+
+            if let Some(key) = attach_key {
+                record_tmux_attach_pane(pane.pane_id(), key);
+            }
 
             // If it was created in this window, it copies our handlers.
             // Otherwise, we'll pick them up when we later respond to

@@ -41,6 +41,7 @@ mod units;
 pub mod unix; // minimal UnixDomain stub for Phase 0
 mod version;
 pub mod themes;
+pub mod brief_bar;
 pub mod tmux;
 pub mod web;
 pub mod window;
@@ -61,6 +62,7 @@ pub use keys::*;
 // STRIPPED: pub use serial::*;
 // STRIPPED: pub use ssh::*;
 pub use terminal::*;
+pub use brief_bar::*;
 pub use tmux::*;
 // STRIPPED: pub use tls::*;
 pub use units::*;

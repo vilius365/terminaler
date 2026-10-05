@@ -122,6 +122,17 @@ pub fn default_config_content() -> String {
     //     "boxes": [
 {TMUX_BOXES}    //     ]
     // }
+
+    // Brief bar: a fixed-height strip across the top with one cell per live
+    // Claude Code session (name, goal, current step). Disabled by default.
+    // "command" must print a JSON array on stdout; "rows" is 1..=4.
+    // "brief_bar": {
+    //     "enabled": true,
+    //     "command": ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "devbox", "~/.claude/scripts/brief", "--json"],
+    //     "poll_interval_seconds": 20,
+    //     "timeout_seconds": 10,
+    //     "rows": 3
+    // }
 }
 "#;
 

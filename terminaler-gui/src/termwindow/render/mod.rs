@@ -35,6 +35,7 @@ use terminaler_term::{CellAttributes, Line, StableRowIndex};
 use window::color::LinearRgba;
 
 pub mod borders;
+pub mod brief_bar;
 pub mod corners;
 pub mod draw;
 pub mod fancy_tab_bar;
