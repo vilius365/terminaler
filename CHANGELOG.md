@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-10-07
+
+### Changed
+- **The pane header has a close button again, beside focus.** The header pill now holds focus (only on tabs with more than one pane) and close in the corner; on a single-pane tab it holds close alone. Close needs a double click: the first click turns the button solid red, and a second click on the same pane within 800 ms closes it. Waiting it out or clicking focus disarms it, and a repaint clears the red when the window lapses. The ctrl+right-click grid's close is unchanged and still closes on one click. The grip reserves room for the two-button pill, so it does not move when a pane is added. This supersedes the 2026-10-05 entry that left close on the grid only.
+
 ## 2026-10-05
 
 ### Added
