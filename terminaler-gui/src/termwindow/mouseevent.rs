@@ -298,10 +298,14 @@ impl super::TermWindow {
             _ => {}
         }
 
-        // Header focus pill: the only pane button besides the grip.
+        // Header pill (focus, close): the only pane buttons besides the grip.
         if matches!(event.kind, WMEK::Press(MousePress::Left)) {
             if let Some((pane_id, btn)) = self.toast_button_at(&event) {
-                self.apply_snap_layout_to_pane(pane_id, btn);
+                if btn == "close" {
+                    Mux::get().remove_pane(pane_id);
+                } else {
+                    self.apply_snap_layout_to_pane(pane_id, btn);
+                }
                 self.hovered_pane_id = None;
                 context.invalidate();
                 return;
@@ -1901,16 +1905,19 @@ impl super::TermWindow {
         let pane_visual_height = bg_bottom - bg_y;
 
         // Same rule as the painter.
-        if !g.shows_focus(pane_count, pane_visual_width, pane_visual_height) {
+        if !g.shows_pill(pane_visual_width, pane_visual_height) {
             return None;
         }
 
-        let mx = event.coords.x as f32;
-        let my = event.coords.y as f32;
-        let left = bg_right - g.width;
         let top = bg_y + g.top_offset;
-        (mx >= left && mx < left + g.width && my >= top && my < top + g.height)
-            .then_some((hovered_id, "focus"))
+        g.pill_button_at(
+            pane_count,
+            bg_right,
+            top,
+            event.coords.x as f32,
+            event.coords.y as f32,
+        )
+        .map(|name| (hovered_id, name))
     }
 
     pub fn mouse_event_tab_sidebar(

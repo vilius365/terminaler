@@ -91,7 +91,7 @@ const ICON_CLOSE: &[Poly] = &[
 ];
 
 // ---------------------------------------------------------------------------
-// Pane header (grip + focus pill) and ctrl+right-click grid geometry. Both are shared
+// Pane header (grip + focus/close pill) and ctrl+right-click grid geometry. Both are shared
 // with the hit-testing in mouseevent.rs, so painting and clicking cannot drift.
 //
 // Sizes are given at 96 DPI and scaled to the window's DPI, like the text.
@@ -108,7 +108,7 @@ pub(crate) fn ui_scale(dpi: usize) -> f32 {
 
 /// The ctrl+right-click grid, row-major, three per row. The first nine are
 /// the original 3x3; "focus" and "flip-split" form a fourth row. Close and
-/// every layout live only here: the pane header carries just the grip and the
+/// every layout stay here too: the pane header carries the grip, close and the
 /// focus button.
 pub(crate) const OVERLAY_BUTTON_NAMES: [&str; 11] = [
     "close",
@@ -130,12 +130,12 @@ pub(crate) struct ToastGeom {
     pub icon: f32,
     pub inset: f32,
     pub padding: f32,
-    /// The focus pill: padding + one button + padding, both ways.
+    /// A one-button pill: padding + one button + padding, both ways.
     pub width: f32,
     pub height: f32,
     /// Extra margin around the pill that still counts as hovering it.
     pub collapse_margin: f32,
-    /// Smallest pane that shows the focus pill at all.
+    /// Smallest pane that shows the header pill at all.
     pub min_pane_width: f32,
     pub min_pane_height: f32,
     /// Gap between the pane's top edge and the pill.
@@ -149,17 +149,57 @@ pub(crate) struct ToastGeom {
 }
 
 impl ToastGeom {
-    /// Whether a pane shows the focus pill: only when the tab has another
-    /// pane to stack, and the pane is big enough. Painting and hit-testing
-    /// both ask this, so they agree.
-    pub fn shows_focus(&self, pane_count: usize, pane_w: f32, pane_h: f32) -> bool {
-        pane_count >= 2 && pane_w >= self.min_pane_width && pane_h >= self.min_pane_height
+    /// Whether a pane shows the header pill at all: it must be big enough for
+    /// the close button. Painting and hit-testing both ask this, so they agree.
+    pub fn shows_pill(&self, pane_w: f32, pane_h: f32) -> bool {
+        pane_w >= self.min_pane_width && pane_h >= self.min_pane_height
+    }
+
+    /// The pill's buttons, left to right: focus only when the tab has another
+    /// pane to stack (otherwise it would be dead), then close in the corner.
+    pub fn pill_buttons(&self, pane_count: usize) -> &'static [&'static str] {
+        if pane_count >= 2 {
+            &["focus", "close"]
+        } else {
+            &["close"]
+        }
+    }
+
+    /// Width of a pill holding `n` buttons, spaced by the pill's padding.
+    pub fn pill_width(&self, n: usize) -> f32 {
+        self.padding * 2.0 + n as f32 * self.btn + n.saturating_sub(1) as f32 * self.padding
+    }
+
+    /// Left edge of button `idx` of a pill whose right edge is `right`.
+    pub fn button_left(&self, right: f32, n: usize, idx: usize) -> f32 {
+        right - self.pill_width(n) + self.padding + idx as f32 * (self.btn + self.padding)
+    }
+
+    /// The pill button under (x, y) for a pill right-aligned at `right` with
+    /// its top at `top`. The padding between buttons counts toward the nearer one.
+    pub fn pill_button_at(
+        &self,
+        pane_count: usize,
+        right: f32,
+        top: f32,
+        x: f32,
+        y: f32,
+    ) -> Option<&'static str> {
+        let names = self.pill_buttons(pane_count);
+        let n = names.len();
+        let left = right - self.pill_width(n);
+        if x < left || x >= right || y < top || y >= top + self.height {
+            return None;
+        }
+        let idx = (((x - left) / (self.btn + self.padding)) as usize).min(n - 1);
+        Some(names[idx])
     }
 
     /// Whether a pane of this content size has room for the grip beside the
-    /// focus pill, so the two never overlap.
+    /// widest pill, so the two never overlap (and the grip never jumps when a
+    /// pane is added).
     pub fn fits_grip(&self, pane_w: f32, pane_h: f32) -> bool {
-        pane_w >= self.grip_gap * 2.0 + self.grip_w + self.width + 10.0 * self.scale
+        pane_w >= self.grip_gap * 2.0 + self.grip_w + self.pill_width(2) + 10.0 * self.scale
             && pane_h >= self.grip_gap * 2.0 + self.grip_h + 10.0 * self.scale
     }
 
@@ -1539,26 +1579,34 @@ impl crate::TermWindow {
         let pane_visual_height = bg_bottom - bg_y;
 
         let geom = ToastGeom::for_dpi(self.dimensions.dpi);
-        if !geom.shows_focus(pane_count, pane_visual_width, pane_visual_height) {
+        if !geom.shows_pill(pane_visual_width, pane_visual_height) {
             self.toast_rect = None;
             return Ok(());
         }
 
-        // The focus pill, top-right. Close and the layouts are on the
+        // The header pill, top-right: focus (when the tab has other panes)
+        // and close beside it. Layouts and move-to-tab are on the
         // ctrl+right-click grid only.
         let bg_color = window::color::LinearRgba(0.102, 0.102, 0.102, 0.55);
         let btn_bg = window::color::LinearRgba(1.0, 1.0, 1.0, 0.10);
+        let close_bg = window::color::LinearRgba(0.973, 0.318, 0.286, 0.55);
         let white = window::color::LinearRgba(1.0, 1.0, 1.0, 0.92);
-        let left = bg_right - geom.width;
+        let names = geom.pill_buttons(pane_count);
+        let pill_w = geom.pill_width(names.len());
+        let left = bg_right - pill_w;
         let top = bg_y + geom.top_offset;
-        self.toast_rect = Some((hovered_id, left, top, geom.width, geom.height));
+        self.toast_rect = Some((hovered_id, left, top, pill_w, geom.height));
 
-        self.filled_rectangle(layers, 2, euclid::rect(left, top, geom.width, geom.height), bg_color)
-            .context("focus pill bg")?;
-        let (bx, by) = (left + geom.padding, top + geom.padding);
-        self.filled_rectangle(layers, 2, euclid::rect(bx, by, geom.btn, geom.btn), btn_bg)
-            .context("focus pill btn bg")?;
-        self.paint_button_icon(layers, "focus", bx + geom.inset, by + geom.inset, geom.icon, white)?;
+        self.filled_rectangle(layers, 2, euclid::rect(left, top, pill_w, geom.height), bg_color)
+            .context("header pill bg")?;
+        let by = top + geom.padding;
+        for (idx, &name) in names.iter().enumerate() {
+            let bx = geom.button_left(bg_right, names.len(), idx);
+            let bg = if name == "close" { close_bg } else { btn_bg };
+            self.filled_rectangle(layers, 2, euclid::rect(bx, by, geom.btn, geom.btn), bg)
+                .context("header pill btn bg")?;
+            self.paint_button_icon(layers, name, bx + geom.inset, by + geom.inset, geom.icon, white)?;
+        }
 
         Ok(())
     }
@@ -1599,21 +1647,42 @@ mod geometry_tests {
     }
 
     #[test]
-    fn focus_pill_shows_only_when_it_has_a_use() {
+    fn pill_holds_focus_only_when_it_has_a_use() {
         let g = ToastGeom::for_dpi(96);
-        assert!(g.shows_focus(2, 1000.0, 1000.0));
-        // A lone pane has nothing to stack: the button would be dead.
-        assert!(!g.shows_focus(1, 1000.0, 1000.0));
-        assert!(!g.shows_focus(3, g.min_pane_width - 1.0, 1000.0));
-        assert!(!g.shows_focus(3, 1000.0, g.min_pane_height - 1.0));
+        assert!(g.shows_pill(1000.0, 1000.0));
+        assert!(!g.shows_pill(g.min_pane_width - 1.0, 1000.0));
+        assert!(!g.shows_pill(1000.0, g.min_pane_height - 1.0));
+        // A lone pane has nothing to stack: focus would be dead, close stays.
+        assert_eq!(g.pill_buttons(1), &["close"]);
+        assert_eq!(g.pill_buttons(2), &["focus", "close"]);
+    }
+
+    #[test]
+    fn pill_hit_test_matches_the_painted_buttons() {
+        let g = ToastGeom::for_dpi(96);
+        let (right, top) = (500.0, 20.0);
+        let n = 2;
+        for (idx, &name) in g.pill_buttons(n).iter().enumerate() {
+            let l = g.button_left(right, n, idx);
+            let mid_y = top + g.padding + g.btn / 2.0;
+            assert_eq!(g.pill_button_at(n, right, top, l + 1.0, mid_y), Some(name));
+            assert_eq!(g.pill_button_at(n, right, top, l + g.btn - 1.0, mid_y), Some(name));
+        }
+        // Close is the rightmost button, in the corner.
+        assert_eq!(g.pill_button_at(n, right, top, right - 2.0, top + 5.0), Some("close"));
+        // Outside the pill hits nothing; a lone pane's pill is one button wide.
+        assert_eq!(g.pill_button_at(n, right, top, right + 1.0, top + 5.0), None);
+        assert_eq!(g.pill_button_at(n, right, top, right - g.pill_width(n) - 1.0, top + 5.0), None);
+        assert_eq!(g.pill_button_at(1, right, top, right - g.width - 1.0, top + 5.0), None);
+        assert_eq!(g.pill_width(1), g.width);
     }
 
     #[test]
     fn grip_needs_room_beside_the_focus_pill() {
         let g = ToastGeom::for_dpi(96);
-        let min_w = g.grip_gap * 2.0 + g.grip_w + g.width + 10.0;
+        let min_w = g.grip_gap * 2.0 + g.grip_w + g.pill_width(2) + 10.0;
         assert!(g.fits_grip(min_w, 200.0));
-        assert!(!g.fits_grip(min_w - 1.0, 200.0), "would touch the focus pill");
+        assert!(!g.fits_grip(min_w - 1.0, 200.0), "would touch the pill");
         assert!(!g.fits_grip(1000.0, g.grip_h), "too short for the grip");
         // The grip scales like the rest of the header.
         let big = ToastGeom::for_dpi(192);
