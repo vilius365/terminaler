@@ -621,6 +621,10 @@ pub struct TermWindow {
     /// `pane_id_at_pixel_coords` tests — so hover must be kept by this stored
     /// rect, never by re-resolving the pane under the pointer.
     pub toast_rect: Option<(mux::pane::PaneId, f32, f32, f32, f32)>,
+    /// The header's close button was clicked once: a second click on the same
+    /// pane before `CLOSE_CONFIRM_WINDOW` runs out closes it, so a stray
+    /// click cannot kill a pane.
+    pub close_armed: Option<(mux::pane::PaneId, std::time::Instant)>,
     /// Set when a ctrl+right press opened the layout grid, so the release that
     /// pairs with it is swallowed too and a mouse-grabbing application (tmux)
     /// never sees half a click. Cleared as it is consumed.
@@ -1120,6 +1124,7 @@ impl TermWindow {
             pane_long_press: None,
             hovered_pane_id: None,
             toast_rect: None,
+            close_armed: None,
             swallow_right_release: false,
             last_ui_item: None,
             is_click_to_focus_window: false,

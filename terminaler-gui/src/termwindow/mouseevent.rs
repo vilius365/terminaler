@@ -302,11 +302,18 @@ impl super::TermWindow {
         if matches!(event.kind, WMEK::Press(MousePress::Left)) {
             if let Some((pane_id, btn)) = self.toast_button_at(&event) {
                 if btn == "close" {
-                    Mux::get().remove_pane(pane_id);
+                    if self.close_is_armed(pane_id) {
+                        self.close_armed = None;
+                        Mux::get().remove_pane(pane_id);
+                        self.hovered_pane_id = None;
+                    } else {
+                        self.arm_close(pane_id);
+                    }
                 } else {
+                    self.close_armed = None;
                     self.apply_snap_layout_to_pane(pane_id, btn);
+                    self.hovered_pane_id = None;
                 }
-                self.hovered_pane_id = None;
                 context.invalidate();
                 return;
             }
@@ -1827,6 +1834,31 @@ impl super::TermWindow {
             return grid.button_at(origin, mx, my);
         }
         None
+    }
+
+    /// Whether `pane_id`'s close button was clicked within the confirm window.
+    pub(crate) fn close_is_armed(&self, pane_id: mux::pane::PaneId) -> bool {
+        self.close_armed.map_or(false, |(id, at)| {
+            id == pane_id
+                && at.elapsed() < crate::termwindow::render::pane::CLOSE_CONFIRM_WINDOW
+        })
+    }
+
+    /// First click on close: arm it, and repaint once the window lapses so the
+    /// button does not stay highlighted after it has disarmed.
+    fn arm_close(&mut self, pane_id: mux::pane::PaneId) {
+        self.close_armed = Some((pane_id, std::time::Instant::now()));
+        if let Some(window) = self.window.clone() {
+            promise::spawn::spawn(async move {
+                smol::Timer::after(
+                    crate::termwindow::render::pane::CLOSE_CONFIRM_WINDOW
+                        + std::time::Duration::from_millis(50),
+                )
+                .await;
+                window.invalidate();
+            })
+            .detach();
+        }
     }
 
     fn toast_button_at(

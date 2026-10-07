@@ -124,6 +124,10 @@ pub(crate) const OVERLAY_BUTTON_NAMES: [&str; 11] = [
     "flip-split",
 ];
 
+/// How long after a first click on a pane's close button a second click still
+/// confirms the close.
+pub(crate) const CLOSE_CONFIRM_WINDOW: std::time::Duration = std::time::Duration::from_millis(800);
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ToastGeom {
     pub btn: f32,
@@ -1590,6 +1594,7 @@ impl crate::TermWindow {
         let bg_color = window::color::LinearRgba(0.102, 0.102, 0.102, 0.55);
         let btn_bg = window::color::LinearRgba(1.0, 1.0, 1.0, 0.10);
         let close_bg = window::color::LinearRgba(0.973, 0.318, 0.286, 0.55);
+        let close_armed_bg = window::color::LinearRgba(0.973, 0.318, 0.286, 1.0);
         let white = window::color::LinearRgba(1.0, 1.0, 1.0, 0.92);
         let names = geom.pill_buttons(pane_count);
         let pill_w = geom.pill_width(names.len());
@@ -1602,7 +1607,11 @@ impl crate::TermWindow {
         let by = top + geom.padding;
         for (idx, &name) in names.iter().enumerate() {
             let bx = geom.button_left(bg_right, names.len(), idx);
-            let bg = if name == "close" { close_bg } else { btn_bg };
+            let bg = if name == "close" {
+                if self.close_is_armed(hovered_id) { close_armed_bg } else { close_bg }
+            } else {
+                btn_bg
+            };
             self.filled_rectangle(layers, 2, euclid::rect(bx, by, geom.btn, geom.btn), bg)
                 .context("header pill btn bg")?;
             self.paint_button_icon(layers, name, bx + geom.inset, by + geom.inset, geom.icon, white)?;
