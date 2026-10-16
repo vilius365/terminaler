@@ -485,6 +485,15 @@ pub struct Config {
     #[dynamic(default)]
     pub tab_sidebar_show_local: bool,
 
+    /// Collapse each box's "· personas" (ol-* sessions) group to a single
+    /// "N personas" summary row instead of one tile per session. Off by
+    /// default. On a box running many personas, the per-tile list can use up
+    /// the sidebar's pixel budget and push unrelated boxes (and the sessions
+    /// started by hand on them) into the "+N … C-S-s" overflow count further
+    /// down — collapsing frees that space for everything else.
+    #[dynamic(default)]
+    pub tab_sidebar_collapse_personas: bool,
+
     #[dynamic(default = "default_true")]
     pub mouse_wheel_scrolls_tabs: bool,
 

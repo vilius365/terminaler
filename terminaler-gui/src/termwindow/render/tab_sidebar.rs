@@ -506,8 +506,37 @@ impl crate::TermWindow {
             // under it; otherwise every persona tile goes to the +N count.
             let (personas, own): (Vec<_>, Vec<_>) =
                 snap.sessions.iter().partition(|s| s.is_persona());
+
+            // tab_sidebar_collapse_personas (user request, 2026-10-16): a
+            // single "N personas" row instead of one tile per session. This
+            // is what actually fixes a box with many personas burying
+            // unrelated boxes further down the list in the "+N" overflow —
+            // the per-box eyebrow partition above only decides ORDER within
+            // a box, not how much pixel budget the group spends.
+            if self.config.tab_sidebar_collapse_personas && !personas.is_empty() {
+                if px_used + eyebrow_px <= tile_budget_px {
+                    children.push(sidebar_eyebrow(
+                        title_font,
+                        &format!("\u{00b7} {} personas", personas.len()),
+                        None,
+                        theme,
+                        sidebar_width,
+                        stale,
+                    ));
+                    px_used += eyebrow_px;
+                } else {
+                    tiles_hidden += personas.len();
+                }
+            }
+            let personas_iter: Box<dyn Iterator<Item = &crate::tmux_discovery::TmuxSessionEntry>> =
+                if self.config.tab_sidebar_collapse_personas {
+                    Box::new(std::iter::empty())
+                } else {
+                    Box::new(personas.into_iter())
+                };
+
             let mut personas_heading: Option<bool> = None;
-            for session in own.into_iter().chain(personas) {
+            for session in own.into_iter().chain(personas_iter) {
                 if session.is_persona() {
                     let shown = *personas_heading.get_or_insert_with(|| {
                         let fits = px_used + eyebrow_px + tile_px <= tile_budget_px;
