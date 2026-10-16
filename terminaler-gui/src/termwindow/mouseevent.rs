@@ -2009,6 +2009,7 @@ impl super::TermWindow {
                     }
                     log::info!("Pane {} notifications muted: {}", pane_id, muted);
                     self.invalidate_tab_sidebar();
+                    context.invalidate();
                 }
                 TabSidebarItem::NewTabButton => {
                     // Split the active pane rather than spawning a tab. A new
@@ -2056,6 +2057,7 @@ impl super::TermWindow {
                             .fetch_xor(true, Ordering::Relaxed);
                         log::info!("Notifications globally blocked: {}", blocked);
                         self.invalidate_tab_sidebar();
+                        context.invalidate();
                     }
                     TabSidebarItem::OpacityToggleButton => {
                         use std::sync::atomic::Ordering;
@@ -2063,6 +2065,7 @@ impl super::TermWindow {
                             .fetch_xor(true, Ordering::Relaxed);
                         log::info!("Panes forced opaque: {}", opaque);
                         self.invalidate_tab_sidebar();
+                        context.invalidate();
                     }
                     TabSidebarItem::AgentsGroupHeading { group_key } => {
                         // Personas sub-headings ("<box>:personas") default to
@@ -2078,7 +2081,19 @@ impl super::TermWindow {
                             default_collapsed,
                         );
                         log::info!("AGENTS group {} collapsed: {}", group_key, collapsed);
-                        self.invalidate_tab_sidebar();
+                        // invalidate_tab_sidebar() alone only clears the
+                        // cached layout; it has no window handle to request
+                        // a redraw. Without context.invalidate() the toggle
+                        // is correct in AGENT_GROUP_OVERRIDES immediately but
+                        // invisible until some unrelated event (mouse move,
+                        // cursor blink) happens to repaint — which is why
+                        // this looked like it needed 1 click sometimes and
+                        // 3-5 others (user report, 2026-10-16): every click
+                        // DID toggle, but a run of clicks with no repaint
+                        // between them canceled each other out on screen
+                        // until a stray repaint finally landed and showed
+                        // whichever state the override was last left in.
+                        context.invalidate();
                     }
                 }
             }
