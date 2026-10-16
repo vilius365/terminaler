@@ -2081,18 +2081,19 @@ impl super::TermWindow {
                             default_collapsed,
                         );
                         log::info!("AGENTS group {} collapsed: {}", group_key, collapsed);
-                        // invalidate_tab_sidebar() alone only clears the
-                        // cached layout; it has no window handle to request
-                        // a redraw. Without context.invalidate() the toggle
-                        // is correct in AGENT_GROUP_OVERRIDES immediately but
-                        // invisible until some unrelated event (mouse move,
-                        // cursor blink) happens to repaint — which is why
-                        // this looked like it needed 1 click sometimes and
-                        // 3-5 others (user report, 2026-10-16): every click
-                        // DID toggle, but a run of clicks with no repaint
-                        // between them canceled each other out on screen
-                        // until a stray repaint finally landed and showed
-                        // whichever state the override was last left in.
+                        // Both calls are required: invalidate_tab_sidebar()
+                        // drops the cached layout tree so the next paint
+                        // rebuilds it (and so actually reads the new
+                        // override), while context.invalidate() is what
+                        // asks the compositor for that next paint at all.
+                        // A prior pass here replaced the first call with
+                        // the second instead of adding it — the toggle kept
+                        // flipping AGENT_GROUP_OVERRIDES correctly and a
+                        // repaint kept happening, but every repaint reused
+                        // the stale cached tree built before the click, so
+                        // nothing ever visibly changed (user report,
+                        // 2026-10-16, after the first repaint fix).
+                        self.invalidate_tab_sidebar();
                         context.invalidate();
                     }
                 }
