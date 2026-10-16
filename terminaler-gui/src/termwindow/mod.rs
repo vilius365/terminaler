@@ -132,6 +132,57 @@ pub fn effective_window_opacity(configured: f32) -> f32 {
     }
 }
 
+/// A click's explicit override of an AGENTS-section group's collapsed
+/// state, as opposed to no click ever having landed on it (in which case
+/// the group falls back to its built-in default — expanded for a box,
+/// `tab_sidebar_collapse_personas` for a "· personas" sub-heading).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum AgentGroupOverride {
+    Collapsed,
+    Expanded,
+}
+
+/// Session-only, process-wide click overrides for AGENTS-section groups,
+/// keyed by a group key (a box name, or "<box>:personas"). Like
+/// `NOTIFICATIONS_BLOCKED` above: no config write or per-window state, a
+/// click just flips this and invalidates the sidebar (user request,
+/// 2026-10-16 — a box with many sessions, or many personas, was burying
+/// unrelated boxes further down the "+N" overflow with no way to fold it
+/// back). A `HashMap` rather than a `HashSet` because a box defaults to
+/// expanded while personas can default to collapsed (config), so "not
+/// present" can't double as either state — only an explicit click belongs
+/// in this map.
+pub static AGENT_GROUP_OVERRIDES: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<String, AgentGroupOverride>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+/// Resolve a group's collapsed state: an explicit click wins, otherwise
+/// `default_collapsed` (the box/persona-specific fallback the caller knows).
+pub fn agent_group_collapsed(group_key: &str, default_collapsed: bool) -> bool {
+    match AGENT_GROUP_OVERRIDES.lock().unwrap().get(group_key) {
+        Some(AgentGroupOverride::Collapsed) => true,
+        Some(AgentGroupOverride::Expanded) => false,
+        None => default_collapsed,
+    }
+}
+
+/// Flip a group's effective state (as `agent_group_collapsed` would resolve
+/// it right now) and record the result as an explicit override. Returns the
+/// new collapsed state.
+pub fn toggle_agent_group_collapsed(group_key: &str, default_collapsed: bool) -> bool {
+    let now_collapsed = agent_group_collapsed(group_key, default_collapsed);
+    let new_collapsed = !now_collapsed;
+    AGENT_GROUP_OVERRIDES.lock().unwrap().insert(
+        group_key.to_string(),
+        if new_collapsed {
+            AgentGroupOverride::Collapsed
+        } else {
+            AgentGroupOverride::Expanded
+        },
+    );
+    new_collapsed
+}
+
 pub const ICON_DATA: &'static [u8] = include_bytes!("../../../assets/icon/terminal.png");
 
 pub fn set_window_position(pos: GuiPosition) {
@@ -399,6 +450,10 @@ pub enum TabSidebarItem {
     ThemePickerButton,
     /// Widget-dock button: forces a tmux discovery refresh.
     TmuxRefreshButton,
+    /// An AGENTS section group heading (a box's own eyebrow, or its
+    /// "· personas" sub-heading); clicking toggles that group's collapsed
+    /// state. `group_key` matches what `tmux_discovery::group_key` builds.
+    AgentsGroupHeading { group_key: String },
 }
 
 /// Hover state for the compact sidebar's detail flyout. `anchor` is the rail

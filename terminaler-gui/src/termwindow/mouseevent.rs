@@ -2064,6 +2064,22 @@ impl super::TermWindow {
                         log::info!("Panes forced opaque: {}", opaque);
                         self.invalidate_tab_sidebar();
                     }
+                    TabSidebarItem::AgentsGroupHeading { group_key } => {
+                        // Personas sub-headings ("<box>:personas") default to
+                        // tab_sidebar_collapse_personas; every other group
+                        // (a box's own eyebrow) defaults to expanded. Needed
+                        // here because toggling has to invert whatever is
+                        // showing right now, and "showing right now" depends
+                        // on that default when no click has landed yet.
+                        let default_collapsed = group_key.ends_with(":personas")
+                            && self.config.tab_sidebar_collapse_personas;
+                        let collapsed = crate::termwindow::toggle_agent_group_collapsed(
+                            &group_key,
+                            default_collapsed,
+                        );
+                        log::info!("AGENTS group {} collapsed: {}", group_key, collapsed);
+                        self.invalidate_tab_sidebar();
+                    }
                 }
             }
             WMEK::Press(MousePress::Middle) => match sidebar_item {
@@ -2099,7 +2115,8 @@ impl super::TermWindow {
                 | TabSidebarItem::ThemePickerButton
                 | TabSidebarItem::TmuxRefreshButton
                 | TabSidebarItem::NotificationsBlockButton
-                | TabSidebarItem::OpacityToggleButton => {
+                | TabSidebarItem::OpacityToggleButton
+                | TabSidebarItem::AgentsGroupHeading { .. } => {
                     context.set_cursor(Some(MouseCursor::Hand));
                 }
                 TabSidebarItem::Flyout => {

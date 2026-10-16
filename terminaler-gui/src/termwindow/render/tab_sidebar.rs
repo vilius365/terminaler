@@ -455,6 +455,37 @@ impl crate::TermWindow {
                 }
                 continue;
             }
+            let (dot_color, stale) = match snap.status {
+                crate::tmux_discovery::BoxStatus::Ok => (theme.accent_green, false),
+                crate::tmux_discovery::BoxStatus::Unreachable(_) => (theme.accent_red, true),
+                _ => (theme.text_tertiary, true),
+            };
+
+            // A collapsed box renders just its eyebrow (now a disclosure
+            // toggle with a session count) and nothing else — the user's own
+            // fold, on top of (not instead of) the budget-driven "+N …"
+            // fallback below, which only ever fires on a box nobody folded
+            // (user request, 2026-10-16: a 20+-session box left no room for
+            // boxes further down the list, with no way to collapse it back).
+            let box_group_key = snap.box_name.clone();
+            if crate::termwindow::agent_group_collapsed(&box_group_key, false) {
+                if px_used + eyebrow_px <= px_budget {
+                    children.push(sidebar_eyebrow_collapsible(
+                        title_font,
+                        &snap.box_name,
+                        Some(dot_color),
+                        theme,
+                        sidebar_width,
+                        stale,
+                        Some((&box_group_key, true, snap.sessions.len())),
+                    ));
+                    px_used += eyebrow_px;
+                } else {
+                    tiles_hidden += snap.sessions.len();
+                }
+                continue;
+            }
+
             // The eyebrow plus at least one tile must fit, or the whole box
             // moves to the +N summary.
             if px_used + eyebrow_px + tile_px > tile_budget_px {
@@ -462,18 +493,14 @@ impl crate::TermWindow {
                 continue;
             }
 
-            let (dot_color, stale) = match snap.status {
-                crate::tmux_discovery::BoxStatus::Ok => (theme.accent_green, false),
-                crate::tmux_discovery::BoxStatus::Unreachable(_) => (theme.accent_red, true),
-                _ => (theme.text_tertiary, true),
-            };
-            children.push(sidebar_eyebrow(
+            children.push(sidebar_eyebrow_collapsible(
                 title_font,
                 &snap.box_name,
                 Some(dot_color),
                 theme,
                 sidebar_width,
                 stale,
+                Some((&box_group_key, false, snap.sessions.len())),
             ));
             px_used += eyebrow_px;
 
@@ -507,47 +534,54 @@ impl crate::TermWindow {
             let (personas, own): (Vec<_>, Vec<_>) =
                 snap.sessions.iter().partition(|s| s.is_persona());
 
-            // tab_sidebar_collapse_personas (user request, 2026-10-16): a
-            // single "N personas" row instead of one tile per session. This
-            // is what actually fixes a box with many personas burying
-            // unrelated boxes further down the list in the "+N" overflow —
-            // the per-box eyebrow partition above only decides ORDER within
-            // a box, not how much pixel budget the group spends.
-            if self.config.tab_sidebar_collapse_personas && !personas.is_empty() {
-                if px_used + eyebrow_px <= tile_budget_px {
-                    children.push(sidebar_eyebrow(
-                        title_font,
-                        &format!("\u{00b7} {} personas", personas.len()),
-                        None,
-                        theme,
-                        sidebar_width,
-                        stale,
-                    ));
-                    px_used += eyebrow_px;
-                } else {
-                    tiles_hidden += personas.len();
-                }
-            }
+            // The personas sub-heading is its own collapsible group, keyed
+            // separately from the box so folding "· personas" on a box
+            // leaves the sessions the user started by hand untouched.
+            // tab_sidebar_collapse_personas sets the INITIAL fold so a box
+            // with many personas doesn't open expanded every launch; a click
+            // on the heading overrides it for the rest of the session (user
+            // request, 2026-10-16).
+            let personas_group_key = format!("{}:personas", snap.box_name);
+            let personas_collapsed = crate::termwindow::agent_group_collapsed(
+                &personas_group_key,
+                self.config.tab_sidebar_collapse_personas,
+            );
+
+            let mut personas_heading: Option<bool> = None;
             let personas_iter: Box<dyn Iterator<Item = &crate::tmux_discovery::TmuxSessionEntry>> =
-                if self.config.tab_sidebar_collapse_personas {
+                if personas_collapsed && !personas.is_empty() {
+                    if px_used + eyebrow_px <= tile_budget_px {
+                        children.push(sidebar_eyebrow_collapsible(
+                            title_font,
+                            "\u{00b7} personas",
+                            None,
+                            theme,
+                            sidebar_width,
+                            stale,
+                            Some((&personas_group_key, true, personas.len())),
+                        ));
+                        px_used += eyebrow_px;
+                    } else {
+                        tiles_hidden += personas.len();
+                    }
                     Box::new(std::iter::empty())
                 } else {
                     Box::new(personas.into_iter())
                 };
 
-            let mut personas_heading: Option<bool> = None;
             for session in own.into_iter().chain(personas_iter) {
                 if session.is_persona() {
                     let shown = *personas_heading.get_or_insert_with(|| {
                         let fits = px_used + eyebrow_px + tile_px <= tile_budget_px;
                         if fits {
-                            children.push(sidebar_eyebrow(
+                            children.push(sidebar_eyebrow_collapsible(
                                 title_font,
                                 "\u{00b7} personas",
                                 None,
                                 theme,
                                 sidebar_width,
                                 stale,
+                                Some((&personas_group_key, false, snap.sessions.iter().filter(|s| s.is_persona()).count())),
                             ));
                             px_used += eyebrow_px;
                         }
@@ -2330,8 +2364,34 @@ fn sidebar_eyebrow(
     sidebar_width: f32,
     stale: bool,
 ) -> Element {
+    sidebar_eyebrow_collapsible(label_font, name, dot, theme, sidebar_width, stale, None)
+}
+
+/// Like `sidebar_eyebrow`, but when `collapsible` is set the row becomes a
+/// disclosure toggle: a ▸/▾ chevron, an optional trailing "(N)" count, a
+/// click target (`TabSidebarItem::AgentsGroupHeading`), and a hover affordance
+/// — the box's own eyebrow and its "· personas" sub-heading are both groups a
+/// crowded AGENTS section needs to fold away (user request, 2026-10-16).
+#[allow(clippy::too_many_arguments)]
+fn sidebar_eyebrow_collapsible(
+    label_font: &Rc<LoadedFont>,
+    name: &str,
+    dot: Option<LinearRgba>,
+    theme: &SidebarTheme,
+    sidebar_width: f32,
+    stale: bool,
+    collapsible: Option<(&str, bool, usize)>,
+) -> Element {
     let dimf = if stale { 0.55 } else { 1.0 };
     let mut parts = vec![];
+    if let Some((_, collapsed, _)) = collapsible {
+        let chevron = if collapsed { "\u{25b8} " } else { "\u{25be} " };
+        parts.push(
+            Element::new(label_font, ElementContent::Text(chevron.to_string()))
+                .display(DisplayType::Inline)
+                .colors(text_only(theme.text_tertiary.mul_alpha(dimf))),
+        );
+    }
     if let Some(dot_color) = dot {
         parts.push(
             Element::new(label_font, ElementContent::Text("\u{25cf} ".to_string()))
@@ -2347,8 +2407,15 @@ fn sidebar_eyebrow(
         .display(DisplayType::Inline)
         .colors(text_only(theme.text_tertiary.mul_alpha(dimf))),
     );
+    if let Some((_, _, count)) = collapsible {
+        parts.push(
+            Element::new(label_font, ElementContent::Text(format!(" ({})", count)))
+                .display(DisplayType::Inline)
+                .colors(text_only(theme.text_tertiary.mul_alpha(dimf * 0.8))),
+        );
+    }
 
-    Element::new(label_font, ElementContent::Children(parts))
+    let mut eyebrow = Element::new(label_font, ElementContent::Children(parts))
         .display(DisplayType::Block)
         .line_height(Some(1.3))
         .padding(BoxDimension {
@@ -2358,7 +2425,21 @@ fn sidebar_eyebrow(
             bottom: Dimension::Pixels(3.),
         })
         .colors(text_only(theme.text_tertiary.mul_alpha(dimf)))
-        .min_width(Some(Dimension::Pixels(sidebar_width)))
+        .min_width(Some(Dimension::Pixels(sidebar_width)));
+
+    if let Some((group_key, _, _)) = collapsible {
+        eyebrow = eyebrow
+            .item_type(UIItemType::TabSidebar(TabSidebarItem::AgentsGroupHeading {
+                group_key: group_key.to_string(),
+            }))
+            .hover_colors(Some(ElementColors {
+                border: BorderColor::default(),
+                bg: InheritableColor::Inherited,
+                text: theme.text_secondary.into(),
+            }));
+    }
+
+    eyebrow
 }
 
 /// Bottom widget dock: new terminal, theme picker, the global
