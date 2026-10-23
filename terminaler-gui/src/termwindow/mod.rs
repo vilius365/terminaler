@@ -776,6 +776,7 @@ pub struct TermWindow {
     event_states: HashMap<String, EventState>,
     pub current_event: Option<Value>,
     has_animation: RefCell<Option<Instant>>,
+    pane_anims: RefCell<crate::pane_anim::PaneAnimations>,
     /// We use this to attempt to do something reasonable
     /// if we run out of texture space
     allow_images: AllowImage,
@@ -1168,6 +1169,7 @@ impl TermWindow {
             event_states: HashMap::new(),
             current_event: None,
             has_animation: RefCell::new(None),
+            pane_anims: RefCell::new(Default::default()),
             scheduled_animation: RefCell::new(None),
             allow_images: AllowImage::Yes,
             semantic_zones: HashMap::new(),

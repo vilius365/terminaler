@@ -43,10 +43,20 @@ pub struct Ghost {
     start: Instant,
 }
 
+/// What a fade-in belongs to. One entry per visible overlay state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FadeKey {
+    DragSource(PaneId),
+    DragTarget(PaneId),
+    LongPress(PaneId),
+    SplitHover(usize),
+}
+
 #[derive(Default)]
 pub struct PaneAnimations {
     tweens: HashMap<PaneId, Tween>,
     ghosts: Vec<Ghost>,
+    fades: HashMap<FadeKey, Instant>,
 }
 
 /// Eased progress in 0..=1 of an animation that began at `start`.
@@ -112,6 +122,25 @@ impl PaneAnimations {
         self.ghosts
             .retain(|g| now.saturating_duration_since(g.start) < duration);
         !self.tweens.is_empty() || !self.ghosts.is_empty()
+    }
+
+    /// Fade-in factor (0..=1) for an overlay that is `shown` right now.
+    /// The clock starts on the first shown frame and resets when hidden.
+    /// The bool is true while the fade still needs more frames.
+    pub fn fade(&mut self, key: FadeKey, shown: bool, now: Instant, duration: Duration) -> (f32, bool) {
+        if !shown {
+            self.fades.remove(&key);
+            return (0.0, false);
+        }
+        let start = *self.fades.entry(key).or_insert(now);
+        let t = progress(start, now, duration);
+        (t, t < 1.0)
+    }
+
+    /// Forget every fade for which `keep` is false, so the next time that
+    /// overlay shows it fades in again from zero.
+    pub fn retain_fades(&mut self, keep: impl Fn(&FadeKey) -> bool) {
+        self.fades.retain(|k, _| keep(k));
     }
 
     pub fn is_active(&self) -> bool {
@@ -181,6 +210,19 @@ mod test {
         let mut anims = PaneAnimations::default();
         anims.start(1, r(5.0), r(5.0), t0, MS(150));
         assert!(!anims.is_active());
+    }
+
+    #[test]
+    fn fade_starts_on_show_and_resets_on_hide() {
+        let t0 = Instant::now();
+        let mut anims = PaneAnimations::default();
+        let k = FadeKey::LongPress(1);
+        assert_eq!(anims.fade(k, true, t0, MS(150)), (0.0, true));
+        let (mid, more) = anims.fade(k, true, t0 + MS(60), MS(150));
+        assert!(mid > 0.0 && mid < 1.0 && more);
+        assert_eq!(anims.fade(k, true, t0 + MS(200), MS(150)), (1.0, false));
+        assert_eq!(anims.fade(k, false, t0 + MS(210), MS(150)), (0.0, false));
+        assert_eq!(anims.fade(k, true, t0 + MS(220), MS(150)), (0.0, true));
     }
 
     #[test]

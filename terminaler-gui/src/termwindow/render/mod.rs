@@ -231,6 +231,33 @@ impl crate::TermWindow {
         }
     }
 
+    /// Duration of pane animations, or None when they are switched off.
+    pub fn pane_animation_duration(&self) -> Option<std::time::Duration> {
+        if self.config.pane_animation && self.config.pane_animation_ms > 0 {
+            Some(std::time::Duration::from_millis(
+                self.config.pane_animation_ms as u64,
+            ))
+        } else {
+            None
+        }
+    }
+
+    /// Fade-in factor (0..=1) for an overlay that is `shown` now; schedules
+    /// the next frame while the fade runs. 1.0 when animations are off.
+    pub fn pane_fade(&self, key: crate::pane_anim::FadeKey, shown: bool) -> f32 {
+        let Some(duration) = self.pane_animation_duration() else {
+            return if shown { 1.0 } else { 0.0 };
+        };
+        let now = Instant::now();
+        let (t, more) = self.pane_anims.borrow_mut().fade(key, shown, now, duration);
+        if more {
+            // Paced by max_fps: animation_fps defaults to 10, too coarse for 150 ms.
+            let frame = std::time::Duration::from_millis(1000 / self.config.max_fps.clamp(1, 240));
+            self.update_next_frame_time(Some(now + frame));
+        }
+        t
+    }
+
     fn get_intensity_if_bell_target_ringing(
         &self,
         pane: &Arc<dyn Pane>,

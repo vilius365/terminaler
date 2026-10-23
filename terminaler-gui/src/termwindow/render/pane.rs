@@ -1,4 +1,5 @@
 use crate::customglyph::{BlockAlpha, BlockCoord, Poly, PolyCommand, PolyStyle};
+use crate::pane_anim::FadeKey;
 use crate::quad::{HeapQuadAllocator, QuadTrait, TripleLayerQuadAllocator};
 use crate::selection::SelectionRange;
 use crate::termwindow::box_model::*;
@@ -478,16 +479,28 @@ impl crate::TermWindow {
     ) -> anyhow::Result<()> {
         let drag = match self.pane_drag.as_ref() {
             Some(d) if d.threshold_exceeded => d.clone(),
-            _ => return Ok(()),
+            _ => {
+                self.pane_anims
+                    .borrow_mut()
+                    .retain_fades(|k| !matches!(k, FadeKey::DragSource(_) | FadeKey::DragTarget(_)));
+                return Ok(());
+            }
         };
+        let live_target = drag.target.map(|(id, _)| id);
+        self.pane_anims.borrow_mut().retain_fades(|k| match k {
+            FadeKey::DragSource(id) => *id == drag.pane_id,
+            FadeKey::DragTarget(id) => Some(*id) == live_target,
+            _ => true,
+        });
         let panes = self.get_panes_to_render();
         if let Some(pos) = panes.iter().find(|p| p.pane.pane_id() == drag.pane_id) {
             let (l, t, w, h) = self.pane_content_rect(pos);
+            let fade = self.pane_fade(FadeKey::DragSource(drag.pane_id), true);
             self.filled_rectangle(
                 layers,
                 2,
                 euclid::rect(l, t, w, h),
-                window::color::LinearRgba(0.0, 0.0, 0.0, 0.35),
+                window::color::LinearRgba(0.0, 0.0, 0.0, 0.35 * fade),
             )
             .context("pane drag source dim")?;
         }
@@ -508,6 +521,8 @@ impl crate::TermWindow {
                 window::color::LinearRgba(0.302, 0.620, 1.0, 0.30),
             ),
         };
+        let fade = self.pane_fade(FadeKey::DragTarget(target_id), true);
+        let color = window::color::LinearRgba(color.0, color.1, color.2, color.3 * fade);
         self.filled_rectangle(layers, 2, rect, color)
             .context("pane drag target")?;
         Ok(())
@@ -1408,7 +1423,12 @@ impl crate::TermWindow {
     ) -> anyhow::Result<()> {
         let lp = match self.pane_long_press.as_ref() {
             Some(lp) if lp.revealed => lp,
-            _ => return Ok(()),
+            _ => {
+                self.pane_anims
+                    .borrow_mut()
+                    .retain_fades(|k| !matches!(k, FadeKey::LongPress(_)));
+                return Ok(());
+            }
         };
         let target_pane_id = lp.pane_id;
 
@@ -1449,7 +1469,8 @@ impl crate::TermWindow {
         let pane_height = target_pos.height as f32 * cell_height;
 
         // Matte light grey overlay over the entire pane
-        let dim_color = window::color::LinearRgba(0.85, 0.85, 0.85, 0.05);
+        let fade = self.pane_fade(FadeKey::LongPress(target_pane_id), true);
+        let dim_color = window::color::LinearRgba(0.85, 0.85, 0.85, 0.05 * fade);
         self.filled_rectangle(
             layers,
             2,
@@ -1462,10 +1483,10 @@ impl crate::TermWindow {
         let grid = OverlayGrid::for_dpi(self.dimensions.dpi);
         let origin = grid.origin(pane_left, pane_top, pane_width, pane_height);
 
-        let white = window::color::LinearRgba(1.0, 1.0, 1.0, 0.85);
-        let close_bg = window::color::LinearRgba(0.973, 0.318, 0.286, 0.95);
-        let layout_bg = window::color::LinearRgba(0.133, 0.133, 0.133, 0.95);
-        let tab_bg = window::color::LinearRgba(0.302, 0.620, 1.0, 0.8);
+        let white = window::color::LinearRgba(1.0, 1.0, 1.0, 0.85 * fade);
+        let close_bg = window::color::LinearRgba(0.973, 0.318, 0.286, 0.95 * fade);
+        let layout_bg = window::color::LinearRgba(0.133, 0.133, 0.133, 0.95 * fade);
+        let tab_bg = window::color::LinearRgba(0.302, 0.620, 1.0, 0.8 * fade);
 
         for (idx, &name) in OVERLAY_BUTTON_NAMES.iter().enumerate() {
             let (bl, bt) = grid.cell(origin, idx);
