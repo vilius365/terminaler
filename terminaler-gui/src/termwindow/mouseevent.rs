@@ -278,8 +278,17 @@ impl super::TermWindow {
                 // rect — without this the pill vanished as the pointer reached it.
                 let in_toast =
                     self.toast_zone_pane(event.coords.x as f32, event.coords.y as f32);
-                let new_hovered = in_toast
+                let mut new_hovered = in_toast
                     .or_else(|| self.pane_id_at_pixel_coords(event.coords.x, event.coords.y));
+                if let Some((hx, hy)) = self.pill_hold {
+                    let reach = 24.0 * self.dimensions.dpi as f32 / 96.0;
+                    let (dx, dy) = (event.coords.x as f32 - hx, event.coords.y as f32 - hy);
+                    if dx * dx + dy * dy < reach * reach {
+                        new_hovered = None;
+                    } else {
+                        self.pill_hold = None;
+                    }
+                }
                 if new_hovered != self.hovered_pane_id {
                     self.hovered_pane_id = new_hovered;
                     context.invalidate();
@@ -306,6 +315,7 @@ impl super::TermWindow {
                         self.close_armed = None;
                         Mux::get().remove_pane(pane_id);
                         self.hovered_pane_id = None;
+                        self.pill_hold = Some((event.coords.x as f32, event.coords.y as f32));
                     } else {
                         self.arm_close(pane_id);
                     }

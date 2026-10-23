@@ -763,6 +763,11 @@ pub struct TermWindow {
     pub pane_drag: Option<PaneDragState>,
     pub pane_long_press: Option<PaneLongPress>,
     pub hovered_pane_id: Option<mux::pane::PaneId>,
+    /// Where a confirmed close click landed. The neighbour that takes the
+    /// closed pane's place would otherwise show its own header pill, close
+    /// button under the pointer, so the pill stays hidden until the pointer
+    /// moves away from this point.
+    pub pill_hold: Option<(f32, f32)>,
 
     modal: RefCell<Option<Rc<dyn Modal>>>,
 
@@ -1180,6 +1185,7 @@ impl TermWindow {
             pane_drag: None,
             pane_long_press: None,
             hovered_pane_id: None,
+            pill_hold: None,
             toast_rect: None,
             close_armed: None,
             swallow_right_release: false,
