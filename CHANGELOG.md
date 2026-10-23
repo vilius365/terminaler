@@ -6,6 +6,7 @@
 - **Pane animations.** Layout changes no longer snap. Overlays fade in: the pane-drag dim and swap/dock highlights, the long-press remove overlay, and the split-handle hover highlight. A pane that only moves (swap, rotate, move) slides from its old place to its new one, with the split handles hidden meanwhile. A split reveals the new pane outward from the split line, and closing a pane lets the neighbour expand into the space while the closed pane's background fades out. The terminal grid is already at its final size when the animation starts, so a resize is a reveal through a growing clip rectangle, not a smooth reflow. When more than one edge of a pane moves (a relocation), the pane slides unclipped. Window resize, font-size change, sidebar toggle and tab switch are not animated. Two new settings: `pane_animation` (default `true`) and `pane_animation_ms` (default 250). Frames are paced by `max_fps`, not `animation_fps` (default 10, too coarse).
 
 ### Fixed
+- **Dragging a split no longer blanks the pane.** Each cell of pointer travel retriggered the clipped reveal, so the pane stayed clipped to a sliver until you released. Pane animations are now paused while a split is dragged, so the resize follows the pointer live.
 - **The header pill no longer appears under the pointer right after a confirmed close.** The neighbour that took the closed pane's place showed its own close button where you had just clicked, so a stray click would arm it. The pill now stays hidden until the pointer moves about 24 px (at 96 dpi) away from the click.
 
 ## 2026-10-07

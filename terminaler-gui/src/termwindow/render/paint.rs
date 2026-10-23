@@ -304,9 +304,17 @@ impl crate::TermWindow {
                 cell_size.1,
                 self.sidebar_x_offset(),
             ];
-            self.pane_anims
-                .borrow_mut()
-                .observe_frame(&snaps, env, cell_size, frame_now, duration);
+            let split_drag = matches!(
+                &self.dragging,
+                Some((item, _)) if matches!(item.item_type, crate::termwindow::UIItemType::Split(_))
+            );
+            if split_drag {
+                self.pane_anims.borrow_mut().settle(&snaps, env);
+            } else {
+                self.pane_anims
+                    .borrow_mut()
+                    .observe_frame(&snaps, env, cell_size, frame_now, duration);
+            }
 
             // A closed pane's last rect fades out beneath the survivors.
             let ghosts = self.pane_anims.borrow().ghosts(frame_now, duration);

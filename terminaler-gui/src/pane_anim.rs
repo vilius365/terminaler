@@ -238,6 +238,16 @@ impl PaneAnimations {
         self.last_rects = snaps.iter().copied().collect();
     }
 
+    /// Record the current layout without animating the change. Used while a
+    /// split is dragged: every cell of pointer travel changes the layout, and
+    /// retargeting a reveal clip on each step leaves the pane blank.
+    pub fn settle(&mut self, snaps: &[(PaneId, PaneSnap)], env: [f32; 5]) {
+        self.tweens.clear();
+        self.ghosts.clear();
+        self.last_env = Some(env);
+        self.last_rects = snaps.iter().copied().collect();
+    }
+
     /// Where a newly appeared pane `new` grows from: a zero-size rect on the
     /// split line it shares with the pane it was split off. Found by looking
     /// for a surviving pane whose previous rect is the union of its current
