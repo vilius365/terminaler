@@ -284,15 +284,20 @@ impl PaneAnimations {
     ) -> Option<Transform> {
         let tween = self.tweens.get(&id)?;
         let cur = self.current(id, now, duration)?;
-        if !rects_resized(&tween.from, &tween.to) {
+        let from = [tween.from.x, tween.from.y, tween.from.x + tween.from.w, tween.from.y + tween.from.h];
+        let to = [tween.to.x, tween.to.y, tween.to.x + tween.to.w, tween.to.y + tween.to.h];
+        // A reveal only reads well when one edge moves and the other three
+        // stay put (split, close, drag-resize). When several edges move, the
+        // pane is being relocated; a clip would leave part of it undrawn
+        // until the tween ends, so slide it instead.
+        let moved_edges = (0..4).filter(|&i| (from[i] - to[i]).abs() >= 1.0).count();
+        if !rects_resized(&tween.from, &tween.to) || moved_edges > 1 {
             return Some(Transform {
                 dx: cur.x - final_rect.x,
                 dy: cur.y - final_rect.y,
                 clip: None,
             });
         }
-        let from = [tween.from.x, tween.from.y, tween.from.x + tween.from.w, tween.from.y + tween.from.h];
-        let to = [tween.to.x, tween.to.y, tween.to.x + tween.to.w, tween.to.y + tween.to.h];
         let cur_e = [cur.x, cur.y, cur.x + cur.w, cur.y + cur.h];
         let mut clip = [0.0f32; 4];
         for i in 0..4 {
@@ -472,6 +477,19 @@ mod test {
         assert_eq!(clip[0], 95.0, "fixed interior edge keeps its half-cell margin");
         let done = at(&a, 2, &after[1].1, t0 + MS(16 + 150)).unwrap();
         assert_eq!(done.clip.unwrap()[2], 200.0);
+    }
+
+    #[test]
+    fn relocated_resized_pane_slides_instead_of_clipping() {
+        let t0 = Instant::now();
+        let mut a = PaneAnimations::default();
+        a.observe_frame(&[(1, snap(0.0, 100.0)), (2, snap(100.0, 100.0))], ENV, CELL, t0, MS(150));
+        // Pane 1 moves to the right and gets narrower: two edges change.
+        let after = [(1, snap(150.0, 50.0)), (2, snap(0.0, 150.0))];
+        a.observe_frame(&after, ENV, CELL, t0 + MS(16), MS(150));
+        let tr = at(&a, 1, &after[0].1, t0 + MS(16)).unwrap();
+        assert_eq!(tr.clip, None, "no clip, or half the pane would be undrawn");
+        assert_eq!(tr.dx, -150.0);
     }
 
     #[test]
