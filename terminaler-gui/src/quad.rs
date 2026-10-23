@@ -379,6 +379,24 @@ pub enum TripleLayerQuadAllocator<'a> {
     Heap(&'a mut HeapQuadAllocator),
 }
 
+impl<'a> TripleLayerQuadAllocator<'a> {
+    /// Position marker for `translate_since`. Only the GPU allocator can
+    /// shift quads after the fact; the heap allocator reports no marker.
+    pub fn mark(&self) -> Option<[usize; 3]> {
+        match self {
+            Self::Gpu(b) => Some(b.mark()),
+            Self::Heap(_) => None,
+        }
+    }
+
+    /// Shift everything allocated since `mark` by (dx, dy) pixels.
+    pub fn translate_since(&mut self, mark: Option<[usize; 3]>, dx: f32, dy: f32) {
+        if let (Self::Gpu(b), Some(mark)) = (self, mark) {
+            b.translate_since(mark, dx, dy);
+        }
+    }
+}
+
 impl<'a> TripleLayerQuadAllocatorTrait for TripleLayerQuadAllocator<'a> {
     fn allocate(&mut self, layer_num: usize) -> anyhow::Result<QuadImpl<'_>> {
         match self {

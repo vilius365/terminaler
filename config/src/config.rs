@@ -1850,7 +1850,7 @@ fn default_anim_fps() -> u8 {
 }
 
 fn default_pane_animation_ms() -> u32 {
-    150
+    250
 }
 
 fn default_max_fps() -> u64 {

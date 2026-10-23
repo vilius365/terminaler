@@ -325,6 +325,28 @@ impl<'a> QuadAllocator for MappedQuads<'a> {
     }
 }
 
+impl<'a> MappedQuads<'a> {
+    /// Number of quads allocated so far; pass to `translate_since`.
+    pub fn mark(&self) -> usize {
+        *self.next
+    }
+
+    /// Shift every quad allocated since `mark` by (dx, dy) pixels. Skipped
+    /// when the buffer overflowed: slots were then reused and the pass will
+    /// be repainted with a bigger buffer anyway.
+    pub fn translate_since(&mut self, mark: usize, dx: f32, dy: f32) {
+        let end = *self.next;
+        if end > self.capacity || mark >= end {
+            return;
+        }
+        let range = mark * VERTICES_PER_CELL..end * VERTICES_PER_CELL;
+        for v in self.mapping.slice_mut(range) {
+            v.position[0] += dx;
+            v.position[1] += dy;
+        }
+    }
+}
+
 pub struct TripleVertexBuffer {
     pub index: RefCell<usize>,
     pub bufs: RefCell<[VertexBuffer; 3]>,
@@ -558,6 +580,22 @@ pub struct BorrowedLayers {
 
     // layers references _owner, so it must be dropped after layers.
     _owner: Ref<'static, [TripleVertexBuffer; 3]>,
+}
+
+impl BorrowedLayers {
+    pub fn mark(&self) -> [usize; 3] {
+        [
+            self.layers[0].mark(),
+            self.layers[1].mark(),
+            self.layers[2].mark(),
+        ]
+    }
+
+    pub fn translate_since(&mut self, mark: [usize; 3], dx: f32, dy: f32) {
+        for (layer, m) in self.layers.iter_mut().zip(mark) {
+            layer.translate_since(m, dx, dy);
+        }
+    }
 }
 
 impl TripleLayerQuadAllocatorTrait for BorrowedLayers {

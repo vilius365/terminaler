@@ -261,7 +261,30 @@ impl crate::TermWindow {
             .context("filled_rectangle for window background")?;
         }
 
-        for pos in panes {
+        // Spot panes whose origin moved since the last frame and slide them
+        // from the old place to the new one.
+        let anim_duration = self.pane_animation_duration();
+        let frame_now = Instant::now();
+        let rects: Vec<(mux::pane::PaneId, crate::pane_anim::PxRect)> = panes
+            .iter()
+            .map(|pos| {
+                let (x, y, w, h) = self.pane_content_rect(pos);
+                (pos.pane.pane_id(), crate::pane_anim::PxRect { x, y, w, h })
+            })
+            .collect();
+        if let Some(duration) = anim_duration {
+            let env = [
+                self.dimensions.pixel_width as f32,
+                self.dimensions.pixel_height as f32,
+                self.render_metrics.cell_size.width as f32,
+                self.render_metrics.cell_size.height as f32,
+                self.sidebar_x_offset(),
+            ];
+            let mut anims = self.pane_anims.borrow_mut();
+            anims.observe_frame(&rects, env, frame_now, duration);
+        }
+
+        for (pos, (_, final_rect)) in panes.into_iter().zip(rects.iter()) {
             if pos.is_active {
                 self.update_text_cursor(&pos);
                 if focused {
@@ -269,14 +292,44 @@ impl crate::TermWindow {
                     mux::Mux::get().record_focus_for_current_identity(pos.pane.pane_id());
                 }
             }
+            let (dx, dy) = match anim_duration {
+                Some(duration) => self.pane_anims.borrow().offset(
+                    pos.pane.pane_id(),
+                    final_rect,
+                    frame_now,
+                    duration,
+                ),
+                None => (0.0, 0.0),
+            };
+            let mark = layers.mark();
             self.paint_pane(&pos, &mut layers).context("paint_pane")?;
+            if dx != 0.0 || dy != 0.0 {
+                layers.translate_since(mark, dx, dy);
+            }
         }
 
-        if let Some(pane) = self.get_active_pane_or_overlay() {
-            let splits = self.get_splits();
-            for split in &splits {
-                self.paint_split(&mut layers, split, &pane)
-                    .context("paint_split")?;
+        let sliding = match anim_duration {
+            Some(duration) => {
+                let more = self.pane_anims.borrow_mut().prune(frame_now, duration);
+                if more {
+                    let frame = std::time::Duration::from_millis(
+                        1000 / self.config.max_fps.clamp(1, 240),
+                    );
+                    self.update_next_frame_time(Some(frame_now + frame));
+                }
+                self.pane_anims.borrow().has_tweens()
+            }
+            None => false,
+        };
+
+        // Splits are drawn at final positions; hide them while panes slide.
+        if !sliding {
+            if let Some(pane) = self.get_active_pane_or_overlay() {
+                let splits = self.get_splits();
+                for split in &splits {
+                    self.paint_split(&mut layers, split, &pane)
+                        .context("paint_split")?;
+                }
             }
         }
 

@@ -57,6 +57,11 @@ pub struct PaneAnimations {
     tweens: HashMap<PaneId, Tween>,
     ghosts: Vec<Ghost>,
     fades: HashMap<FadeKey, Instant>,
+    /// Final rect of every pane painted last frame, to spot layout changes.
+    last_rects: HashMap<PaneId, PxRect>,
+    /// Window/cell/sidebar geometry last frame; a change here moves every
+    /// pane at once and must not be animated as a pane slide.
+    last_env: Option<[f32; 5]>,
 }
 
 /// Eased progress in 0..=1 of an animation that began at `start`.
@@ -135,6 +140,46 @@ impl PaneAnimations {
         let start = *self.fades.entry(key).or_insert(now);
         let t = progress(start, now, duration);
         (t, t < 1.0)
+    }
+
+    /// Compare this frame's final pane rects with last frame's and start a
+    /// slide for every pane whose origin moved. `env` is the window/cell/
+    /// sidebar geometry: when it changed everything moved together (window
+    /// resize, font change, sidebar toggle), so nothing is animated.
+    pub fn observe_frame(
+        &mut self,
+        rects: &[(PaneId, PxRect)],
+        env: [f32; 5],
+        now: Instant,
+        duration: Duration,
+    ) {
+        let env_changed = self.last_env != Some(env);
+        if env_changed {
+            self.tweens.clear();
+        } else {
+            for (id, to) in rects {
+                if let Some(prev) = self.last_rects.get(id) {
+                    if (prev.x - to.x).abs() >= 1.0 || (prev.y - to.y).abs() >= 1.0 {
+                        self.start(*id, *prev, *to, now, duration);
+                    }
+                }
+            }
+        }
+        self.last_env = Some(env);
+        self.last_rects = rects.iter().copied().collect();
+    }
+
+    /// Pixels to shift pane `id` by this frame so that it appears at its
+    /// animated position rather than its final one.
+    pub fn offset(&self, id: PaneId, final_rect: &PxRect, now: Instant, duration: Duration) -> (f32, f32) {
+        match self.current(id, now, duration) {
+            Some(cur) => (cur.x - final_rect.x, cur.y - final_rect.y),
+            None => (0.0, 0.0),
+        }
+    }
+
+    pub fn has_tweens(&self) -> bool {
+        !self.tweens.is_empty()
     }
 
     /// Forget every fade for which `keep` is false, so the next time that
@@ -223,6 +268,30 @@ mod test {
         assert_eq!(anims.fade(k, true, t0 + MS(200), MS(150)), (1.0, false));
         assert_eq!(anims.fade(k, false, t0 + MS(210), MS(150)), (0.0, false));
         assert_eq!(anims.fade(k, true, t0 + MS(220), MS(150)), (0.0, true));
+    }
+
+    #[test]
+    fn observe_frame_slides_moved_panes_only() {
+        let t0 = Instant::now();
+        let env = [800.0, 600.0, 10.0, 20.0, 0.0];
+        let mut a = PaneAnimations::default();
+        a.observe_frame(&[(1, r(0.0)), (2, r(100.0))], env, t0, MS(150));
+        assert!(!a.has_tweens(), "first frame has nothing to compare");
+        a.observe_frame(&[(1, r(100.0)), (2, r(100.0))], env, t0 + MS(16), MS(150));
+        let (dx, _) = a.offset(1, &r(100.0), t0 + MS(16), MS(150));
+        assert_eq!(dx, -100.0, "pane 1 still drawn at its old x on the first frame");
+        assert_eq!(a.offset(2, &r(100.0), t0 + MS(16), MS(150)), (0.0, 0.0));
+        let (end, _) = a.offset(1, &r(100.0), t0 + MS(16 + 150), MS(150));
+        assert_eq!(end, 0.0);
+    }
+
+    #[test]
+    fn env_change_suppresses_slide() {
+        let t0 = Instant::now();
+        let mut a = PaneAnimations::default();
+        a.observe_frame(&[(1, r(0.0))], [800.0, 600.0, 10.0, 20.0, 0.0], t0, MS(150));
+        a.observe_frame(&[(1, r(50.0))], [900.0, 600.0, 10.0, 20.0, 0.0], t0 + MS(16), MS(150));
+        assert!(!a.has_tweens());
     }
 
     #[test]
