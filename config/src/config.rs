@@ -657,6 +657,15 @@ pub struct Config {
     #[dynamic(default = "default_anim_fps")]
     pub animation_fps: u8,
 
+    /// Animate pane layout changes (swap, rotate, split, close, snap
+    /// layouts) and pane overlays. Set to false for instant redraws.
+    #[dynamic(default = "default_true")]
+    pub pane_animation: bool,
+
+    /// Duration of pane animations in milliseconds.
+    #[dynamic(default = "default_pane_animation_ms")]
+    pub pane_animation_ms: u32,
+
     #[dynamic(default)]
     pub text_min_contrast_ratio: Option<f32>,
 
@@ -1838,6 +1847,10 @@ fn default_mux_env_remove() -> Vec<String> {
 
 fn default_anim_fps() -> u8 {
     10
+}
+
+fn default_pane_animation_ms() -> u32 {
+    150
 }
 
 fn default_max_fps() -> u64 {
