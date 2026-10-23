@@ -261,30 +261,68 @@ impl crate::TermWindow {
             .context("filled_rectangle for window background")?;
         }
 
-        // Spot panes whose origin moved since the last frame and slide them
-        // from the old place to the new one.
+        // Spot panes that moved, resized, appeared or vanished since the
+        // last frame and animate the change.
         let anim_duration = self.pane_animation_duration();
         let frame_now = Instant::now();
-        let rects: Vec<(mux::pane::PaneId, crate::pane_anim::PxRect)> = panes
+        let cell_size = (
+            self.render_metrics.cell_size.width as f32,
+            self.render_metrics.cell_size.height as f32,
+        );
+        let snaps: Vec<(mux::pane::PaneId, crate::pane_anim::PaneSnap)> = panes
             .iter()
             .map(|pos| {
                 let (x, y, w, h) = self.pane_content_rect(pos);
-                (pos.pane.pane_id(), crate::pane_anim::PxRect { x, y, w, h })
+                let bg = pos
+                    .pane
+                    .palette()
+                    .background
+                    .to_linear()
+                    .mul_alpha(crate::termwindow::effective_window_opacity(
+                        self.config.window_background_opacity,
+                    ));
+                (
+                    pos.pane.pane_id(),
+                    crate::pane_anim::PaneSnap {
+                        rect: crate::pane_anim::PxRect { x, y, w, h },
+                        bounds: [
+                            pos.left == 0,
+                            pos.top == 0,
+                            pos.left + pos.width >= self.terminal_size.cols as usize,
+                            pos.top + pos.height >= self.terminal_size.rows as usize,
+                        ],
+                        bg: [bg.0, bg.1, bg.2, bg.3],
+                    },
+                )
             })
             .collect();
         if let Some(duration) = anim_duration {
             let env = [
                 self.dimensions.pixel_width as f32,
                 self.dimensions.pixel_height as f32,
-                self.render_metrics.cell_size.width as f32,
-                self.render_metrics.cell_size.height as f32,
+                cell_size.0,
+                cell_size.1,
                 self.sidebar_x_offset(),
             ];
-            let mut anims = self.pane_anims.borrow_mut();
-            anims.observe_frame(&rects, env, frame_now, duration);
+            self.pane_anims
+                .borrow_mut()
+                .observe_frame(&snaps, env, cell_size, frame_now, duration);
+
+            // A closed pane's last rect fades out beneath the survivors.
+            let ghosts = self.pane_anims.borrow().ghosts(frame_now, duration);
+            for (rect, bg, opacity) in ghosts {
+                let pad = (cell_size.0 / 2.0, cell_size.1 / 2.0);
+                self.filled_rectangle(
+                    &mut layers,
+                    0,
+                    euclid::rect(rect.x - pad.0, rect.y - pad.1, rect.w + 2.0 * pad.0, rect.h + 2.0 * pad.1),
+                    window::color::LinearRgba(bg[0], bg[1], bg[2], bg[3] * opacity),
+                )
+                .context("closed pane ghost")?;
+            }
         }
 
-        for (pos, (_, final_rect)) in panes.into_iter().zip(rects.iter()) {
+        for (pos, (_, snap)) in panes.into_iter().zip(snaps.iter()) {
             if pos.is_active {
                 self.update_text_cursor(&pos);
                 if focused {
@@ -292,19 +330,20 @@ impl crate::TermWindow {
                     mux::Mux::get().record_focus_for_current_identity(pos.pane.pane_id());
                 }
             }
-            let (dx, dy) = match anim_duration {
-                Some(duration) => self.pane_anims.borrow().offset(
+            let transform = match anim_duration {
+                Some(duration) => self.pane_anims.borrow().transform(
                     pos.pane.pane_id(),
-                    final_rect,
+                    &snap.rect,
                     frame_now,
                     duration,
+                    (cell_size.0 / 2.0, cell_size.1 / 2.0),
                 ),
-                None => (0.0, 0.0),
+                None => None,
             };
             let mark = layers.mark();
             self.paint_pane(&pos, &mut layers).context("paint_pane")?;
-            if dx != 0.0 || dy != 0.0 {
-                layers.translate_since(mark, dx, dy);
+            if let Some(tr) = transform {
+                layers.transform_since(mark, tr.dx, tr.dy, tr.clip);
             }
         }
 

@@ -389,10 +389,11 @@ impl<'a> TripleLayerQuadAllocator<'a> {
         }
     }
 
-    /// Shift everything allocated since `mark` by (dx, dy) pixels.
-    pub fn translate_since(&mut self, mark: Option<[usize; 3]>, dx: f32, dy: f32) {
+    /// Shift everything allocated since `mark` by (dx, dy) pixels and
+    /// clip it to `clip` (left, top, right, bottom) when given.
+    pub fn transform_since(&mut self, mark: Option<[usize; 3]>, dx: f32, dy: f32, clip: Option<[f32; 4]>) {
         if let (Self::Gpu(b), Some(mark)) = (self, mark) {
-            b.translate_since(mark, dx, dy);
+            b.transform_since(mark, dx, dy, clip);
         }
     }
 }

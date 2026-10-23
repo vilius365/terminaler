@@ -331,20 +331,58 @@ impl<'a> MappedQuads<'a> {
         *self.next
     }
 
-    /// Shift every quad allocated since `mark` by (dx, dy) pixels. Skipped
-    /// when the buffer overflowed: slots were then reused and the pass will
-    /// be repainted with a bigger buffer anyway.
-    pub fn translate_since(&mut self, mark: usize, dx: f32, dy: f32) {
+    /// Shift every quad allocated since `mark` by (dx, dy) pixels, then clip
+    /// each to `clip` (left, top, right, bottom), cutting the texture
+    /// coordinates in proportion. Skipped when the buffer overflowed: slots
+    /// were then reused and the pass is repainted with a bigger buffer.
+    pub fn transform_since(&mut self, mark: usize, dx: f32, dy: f32, clip: Option<[f32; 4]>) {
         let end = *self.next;
         if end > self.capacity || mark >= end {
             return;
         }
         let range = mark * VERTICES_PER_CELL..end * VERTICES_PER_CELL;
-        for v in self.mapping.slice_mut(range) {
-            v.position[0] += dx;
-            v.position[1] += dy;
+        for quad in self.mapping.slice_mut(range).chunks_exact_mut(VERTICES_PER_CELL) {
+            for v in quad.iter_mut() {
+                v.position[0] += dx;
+                v.position[1] += dy;
+            }
+            if let Some(c) = clip {
+                clip_quad(quad, c);
+            }
         }
     }
+}
+
+/// Clip one axis-aligned quad to `clip`, keeping its texture undistorted.
+fn clip_quad(quad: &mut [Vertex], clip: [f32; 4]) {
+    let [cl, ct, cr, cb] = clip;
+    let (l, t) = (quad[V_TOP_LEFT].position[0], quad[V_TOP_LEFT].position[1]);
+    let (r, b) = (quad[V_BOT_RIGHT].position[0], quad[V_BOT_RIGHT].position[1]);
+    let (nl, nt, nr, nb) = (l.max(cl), t.max(ct), r.min(cr), b.min(cb));
+    if nl >= nr || nt >= nb {
+        // Fully outside: collapse to a point.
+        for v in quad.iter_mut() {
+            v.position = [nl.min(nr), nt.min(nb)];
+        }
+        return;
+    }
+    if (nl, nt, nr, nb) == (l, t, r, b) {
+        return;
+    }
+    let (w, h) = ((r - l).max(f32::EPSILON), (b - t).max(f32::EPSILON));
+    let (fl, ft, fr, fb) = ((nl - l) / w, (nt - t) / h, (nr - l) / w, (nb - t) / h);
+    let (tl, br) = (quad[V_TOP_LEFT].tex, quad[V_BOT_RIGHT].tex);
+    let lerp = |a: f32, b: f32, f: f32| a + (b - a) * f;
+    let (tx0, tx1) = (lerp(tl[0], br[0], fl), lerp(tl[0], br[0], fr));
+    let (ty0, ty1) = (lerp(tl[1], br[1], ft), lerp(tl[1], br[1], fb));
+    quad[V_TOP_LEFT].position = [nl, nt];
+    quad[V_TOP_LEFT].tex = [tx0, ty0];
+    quad[V_TOP_RIGHT].position = [nr, nt];
+    quad[V_TOP_RIGHT].tex = [tx1, ty0];
+    quad[V_BOT_LEFT].position = [nl, nb];
+    quad[V_BOT_LEFT].tex = [tx0, ty1];
+    quad[V_BOT_RIGHT].position = [nr, nb];
+    quad[V_BOT_RIGHT].tex = [tx1, ty1];
 }
 
 pub struct TripleVertexBuffer {
@@ -591,9 +629,9 @@ impl BorrowedLayers {
         ]
     }
 
-    pub fn translate_since(&mut self, mark: [usize; 3], dx: f32, dy: f32) {
+    pub fn transform_since(&mut self, mark: [usize; 3], dx: f32, dy: f32, clip: Option<[f32; 4]>) {
         for (layer, m) in self.layers.iter_mut().zip(mark) {
-            layer.translate_since(m, dx, dy);
+            layer.transform_since(m, dx, dy, clip);
         }
     }
 }
@@ -813,5 +851,44 @@ impl RenderState {
 
         *glyph_cache = new_glyph_cache;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod clip_test {
+    use super::*;
+
+    fn quad(l: f32, t: f32, r: f32, b: f32) -> [Vertex; VERTICES_PER_CELL] {
+        let mut q = [Vertex::default(); VERTICES_PER_CELL];
+        q[V_TOP_LEFT].position = [l, t];
+        q[V_TOP_RIGHT].position = [r, t];
+        q[V_BOT_LEFT].position = [l, b];
+        q[V_BOT_RIGHT].position = [r, b];
+        q[V_TOP_LEFT].tex = [0.0, 0.0];
+        q[V_TOP_RIGHT].tex = [1.0, 0.0];
+        q[V_BOT_LEFT].tex = [0.0, 1.0];
+        q[V_BOT_RIGHT].tex = [1.0, 1.0];
+        q
+    }
+
+    #[test]
+    fn clip_cuts_position_and_texture_together() {
+        let mut q = quad(0.0, 0.0, 100.0, 50.0);
+        clip_quad(&mut q, [25.0, -1e7, 75.0, 1e7]);
+        assert_eq!(q[V_TOP_LEFT].position, [25.0, 0.0]);
+        assert_eq!(q[V_BOT_RIGHT].position, [75.0, 50.0]);
+        assert_eq!(q[V_TOP_LEFT].tex, [0.25, 0.0]);
+        assert_eq!(q[V_BOT_RIGHT].tex, [0.75, 1.0]);
+    }
+
+    #[test]
+    fn quad_inside_clip_is_untouched_and_outside_collapses() {
+        let mut inside = quad(10.0, 10.0, 20.0, 20.0);
+        clip_quad(&mut inside, [0.0, 0.0, 100.0, 100.0]);
+        assert_eq!(inside[V_BOT_RIGHT].position, [20.0, 20.0]);
+        let mut outside = quad(200.0, 10.0, 220.0, 20.0);
+        clip_quad(&mut outside, [0.0, 0.0, 100.0, 100.0]);
+        let p = outside[V_TOP_LEFT].position;
+        assert!(outside.iter().all(|v| v.position == p), "collapsed to a point");
     }
 }
