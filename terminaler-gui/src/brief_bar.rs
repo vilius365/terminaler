@@ -299,13 +299,19 @@ mod tests {
     #[test]
     fn tolerates_missing_fields_and_empty_array() {
         assert_eq!(parse_rows("[]").unwrap().len(), 0);
-        let rows = parse_rows(r#"[{}]"#).unwrap();
-        assert_eq!(rows[0], BriefRow::default());
+        let rows = parse_rows(r#"[{"session_id":"s"}]"#).unwrap();
+        assert_eq!(
+            rows[0],
+            BriefRow {
+                session_id: Some("s".to_string()),
+                ..BriefRow::default()
+            }
+        );
     }
 
     #[test]
     fn sorts_by_name() {
-        let rows = parse_rows(r#"[{"name":"b"},{"name":"a"}]"#).unwrap();
+        let rows = parse_rows(r#"[{"name":"b","session_id":"1"},{"name":"a","session_id":"2"}]"#).unwrap();
         assert_eq!(rows[0].name.as_deref(), Some("a"));
     }
 
