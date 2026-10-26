@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-10-26
+
+### Changed
+- **The brief bar no longer shows cells that can only say "no brief".** Rows without a session id (Hermes agents such as `karma` and `infra-agent`, which are not Claude Code sessions) are hidden, like the `ol-*` overlord slots. A live session that has not received a prompt yet now reads "no prompt yet in <directory>" and keeps its epic tag, instead of "no brief".
+
 ## 2026-10-23
 
 ### Added

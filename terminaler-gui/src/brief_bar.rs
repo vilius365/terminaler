@@ -19,6 +19,8 @@ use std::time::{Duration, Instant};
 pub struct BriefRow {
     pub name: Option<String>,
     pub machine: Option<String>,
+    pub path: Option<String>,
+    pub session_id: Option<String>,
     pub epic: Option<String>,
     pub epic_title: Option<String>,
     pub goal: Option<String>,
@@ -100,6 +102,19 @@ pub fn match_session(
     None
 }
 
+/// What a cell shows for a live session that has no goal yet (a fresh
+/// session that has not received a prompt): the directory it runs in, so the
+/// cell still says where the session is.
+pub fn fallback_goal(path: Option<&str>) -> String {
+    let home = std::env::var("HOME").ok();
+    let dir = match path.map(|p| p.trim_end_matches('/')) {
+        None | Some("") => return "no prompt yet".to_string(),
+        Some(p) if home.as_deref() == Some(p) => "~".to_string(),
+        Some(p) => p.rsplit('/').next().unwrap_or(p).to_string(),
+    };
+    format!("no prompt yet in {}", dir)
+}
+
 fn collapse_whitespace(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
@@ -113,6 +128,10 @@ pub fn parse_rows(stdout: &str) -> Result<Vec<BriefRow>, String> {
     // Overlord slots are named `ol-<word>`; they are plumbing, not work the
     // strip is meant to surface.
     rows.retain(|r| !r.name.as_deref().is_some_and(|n| n.starts_with("ol-")));
+    // Rows without a session id are agents that are not Claude Code sessions
+    // (Hermes agents such as `karma` and `infra-agent`). They can never carry
+    // a brief, so a cell for them would only ever read "no brief".
+    rows.retain(|r| r.session_id.is_some());
     for row in &mut rows {
         for field in [
             &mut row.name,
@@ -227,8 +246,8 @@ mod tests {
     fn parses_full_row_and_null_goal() {
         let rows = parse_rows(
             r#"[
-            {"name":"notch","goal":"Slim  the\nbuttons","now":"Wrapping up","active_at":"2026-10-05T10:00:00Z","inferred":false,"stale":false,"headline":"x"},
-            {"name":"sup","goal":null,"active_at":"2026-10-05T11:00:00Z"}
+            {"name":"notch","session_id":"s1","goal":"Slim  the\nbuttons","now":"Wrapping up","active_at":"2026-10-05T10:00:00Z","inferred":false,"stale":false,"headline":"x"},
+            {"name":"sup","session_id":"s2","goal":null,"active_at":"2026-10-05T11:00:00Z"}
         ]"#,
         )
         .unwrap();
@@ -242,7 +261,7 @@ mod tests {
     #[test]
     fn drops_overlord_rows() {
         let rows = parse_rows(
-            r#"[{"name":"ol-otter","goal":"x"},{"name":"spell","goal":"y"}]"#,
+            r#"[{"name":"ol-otter","session_id":"s0","goal":"x"},{"name":"spell","session_id":"s1","goal":"y"}]"#,
         )
         .unwrap();
         assert_eq!(rows.len(), 1);
@@ -250,9 +269,26 @@ mod tests {
     }
 
     #[test]
+    fn drops_rows_without_a_session() {
+        let rows = parse_rows(
+            r#"[{"name":"karma","session_id":null,"goal":null},{"name":"infra-agent"},{"name":"spell","session_id":"s1"}]"#,
+        )
+        .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].name.as_deref(), Some("spell"));
+    }
+
+    #[test]
+    fn fallback_goal_names_the_directory() {
+        assert_eq!(fallback_goal(Some("/srv/work/terminaler/")), "no prompt yet in terminaler");
+        assert_eq!(fallback_goal(None), "no prompt yet");
+        assert_eq!(fallback_goal(Some("")), "no prompt yet");
+    }
+
+    #[test]
     fn parses_epic_fields() {
         let rows = parse_rows(
-            r#"[{"name":"notch","epic":"terminaler-terminal-app","epic_title":"Terminaler terminal app"},{"name":"x","epic":null,"epic_title":null}]"#,
+            r#"[{"name":"notch","session_id":"a","epic":"terminaler-terminal-app","epic_title":"Terminaler terminal app"},{"name":"x","session_id":"b","epic":null,"epic_title":null}]"#,
         )
         .unwrap();
         assert_eq!(rows[0].epic.as_deref(), Some("terminaler-terminal-app"));

@@ -410,7 +410,8 @@ impl crate::TermWindow {
                 let fitted = if has_goal {
                     fit_cell(name, epic, row.goal.as_deref(), row.now.as_deref(), budget)
                 } else {
-                    fit_cell(name, None, Some("no brief"), None, budget)
+                    let goal = crate::brief_bar::fallback_goal(row.path.as_deref());
+                    fit_cell(name, epic, Some(&goal), None, budget)
                 };
                 let mut parts = vec![
                     part(&font, "\u{25cf} ".to_string(), dot_color(row, theme)),
