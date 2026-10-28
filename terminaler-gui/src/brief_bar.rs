@@ -129,9 +129,8 @@ fn dir_name(path: Option<&str>) -> Option<String> {
     path.rsplit('/').next().map(str::to_string)
 }
 
-/// What the sidebar calls a Claude session: its epic title when the feed
-/// knows one, else the name given to the Claude Code session, else the
-/// working directory. `rows` are matched on instance name and interconnect
+/// What the sidebar calls a Claude session: the name given to the Claude Code
+/// session, else its epic title, else the working directory. `rows` are matched on instance name and interconnect
 /// machine, as `match_session` does. With no matching row (feed off, or a
 /// session that is not an interconnect instance) the tmux session name stands
 /// in, so a tile is never unlabelled.
@@ -150,9 +149,9 @@ pub fn sidebar_label(
         return tmux_session.to_string();
     };
     let non_empty = |s: &Option<String>| s.as_deref().filter(|v| !v.trim().is_empty()).map(str::to_string);
-    non_empty(&row.epic_title)
+    non_empty(&row.session_name)
+        .or_else(|| non_empty(&row.epic_title))
         .or_else(|| non_empty(&row.epic))
-        .or_else(|| non_empty(&row.session_name))
         .or_else(|| dir_name(row.path.as_deref()))
         .unwrap_or_else(|| tmux_session.to_string())
 }
@@ -296,12 +295,12 @@ mod tests {
     }
 
     #[test]
-    fn sidebar_label_prefers_epic_then_session_name_then_dir() {
+    fn sidebar_label_prefers_session_name_then_epic_then_dir() {
         let label = |rows: &[BriefRow]| sidebar_label("tmux-1", Some("witch"), "devbox", rows);
         let all = label_row(Some("Epic title"), Some("my-session"), Some("/a/proj"));
-        assert_eq!(label(&[all]), "Epic title");
-        let no_epic = label_row(None, Some("my-session"), Some("/a/proj"));
-        assert_eq!(label(&[no_epic]), "my-session");
+        assert_eq!(label(&[all]), "my-session");
+        let no_name = label_row(Some("Epic title"), None, Some("/a/proj"));
+        assert_eq!(label(&[no_name]), "Epic title");
         let dir_only = label_row(None, None, Some("/a/proj"));
         assert_eq!(label(&[dir_only.clone()]), "proj");
         // Blank values count as absent.
