@@ -21,6 +21,8 @@ pub struct BriefRow {
     pub machine: Option<String>,
     pub path: Option<String>,
     pub session_id: Option<String>,
+    /// The name given to the Claude Code session (`/rename`).
+    pub session_name: Option<String>,
     pub epic: Option<String>,
     pub epic_title: Option<String>,
     pub goal: Option<String>,
@@ -127,18 +129,14 @@ fn dir_name(path: Option<&str>) -> Option<String> {
     path.rsplit('/').next().map(str::to_string)
 }
 
-/// A tmux session name nobody chose: empty, or tmux's own numeric default.
-fn is_unnamed(session: &str) -> bool {
-    let s = session.trim();
-    s.is_empty() || s.chars().all(|c| c.is_ascii_digit())
-}
-
 /// What the sidebar calls a Claude session: its epic title when the feed
-/// knows one, else the tmux session name, else the working directory. `rows`
-/// are matched on instance name and interconnect machine, as `match_session`
-/// does.
+/// knows one, else the name given to the Claude Code session, else the
+/// working directory. `rows` are matched on instance name and interconnect
+/// machine, as `match_session` does. With no matching row (feed off, or a
+/// session that is not an interconnect instance) the tmux session name stands
+/// in, so a tile is never unlabelled.
 pub fn sidebar_label(
-    session: &str,
+    tmux_session: &str,
     instance: Option<&str>,
     machine: &str,
     rows: &[BriefRow],
@@ -148,17 +146,15 @@ pub fn sidebar_label(
             r.name.as_deref() == Some(name) && r.machine.as_deref() == Some(machine)
         })
     });
-    if let Some(epic) = row
-        .and_then(|r| r.epic_title.as_deref().or(r.epic.as_deref()))
-        .filter(|e| !e.is_empty())
-    {
-        return epic.to_string();
-    }
-    if !is_unnamed(session) {
-        return session.to_string();
-    }
-    row.and_then(|r| dir_name(r.path.as_deref()))
-        .unwrap_or_else(|| session.to_string())
+    let Some(row) = row else {
+        return tmux_session.to_string();
+    };
+    let non_empty = |s: &Option<String>| s.as_deref().filter(|v| !v.trim().is_empty()).map(str::to_string);
+    non_empty(&row.epic_title)
+        .or_else(|| non_empty(&row.epic))
+        .or_else(|| non_empty(&row.session_name))
+        .or_else(|| dir_name(row.path.as_deref()))
+        .unwrap_or_else(|| tmux_session.to_string())
 }
 
 fn collapse_whitespace(s: &str) -> String {
@@ -288,29 +284,32 @@ fn poller_loop() {
 mod tests {
     use super::*;
 
-    fn label_row(epic: Option<&str>, path: Option<&str>) -> BriefRow {
+    fn label_row(epic: Option<&str>, name: Option<&str>, path: Option<&str>) -> BriefRow {
         BriefRow {
             name: Some("witch".into()),
             machine: Some("devbox".into()),
             epic_title: epic.map(str::to_string),
+            session_name: name.map(str::to_string),
             path: path.map(str::to_string),
             ..Default::default()
         }
     }
 
     #[test]
-    fn sidebar_label_prefers_epic_then_session_then_dir() {
-        let rows = [label_row(Some("Terminaler terminal app"), Some("/a/proj"))];
-        assert_eq!(
-            sidebar_label("main", Some("witch"), "devbox", &rows),
-            "Terminaler terminal app"
-        );
-        let rows = [label_row(None, Some("/a/proj"))];
-        assert_eq!(sidebar_label("main", Some("witch"), "devbox", &rows), "main");
-        assert_eq!(sidebar_label("3", Some("witch"), "devbox", &rows), "proj");
-        // Other machine or no instance: the row does not apply.
-        assert_eq!(sidebar_label("3", Some("witch"), "wsl", &rows), "3");
-        assert_eq!(sidebar_label("3", None, "devbox", &rows), "3");
+    fn sidebar_label_prefers_epic_then_session_name_then_dir() {
+        let label = |rows: &[BriefRow]| sidebar_label("tmux-1", Some("witch"), "devbox", rows);
+        let all = label_row(Some("Epic title"), Some("my-session"), Some("/a/proj"));
+        assert_eq!(label(&[all]), "Epic title");
+        let no_epic = label_row(None, Some("my-session"), Some("/a/proj"));
+        assert_eq!(label(&[no_epic]), "my-session");
+        let dir_only = label_row(None, None, Some("/a/proj"));
+        assert_eq!(label(&[dir_only.clone()]), "proj");
+        // Blank values count as absent.
+        let blank = label_row(Some(" "), Some(""), Some("/a/proj"));
+        assert_eq!(label(&[blank]), "proj");
+        // No applicable row: the tmux session name stands in.
+        assert_eq!(sidebar_label("tmux-1", Some("witch"), "wsl", &[dir_only.clone()]), "tmux-1");
+        assert_eq!(sidebar_label("tmux-1", None, "devbox", &[dir_only]), "tmux-1");
     }
 
     #[test]

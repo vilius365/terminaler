@@ -1215,6 +1215,10 @@ impl crate::TermWindow {
                 fingerprint.push_str(row.name.as_deref().unwrap_or(""));
                 fingerprint.push('|');
                 fingerprint.push_str(row.epic_title.as_deref().or(row.epic.as_deref()).unwrap_or(""));
+                fingerprint.push('|');
+                fingerprint.push_str(row.session_name.as_deref().unwrap_or(""));
+                fingerprint.push('|');
+                fingerprint.push_str(row.path.as_deref().unwrap_or(""));
                 fingerprint.push('\n');
             }
 
