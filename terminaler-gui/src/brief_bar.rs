@@ -115,6 +115,52 @@ pub fn fallback_goal(path: Option<&str>) -> String {
     format!("no prompt yet in {}", dir)
 }
 
+/// Last path segment of a working directory; `~` for the home directory.
+fn dir_name(path: Option<&str>) -> Option<String> {
+    let path = path?.trim_end_matches('/');
+    if path.is_empty() {
+        return None;
+    }
+    if std::env::var("HOME").ok().as_deref() == Some(path) {
+        return Some("~".to_string());
+    }
+    path.rsplit('/').next().map(str::to_string)
+}
+
+/// A tmux session name nobody chose: empty, or tmux's own numeric default.
+fn is_unnamed(session: &str) -> bool {
+    let s = session.trim();
+    s.is_empty() || s.chars().all(|c| c.is_ascii_digit())
+}
+
+/// What the sidebar calls a Claude session: its epic title when the feed
+/// knows one, else the tmux session name, else the working directory. `rows`
+/// are matched on instance name and interconnect machine, as `match_session`
+/// does.
+pub fn sidebar_label(
+    session: &str,
+    instance: Option<&str>,
+    machine: &str,
+    rows: &[BriefRow],
+) -> String {
+    let row = instance.and_then(|name| {
+        rows.iter().find(|r| {
+            r.name.as_deref() == Some(name) && r.machine.as_deref() == Some(machine)
+        })
+    });
+    if let Some(epic) = row
+        .and_then(|r| r.epic_title.as_deref().or(r.epic.as_deref()))
+        .filter(|e| !e.is_empty())
+    {
+        return epic.to_string();
+    }
+    if !is_unnamed(session) {
+        return session.to_string();
+    }
+    row.and_then(|r| dir_name(r.path.as_deref()))
+        .unwrap_or_else(|| session.to_string())
+}
+
 fn collapse_whitespace(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
@@ -241,6 +287,31 @@ fn poller_loop() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn label_row(epic: Option<&str>, path: Option<&str>) -> BriefRow {
+        BriefRow {
+            name: Some("witch".into()),
+            machine: Some("devbox".into()),
+            epic_title: epic.map(str::to_string),
+            path: path.map(str::to_string),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn sidebar_label_prefers_epic_then_session_then_dir() {
+        let rows = [label_row(Some("Terminaler terminal app"), Some("/a/proj"))];
+        assert_eq!(
+            sidebar_label("main", Some("witch"), "devbox", &rows),
+            "Terminaler terminal app"
+        );
+        let rows = [label_row(None, Some("/a/proj"))];
+        assert_eq!(sidebar_label("main", Some("witch"), "devbox", &rows), "main");
+        assert_eq!(sidebar_label("3", Some("witch"), "devbox", &rows), "proj");
+        // Other machine or no instance: the row does not apply.
+        assert_eq!(sidebar_label("3", Some("witch"), "wsl", &rows), "3");
+        assert_eq!(sidebar_label("3", None, "devbox", &rows), "3");
+    }
 
     #[test]
     fn parses_full_row_and_null_goal() {

@@ -413,6 +413,7 @@ impl crate::TermWindow {
             * 2.;
         let tile_budget_px = (px_budget - error_reserve).max(0.);
         let mut px_used = 0f32;
+        let brief_rows = crate::brief_bar::snapshot().rows;
 
         for snap in &snaps {
             // A box with no sessions comes FIRST — a box whose probe was
@@ -615,7 +616,21 @@ impl crate::TermWindow {
                 } else {
                     ("\u{25a3}", theme.text_tertiary, None) // ▣
                 };
-                let label = session.session.clone();
+                let machine = self
+                    .config
+                    .tmux
+                    .as_ref()
+                    .and_then(|t| t.boxes.iter().find(|b| b.name == snap.box_name))
+                    .map_or(snap.box_name.as_str(), |b| b.interconnect_machine_name());
+                let label = crate::brief_bar::sidebar_label(
+                    &session.session,
+                    session
+                        .agent
+                        .as_deref()
+                        .filter(|_| session.agent_is_instance),
+                    machine,
+                    &brief_rows,
+                );
                 let label_color = theme.text_secondary;
 
                 // Window count only when it says something (n>1), plus a dot
@@ -1192,6 +1207,15 @@ impl crate::TermWindow {
                     }
                     fingerprint.push('\n');
                 }
+            }
+
+            // Epic titles ride in on the brief feed and name the tiles, so a
+            // poll that changes one has to rebuild the cached sidebar too.
+            for row in crate::brief_bar::snapshot().rows {
+                fingerprint.push_str(row.name.as_deref().unwrap_or(""));
+                fingerprint.push('|');
+                fingerprint.push_str(row.epic_title.as_deref().or(row.epic.as_deref()).unwrap_or(""));
+                fingerprint.push('\n');
             }
 
             if self.tmux_sidebar_fingerprint != fingerprint {
