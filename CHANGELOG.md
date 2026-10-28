@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-10-28
+
+### Changed
+- **Sidebar tiles for Claude sessions are labelled by what the session is, not by its tmux session.** The tile label is the name given to the Claude Code session (`/rename`), else its epic title, else the last segment of its working directory. A session that is not an interconnect instance, or has no row in the brief feed, keeps its tmux session name. The instance name stays on the small `⇄` line. The names come from the brief feed, so the sidebar shows them only where `brief_bar` is enabled; a change in the feed repaints the cached sidebar. The hover flyout still shows the raw tmux session name.
+
 ## 2026-10-26
 
 ### Changed
