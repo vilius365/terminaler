@@ -4738,6 +4738,28 @@ impl TermWindow {
                     }
                 }
             }
+            PaneGroupWith(_) | PaneStackWith(_) | PaneSwapWith(_) => {
+                let mux = Mux::get();
+                let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
+                    Some(tab) => tab,
+                    None => return Ok(PerformAssignmentResult::Handled),
+                };
+                let changed = match assignment {
+                    PaneGroupWith(id) => tab.group_with(*id),
+                    PaneStackWith(id) => tab.stack_join_with(*id),
+                    PaneSwapWith(id) => match tab.get_active_pane() {
+                        Some(active) => tab.swap_panes(active.pane_id(), *id),
+                        None => false,
+                    },
+                    _ => false,
+                };
+                if changed {
+                    self.invalidate_tab_sidebar();
+                    if let Some(window) = self.window.as_ref() {
+                        window.invalidate();
+                    }
+                }
+            }
             PaneUngroup => {
                 let mux = Mux::get();
                 let tab = match mux.get_active_tab_for_window(self.mux_window_id) {

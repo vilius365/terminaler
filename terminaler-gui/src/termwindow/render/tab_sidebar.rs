@@ -736,6 +736,9 @@ impl crate::TermWindow {
         let label_metrics = RenderMetrics::with_font_metrics(&title_font.metrics());
 
         let mut tab_elements = vec![];
+        // Group and stack rows of tabs that have them. Kept apart so they
+        // still show when the LOCAL tab list is switched off.
+        let mut unit_elements: Vec<Element> = vec![];
 
         // Group heading for this window's own panes, matching the box eyebrows
         // the discovered machines get below. No status dot: live mux state has
@@ -857,6 +860,7 @@ impl crate::TermWindow {
             // Pane sub-tiles for split tabs.
             if has_multiple_panes {
                 let unit_info = tab.pane_unit_info();
+                let rows_start = tab_elements.len();
                 let mut prev_group = None;
                 let mut prev_stack = None;
                 for (pos_idx, pane_pos) in panes.iter().enumerate() {
@@ -992,6 +996,11 @@ impl crate::TermWindow {
                         tab_elements.push(build_tile(ung));
                     }
                 }
+                if !self.config.tab_sidebar_show_local
+                    && unit_info.values().any(|u| u.group.is_some() || u.stack.is_some())
+                {
+                    unit_elements.extend(tab_elements.drain(rows_start..));
+                }
             }
         }
 
@@ -1039,6 +1048,17 @@ impl crate::TermWindow {
         // sections start at the top and no hit areas are registered for it.
         if !self.config.tab_sidebar_show_local {
             tab_elements.clear();
+            if !unit_elements.is_empty() {
+                tab_elements.push(sidebar_eyebrow(
+                    &title_font,
+                    "groups",
+                    None,
+                    &theme,
+                    sidebar_width,
+                    false,
+                ));
+                tab_elements.append(&mut unit_elements);
+            }
         }
         let tabs_avail = (window_height - dock_h - 40.).max(60.);
         let el_heights: Vec<f32> = tab_elements

@@ -626,6 +626,12 @@ pub enum KeyAssignment {
     PaneGroup(PaneDirection),
     /// Dissolve the active pane's group.
     PaneUngroup,
+    /// Bind the active pane and the given pane into one group.
+    PaneGroupWith(usize),
+    /// Move the active pane or group into the given pane's slot as a stack.
+    PaneStackWith(usize),
+    /// Trade places of the active pane and the given pane.
+    PaneSwapWith(usize),
     /// Move the active pane or group into the neighbour's slot as a stack.
     PaneStackJoin(PaneDirection),
     /// Show the next or previous unit of the active stack (`Next` or `Prev`).
@@ -828,6 +834,9 @@ mod pane_group_tests {
             KeyAssignment::PaneUngroup,
             KeyAssignment::PaneStackJoin(PaneDirection::Down),
             KeyAssignment::PaneStackCycle(PaneDirection::Next),
+            KeyAssignment::PaneGroupWith(7),
+            KeyAssignment::PaneStackWith(7),
+            KeyAssignment::PaneSwapWith(7),
         ] {
             assert_eq!(action.clone(), round_trip(action));
         }

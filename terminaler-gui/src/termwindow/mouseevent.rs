@@ -144,7 +144,7 @@ impl super::TermWindow {
                 if press == &MousePress::Left {
                     if let Some(pane_drag) = self.pane_drag.take() {
                         if pane_drag.threshold_exceeded {
-                            self.execute_pane_drag_drop(pane_drag);
+                            self.execute_pane_drag_drop(pane_drag, &event);
                         }
                         context.set_cursor(Some(MouseCursor::Arrow));
                         context.invalidate();
@@ -781,6 +781,9 @@ impl super::TermWindow {
                 // Right click: set as default profile for "+" button
                 if let Some(modal) = self.get_modal() {
                     if let Some(dropdown) = modal.downcast_ref::<ProfileDropdown>() {
+                        if !dropdown.is_profile_menu {
+                            return;
+                        }
                         if let Some(entry) = dropdown.entries.get(idx) {
                             self.default_profile_action = Some(entry.action.clone());
                             log::info!(
@@ -1778,7 +1781,7 @@ impl super::TermWindow {
 
     /// Release of a pane drag over a target: swap the two panes, or dock the
     /// dragged one against the target's edge.
-    fn execute_pane_drag_drop(&mut self, drag: super::PaneDragState) {
+    fn execute_pane_drag_drop(&mut self, drag: super::PaneDragState, event: &MouseEvent) {
         let Some((target_id, kind)) = drag.target else {
             return;
         };
@@ -1786,8 +1789,25 @@ impl super::TermWindow {
         let Some(tab) = mux.get_active_tab_for_window(self.mux_window_id) else {
             return;
         };
+        if kind == super::PaneDropTarget::Swap {
+            // The middle of a pane asks what to do instead of guessing: the
+            // dragged pane takes focus so the menu's actions apply to it.
+            if let Some(pos) = tab.iter_panes().iter().find(|p| p.pane.pane_id() == drag.pane_id) {
+                tab.set_active_idx(pos.index);
+            }
+            drop(tab);
+            drop(mux);
+            let menu = crate::termwindow::profile_dropdown::ProfileDropdown::with_entries(
+                crate::termwindow::profile_dropdown::pane_drop_entries(target_id),
+                event.coords.x as f32,
+                event.coords.y as f32,
+            );
+            self.set_modal(std::rc::Rc::new(menu));
+            self.invalidate_tab_sidebar();
+            return;
+        }
         let moved = match kind {
-            super::PaneDropTarget::Swap => tab.swap_panes(drag.pane_id, target_id),
+            super::PaneDropTarget::Swap => false,
             super::PaneDropTarget::Dock(zone) => {
                 tab.dock_pane(drag.pane_id, target_id, split_request_for_zone(zone))
             }

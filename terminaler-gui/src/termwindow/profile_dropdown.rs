@@ -26,9 +26,42 @@ pub struct ProfileDropdown {
     selected_row: RefCell<usize>,
     anchor_x: f32,
     anchor_y: f32,
+    /// False for menus that borrow this widget (the pane drop menu): they
+    /// have no "default" to set and show their own footer line.
+    pub is_profile_menu: bool,
+    footer: String,
+}
+
+/// The menu shown when a dragged pane is dropped on the middle of another.
+pub fn pane_drop_entries(target: usize) -> Vec<DropdownEntry> {
+    [
+        ("Group with this pane", KeyAssignment::PaneGroupWith(target)),
+        ("Stack with this pane", KeyAssignment::PaneStackWith(target)),
+        ("Swap places", KeyAssignment::PaneSwapWith(target)),
+    ]
+    .iter()
+    .map(|(label, action)| DropdownEntry {
+        label: label.to_string(),
+        action: action.clone(),
+        is_default: false,
+    })
+    .collect()
 }
 
 impl ProfileDropdown {
+    /// A menu of `entries` with its top-left corner at (x, y).
+    pub fn with_entries(entries: Vec<DropdownEntry>, x: f32, y: f32) -> Self {
+        Self {
+            element: RefCell::new(None),
+            entries,
+            selected_row: RefCell::new(0),
+            anchor_x: x,
+            anchor_y: y,
+            is_profile_menu: false,
+            footer: "Esc to cancel".to_string(),
+        }
+    }
+
     pub fn new(term_window: &TermWindow, anchor_item: &UIItem) -> Self {
         let anchor_x = anchor_item.x as f32;
         let anchor_y = (anchor_item.y + anchor_item.height) as f32;
@@ -48,6 +81,8 @@ impl ProfileDropdown {
             selected_row: RefCell::new(0),
             anchor_x,
             anchor_y,
+            is_profile_menu: true,
+            footer: "Right-click to set default".to_string(),
         }
     }
 
@@ -112,6 +147,7 @@ impl ProfileDropdown {
     fn compute(
         term_window: &mut TermWindow,
         entries: &[DropdownEntry],
+        footer: &str,
         selected_row: usize,
         anchor_x: f32,
         anchor_y: f32,
@@ -171,7 +207,7 @@ impl ProfileDropdown {
         row_elements.push(
             Element::new(
                 &font,
-                ElementContent::Text("Right-click to set default".to_string()),
+                ElementContent::Text(footer.to_string()),
             )
             .colors(ElementColors {
                 border: BorderColor::default(),
@@ -245,7 +281,7 @@ impl ProfileDropdown {
             .map(|e| e.label.len() + 4) // +4 for checkmark prefix + padding
             .max()
             .unwrap_or(20)
-            .max("Right-click to set default".len() + 2);
+            .max(footer.len() + 2);
         let content_width = max_label_chars as f32 * metrics.cell_size.width as f32;
         let desired_width = content_width
             .max(250.)
@@ -356,6 +392,7 @@ impl Modal for ProfileDropdown {
             let element = Self::compute(
                 term_window,
                 &self.entries,
+                &self.footer,
                 *self.selected_row.borrow(),
                 self.anchor_x,
                 self.anchor_y,
@@ -370,5 +407,25 @@ impl Modal for ProfileDropdown {
 
     fn reconfigure(&self, _term_window: &mut TermWindow) {
         self.element.borrow_mut().take();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pane_drop_menu_offers_group_stack_and_swap_for_the_target() {
+        let entries = pane_drop_entries(9);
+        let actions: Vec<_> = entries.iter().map(|e| e.action.clone()).collect();
+        assert_eq!(
+            vec![
+                KeyAssignment::PaneGroupWith(9),
+                KeyAssignment::PaneStackWith(9),
+                KeyAssignment::PaneSwapWith(9),
+            ],
+            actions
+        );
+        assert!(entries.iter().all(|e| !e.is_default));
     }
 }
