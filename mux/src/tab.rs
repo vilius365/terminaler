@@ -58,6 +58,9 @@ struct TabInner {
     focus_arranged: bool,
     /// Pane groups and stacks laid over the split tree.
     groups: GroupState,
+    /// Set while dock_unit moves panes, so removing them does not prune
+    /// the groups they belong to.
+    docking: bool,
 }
 
 /// A Tab is a container of Panes
@@ -604,13 +607,19 @@ fn collect_visible_panes(
     active_idx: usize,
     zoomed_id: Option<PaneId>,
     hidden: &HashSet<PaneId>,
+    order: &[PaneId],
     panes: &mut Vec<PositionedPane>,
 ) {
     match tree {
         Tree::Empty => {}
         Tree::Leaf(pane) => {
             if !hidden.contains(&pane.pane_id()) {
-                let index = panes.len();
+                // Indices count hidden panes too, so they agree with
+                // `TabInner::active` and `set_active_idx`.
+                let index = order
+                    .iter()
+                    .position(|id| *id == pane.pane_id())
+                    .unwrap_or(panes.len());
                 panes.push(PositionedPane {
                     index,
                     is_active: index == active_idx,
@@ -639,19 +648,19 @@ fn collect_visible_panes(
                 // Left hidden: right gets full parent size at parent position
                 collect_visible_panes(
                     right_tree, size, left, top,
-                    active_idx, zoomed_id, hidden, panes,
+                    active_idx, zoomed_id, hidden, order, panes,
                 );
             } else if right_hidden {
                 // Right hidden: left gets full parent size at parent position
                 collect_visible_panes(
                     left_tree, size, left, top,
-                    active_idx, zoomed_id, hidden, panes,
+                    active_idx, zoomed_id, hidden, order, panes,
                 );
             } else {
                 // Both visible — use normal split sizes
                 collect_visible_panes(
                     left_tree, &data.first, left, top,
-                    active_idx, zoomed_id, hidden, panes,
+                    active_idx, zoomed_id, hidden, order, panes,
                 );
                 let (right_left, right_top) = match data.direction {
                     SplitDirection::Horizontal => (left + data.first.cols as usize, top),
@@ -659,7 +668,7 @@ fn collect_visible_panes(
                 };
                 collect_visible_panes(
                     right_tree, &data.second, right_left, right_top,
-                    active_idx, zoomed_id, hidden, panes,
+                    active_idx, zoomed_id, hidden, order, panes,
                 );
             }
         }
@@ -786,6 +795,19 @@ fn split_size_for_extent(
             pixel_width: cell_dims.pixel_width * width2,
             dpi: cell_dims.dpi,
         },
+    }
+}
+
+/// The leaf pane ids of `tree` in topological order.
+fn leaf_order(tree: &Tree) -> Vec<PaneId> {
+    match tree {
+        Tree::Empty => vec![],
+        Tree::Leaf(pane) => vec![pane.pane_id()],
+        Tree::Node { left, right, .. } => {
+            let mut ids = leaf_order(left);
+            ids.extend(leaf_order(right));
+            ids
+        }
     }
 }
 
@@ -1336,6 +1358,7 @@ impl TabInner {
             hidden: HashSet::new(),
             focus_arranged: false,
             groups: GroupState::default(),
+            docking: false,
         }
     }
 
@@ -1494,6 +1517,52 @@ impl TabInner {
             }
         }
         Mux::try_get().map(|mux| mux.notify(MuxNotification::TabResized(self.id)));
+    }
+
+    /// True when any pane group or stack exists: tree operations that move
+    /// panes between places would break their contiguous subtrees.
+    fn has_groups(&self) -> bool {
+        !self.groups.groups.is_empty() || !self.groups.stacks.is_empty()
+    }
+
+    /// Forget panes that were removed from the tree: drop them from the
+    /// hidden set and the group model, show the unit a stack falls back to,
+    /// and make sure focus is on a visible pane.
+    fn prune_removed_panes(&mut self, removed: &[PaneId]) {
+        let mut changed = false;
+        let mut reveal = vec![];
+        for id in removed {
+            changed |= self.hidden.remove(id);
+            let removal = self.groups.remove_pane(*id);
+            if let Some(unit) = removal.reveal {
+                reveal.push(unit);
+            }
+        }
+        if reveal.is_empty() && !changed {
+            self.debug_validate_groups();
+            return;
+        }
+        for unit in &reveal {
+            self.set_unit_hidden(unit, false);
+        }
+        if self.pane.as_ref().map_or(true, |t| matches!(t, Tree::Empty)) {
+            return;
+        }
+        self.refresh_after_unit_change();
+
+        let active_hidden = self
+            .get_active_pane()
+            .map_or(false, |p| self.hidden.contains(&p.pane_id()));
+        if active_hidden {
+            let target = reveal
+                .first()
+                .and_then(|unit| self.unit_focus_pane(unit))
+                .or_else(|| self.iter_panes().first().map(|p| p.pane.pane_id()));
+            if let Some(id) = target {
+                self.focus_pane_id(id);
+            }
+        }
+        self.debug_validate_groups();
     }
 
     fn is_spatial(direction: PaneDirection) -> bool {
@@ -1737,9 +1806,11 @@ impl TabInner {
 
         // Taking the source out only gives room back, and leaves the target
         // subtree intact because the source panes are not inside it.
+        self.docking = true;
         for id in source {
             self.remove_pane(*id);
         }
+        self.docking = false;
         let positions = self.iter_panes();
         let (mut left, mut top, mut right, mut bottom) = (usize::MAX, usize::MAX, 0, 0);
         for p in positions.iter().filter(|p| target_set.contains(&p.pane.pane_id())) {
@@ -1859,6 +1930,9 @@ impl TabInner {
     }
 
     fn rotate_counter_clockwise(&mut self) {
+        if self.has_groups() {
+            return;
+        }
         let panes = self.iter_panes_ignoring_zoom();
         if panes.is_empty() {
             // Shouldn't happen, but we check for this here so that the
@@ -1890,6 +1964,9 @@ impl TabInner {
     }
 
     fn rotate_clockwise(&mut self) {
+        if self.has_groups() {
+            return;
+        }
         let panes = self.iter_panes_ignoring_zoom();
         if panes.is_empty() {
             // Shouldn't happen, but we check for this here so that the
@@ -2029,6 +2106,7 @@ impl TabInner {
         let hidden = &self.hidden;
 
         if let Some(tree) = &self.pane {
+            let order = leaf_order(tree);
             collect_visible_panes(
                 tree,
                 &root_size,
@@ -2037,6 +2115,7 @@ impl TabInner {
                 active_idx,
                 zoomed_id,
                 hidden,
+                &order,
                 &mut panes,
             );
         }
@@ -2367,6 +2446,12 @@ impl TabInner {
         if a == b || self.zoomed.is_some() || !self.hidden.is_empty() {
             return false;
         }
+        // Trading a group member's place would split the group's subtree.
+        if matches!(self.groups.unit_of(a), Unit::Group(_))
+            || matches!(self.groups.unit_of(b), Unit::Group(_))
+        {
+            return false;
+        }
         let panes: Vec<Arc<dyn Pane>> = self
             .iter_panes_ignoring_zoom()
             .into_iter()
@@ -2458,7 +2543,7 @@ impl TabInner {
     fn focus_layout(&mut self, pane_id: PaneId, main_fraction: f32) -> bool {
         // A hidden pane has no place in a fresh tree that would keep it
         // hidden, so leave such a tab alone rather than reveal it.
-        if !self.hidden.is_empty() {
+        if !self.hidden.is_empty() || self.has_groups() {
             return false;
         }
         self.set_zoomed(false);
@@ -2692,9 +2777,10 @@ impl TabInner {
         if let Some(panel_idx) = self.get_pane_direction(direction, false) {
             self.set_active_idx(panel_idx);
         }
-        let mux = Mux::get();
-        if let Some(window_id) = mux.window_containing_tab(self.id) {
-            mux.notify(MuxNotification::WindowInvalidated(window_id));
+        if let Some(mux) = Mux::try_get() {
+            if let Some(window_id) = mux.window_containing_tab(self.id) {
+                mux.notify(MuxNotification::WindowInvalidated(window_id));
+            }
         }
     }
 
@@ -2942,6 +3028,11 @@ impl TabInner {
             self.active = active_idx.saturating_sub(removed_indices.len());
         }
 
+        if !self.docking && !dead_panes.is_empty() {
+            let removed: Vec<PaneId> = dead_panes.iter().map(|p| p.pane_id()).collect();
+            self.prune_removed_panes(&removed);
+        }
+
         if !dead_panes.is_empty() && kill {
             let to_kill: Vec<_> = dead_panes.iter().map(|p| p.pane_id()).collect();
             promise::spawn::spawn_into_main_thread(async move {
@@ -3014,6 +3105,7 @@ impl TabInner {
         {
             self.active = item.index;
             self.recency.tag(item.index);
+            self.groups.note_active(pane.pane_id());
             self.advise_focus_change(prior);
         }
     }
@@ -3050,6 +3142,9 @@ impl TabInner {
         let prior = self.get_active_pane();
         self.active = pane_index;
         self.recency.tag(pane_index);
+        if let Some(id) = self.get_active_pane().map(|p| p.pane_id()) {
+            self.groups.note_active(id);
+        }
         self.advise_focus_change(prior);
     }
 
@@ -3181,6 +3276,7 @@ impl TabInner {
         // keep focus_layout's shape.
         self.focus_arranged = false;
 
+        let mut split_ids: (Option<PaneId>, Option<PaneId>) = (None, None);
         {
             let split_info = self
                 .compute_split_size(pane_index, request)
@@ -3264,6 +3360,7 @@ impl TabInner {
             };
 
             let existing_pane = Arc::clone(cursor.leaf_mut().unwrap());
+            split_ids = (Some(existing_pane.pane_id()), Some(pane.pane_id()));
 
             let (pane1, pane2) = if request.target_is_second {
                 (existing_pane, pane)
@@ -3294,6 +3391,10 @@ impl TabInner {
                 self.active = pane_index + 1;
                 self.recency.tag(pane_index + 1);
             }
+        }
+
+        if let (Some(existing_id), Some(new_id)) = (split_ids.0, split_ids.1) {
+            self.groups.adopt(existing_id, new_id);
         }
 
         log::debug!("split info after split: {:#?}", self.iter_splits());
@@ -3987,6 +4088,138 @@ mod test {
         assert!(!tab.stack_cycle(PaneDirection::Next));
         assert!(!tab.stack_cycle(PaneDirection::Right));
         assert_eq!(vec![1, 2, 3], visible_ids(&tab));
+    }
+
+    fn stack_count(tab: &Tab) -> usize {
+        tab.inner.lock().groups.stacks.len()
+    }
+
+    #[test]
+    fn lifecycle_removing_one_of_two_group_members_dissolves_group() {
+        let (tab, _) = three_across();
+        activate(&tab, 1);
+        assert!(tab.group_panes(PaneDirection::Right));
+        tab.remove_pane(2);
+        assert!(group_members(&tab).is_empty());
+        assert_eq!(vec![1, 3], visible_ids(&tab));
+        assert_valid(&tab);
+    }
+
+    #[test]
+    fn lifecycle_closing_active_unit_in_stack_reveals_next_unit() {
+        let tab = stacked_groups();
+        tab.remove_pane(1);
+        tab.remove_pane(4);
+        assert_eq!(0, stack_count(&tab));
+        assert!(tab.hidden_pane_ids().is_empty());
+        assert_eq!(vec![2, 3], visible_ids(&tab));
+        assert!([2, 3].contains(&active_id(&tab)));
+        assert_valid(&tab);
+        for p in tab.iter_panes() {
+            assert!(p.width > 0 && p.height > 0, "pane {} collapsed", p.index);
+        }
+    }
+
+    #[test]
+    fn lifecycle_closing_last_pane_of_hidden_unit_keeps_active_unit_focus() {
+        let tab = stacked_groups();
+        activate(&tab, 1);
+        tab.remove_pane(2);
+        tab.remove_pane(3);
+        assert_eq!(0, stack_count(&tab));
+        assert!(tab.hidden_pane_ids().is_empty(), "dead panes leave the hidden set");
+        assert_eq!(vec![1, 4], visible_ids(&tab));
+        assert_eq!(1, active_id(&tab));
+        assert_eq!(vec![vec![1, 4]], group_members(&tab));
+        assert_valid(&tab);
+    }
+
+    #[test]
+    fn lifecycle_killing_group_member_updates_last_active() {
+        let (tab, _) = three_across();
+        activate(&tab, 1);
+        assert!(tab.group_panes(PaneDirection::Right));
+        activate(&tab, 3);
+        assert!(tab.group_panes(PaneDirection::Left));
+        activate(&tab, 2);
+        tab.remove_pane(2);
+        let inner = tab.inner.lock();
+        assert_eq!(vec![1, 3], inner.groups.groups[0].members.iter().copied().fold(vec![], |mut v, m| { v.push(m); v.sort(); v }));
+        assert_ne!(2, inner.groups.groups[0].last_active);
+    }
+
+    #[test]
+    fn lifecycle_set_active_pane_records_last_active_for_its_group() {
+        let (tab, _) = three_across();
+        activate(&tab, 1);
+        assert!(tab.group_panes(PaneDirection::Right));
+        activate(&tab, 2);
+        assert_eq!(2, tab.inner.lock().groups.groups[0].last_active);
+    }
+
+    #[test]
+    fn lifecycle_activate_pane_direction_never_lands_in_hidden_unit() {
+        let tab = stacked_groups();
+        activate(&tab, 1);
+        for direction in [
+            PaneDirection::Left,
+            PaneDirection::Right,
+            PaneDirection::Up,
+            PaneDirection::Down,
+            PaneDirection::Next,
+            PaneDirection::Prev,
+        ] {
+            tab.activate_pane_direction(direction);
+            assert!([1, 4].contains(&active_id(&tab)), "{:?} reached a hidden pane", direction);
+        }
+    }
+
+    #[test]
+    fn lifecycle_rotate_with_a_group_changes_nothing() {
+        let (tab, _) = three_across();
+        activate(&tab, 1);
+        assert!(tab.group_panes(PaneDirection::Right));
+        let before = ids(&tab);
+        tab.rotate_clockwise();
+        assert_eq!(before, ids(&tab));
+        assert_valid(&tab);
+    }
+
+    #[test]
+    fn lifecycle_swap_and_focus_layout_refuse_when_they_would_break_a_group() {
+        let (tab, _) = three_across();
+        activate(&tab, 1);
+        assert!(tab.group_panes(PaneDirection::Right));
+        assert!(!tab.swap_panes(1, 3));
+        assert!(!tab.focus_layout(3, 0.6));
+        assert_valid(&tab);
+
+        let stacked = stacked_groups();
+        assert!(!stacked.swap_panes(1, 4));
+        assert!(!stacked.focus_layout(1, 0.6));
+        assert_valid(&stacked);
+    }
+
+    #[test]
+    fn lifecycle_split_of_a_group_member_joins_the_group() {
+        let (tab, _) = three_across();
+        activate(&tab, 1);
+        assert!(tab.group_panes(PaneDirection::Right));
+        let req = SplitRequest {
+            direction: SplitDirection::Vertical,
+            ..Default::default()
+        };
+        let idx = tab
+            .iter_panes()
+            .iter()
+            .find(|p| p.pane.pane_id() == 1)
+            .unwrap()
+            .index;
+        let split = tab.compute_split_size(idx, req).unwrap();
+        tab.split_and_insert(idx, req, FakePane::new(9, split.second))
+            .unwrap();
+        assert_eq!(vec![vec![1, 2, 9]], group_members(&tab));
+        assert_valid(&tab);
     }
 
     #[test]
