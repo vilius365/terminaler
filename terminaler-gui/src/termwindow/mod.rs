@@ -4716,6 +4716,37 @@ impl TermWindow {
                     self.invalidate_tab_sidebar();
                 }
             }
+            PaneGroup(direction) | PaneStackJoin(direction) | PaneStackCycle(direction) => {
+                let mux = Mux::get();
+                let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
+                    Some(tab) => tab,
+                    None => return Ok(PerformAssignmentResult::Handled),
+                };
+                let changed = match assignment {
+                    PaneGroup(_) => tab.group_panes(*direction),
+                    PaneStackJoin(_) => tab.stack_join(*direction),
+                    _ => tab.stack_cycle(*direction),
+                };
+                if changed {
+                    self.invalidate_tab_sidebar();
+                    if let Some(window) = self.window.as_ref() {
+                        window.invalidate();
+                    }
+                }
+            }
+            PaneUngroup => {
+                let mux = Mux::get();
+                let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
+                    Some(tab) => tab,
+                    None => return Ok(PerformAssignmentResult::Handled),
+                };
+                if tab.ungroup_active() {
+                    self.invalidate_tab_sidebar();
+                    if let Some(window) = self.window.as_ref() {
+                        window.invalidate();
+                    }
+                }
+            }
             UnhidePane(pane_id) => {
                 let mux = Mux::get();
                 let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
@@ -5016,7 +5047,14 @@ impl TermWindow {
         };
 
         let pane_id = pane.pane_id();
-        if confirm && !pane.can_close_without_prompting(CloseReason::Pane) {
+        // Closing a pane in a group closes the whole group.
+        let members = tab.unit_panes_of(pane_id);
+        let needs_prompt = confirm
+            && members
+                .iter()
+                .filter_map(|id| mux.get_pane(*id))
+                .any(|p| !p.can_close_without_prompting(CloseReason::Pane));
+        if needs_prompt {
             let window = self.window.clone().unwrap();
             let (overlay, future) = start_overlay_pane(self, &pane, move |pane_id, term| {
                 confirm_close_pane(pane_id, term, mux_window_id, window)
@@ -5024,7 +5062,9 @@ impl TermWindow {
             self.assign_overlay_for_pane(pane_id, overlay);
             promise::spawn::spawn(future).detach();
         } else {
-            mux.remove_pane(pane_id);
+            for id in members {
+                mux.remove_pane(id);
+            }
         }
     }
 

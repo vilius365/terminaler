@@ -12,14 +12,25 @@ pub fn confirm_close_pane(
     mux_window_id: WindowId,
     window: ::window::Window,
 ) -> anyhow::Result<()> {
-    if confirm::run_confirmation("Really close this pane?", &mut term)? {
+    let group_size = Mux::get()
+        .get_active_tab_for_window(mux_window_id)
+        .map_or(1, |tab| tab.unit_panes_of(pane_id).len());
+    let question = if group_size > 1 {
+        format!("Really close this group of {} panes?", group_size)
+    } else {
+        "Really close this pane?".to_string()
+    };
+    if confirm::run_confirmation(&question, &mut term)? {
         promise::spawn::spawn_into_main_thread(async move {
             let mux = Mux::get();
             let tab = match mux.get_active_tab_for_window(mux_window_id) {
                 Some(tab) => tab,
                 None => return,
             };
-            tab.kill_pane(pane_id);
+            // Take the member list first: killing one member changes the group.
+            for id in tab.unit_panes_of(pane_id) {
+                tab.kill_pane(id);
+            }
         })
         .detach();
     }

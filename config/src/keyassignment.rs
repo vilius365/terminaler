@@ -618,6 +618,14 @@ pub enum KeyAssignment {
     SetPaneZoomState(bool),
     TogglePaneHidden,
     UnhidePane(usize),
+    /// Bind the active pane and its neighbour in this direction into a group.
+    PaneGroup(PaneDirection),
+    /// Dissolve the active pane's group.
+    PaneUngroup,
+    /// Move the active pane or group into the neighbour's slot as a stack.
+    PaneStackJoin(PaneDirection),
+    /// Show the next or previous unit of the active stack (`Next` or `Prev`).
+    PaneStackCycle(PaneDirection),
     CloseCurrentPane {
         confirm: bool,
     },
@@ -796,4 +804,36 @@ pub struct KeyTables {
 #[derive(Debug, Clone, PartialEq)]
 pub struct KeyTableEntry {
     pub action: KeyAssignment,
+}
+
+#[cfg(test)]
+mod pane_group_tests {
+    use super::*;
+
+    fn round_trip(action: KeyAssignment) -> KeyAssignment {
+        let value = action.to_dynamic();
+        KeyAssignment::from_dynamic(&value, FromDynamicOptions::default()).unwrap()
+    }
+
+    #[test]
+    fn pane_group_actions_round_trip_through_config_values() {
+        for action in [
+            KeyAssignment::PaneGroup(PaneDirection::Right),
+            KeyAssignment::PaneUngroup,
+            KeyAssignment::PaneStackJoin(PaneDirection::Down),
+            KeyAssignment::PaneStackCycle(PaneDirection::Next),
+        ] {
+            assert_eq!(action.clone(), round_trip(action));
+        }
+    }
+
+    #[test]
+    fn pane_group_action_parses_from_a_config_object() {
+        let mut object = terminaler_dynamic::Object::default();
+        object.insert("PaneGroup".to_dynamic(), "Right".to_dynamic());
+        let action =
+            KeyAssignment::from_dynamic(&Value::Object(object), FromDynamicOptions::default())
+                .unwrap();
+        assert_eq!(KeyAssignment::PaneGroup(PaneDirection::Right), action);
+    }
 }

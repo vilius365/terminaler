@@ -71,8 +71,11 @@ impl PaneSelector {
         let top_pixel_y = top_bar_height + padding_top + border.top.get() as f32;
 
         let panes = term_window.get_panes_to_render();
+        // Pane indices count hidden panes too, so size the labels by the
+        // highest index rather than by how many panes are visible.
+        let label_count = panes.iter().map(|p| p.index + 1).max().unwrap_or(0);
         let labels =
-            crate::overlay::quickselect::compute_labels_for_alphabet(alphabet, panes.len());
+            crate::overlay::quickselect::compute_labels_for_alphabet(alphabet, label_count);
 
         let mut elements = vec![];
         for pos in panes {

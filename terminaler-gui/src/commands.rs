@@ -53,6 +53,17 @@ fn us_layout_shift(s: &str) -> String {
     }
 }
 
+fn direction_word(direction: &PaneDirection) -> &'static str {
+    match direction {
+        PaneDirection::Left => "left",
+        PaneDirection::Right => "right",
+        PaneDirection::Up => "above",
+        PaneDirection::Down => "below",
+        PaneDirection::Next => "next",
+        PaneDirection::Prev => "previous",
+    }
+}
+
 /// `CommandDef` defines a command in the UI.
 pub struct CommandDef {
     /// Brief description
@@ -1614,6 +1625,38 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             menubar: &["Window"],
             icon: Some("md_visibility_off"),
         },
+        PaneGroup(direction) => CommandDef {
+            brief: format!("Group pane with the pane to the {}", direction_word(direction)).into(),
+            doc: "Binds the active pane and its neighbour into one group that focuses, hides and shows as one pane.".into(),
+            keys: vec![],
+            args: &[ArgType::ActivePane],
+            menubar: &["Window"],
+            icon: Some("md_select_group"),
+        },
+        PaneUngroup => CommandDef {
+            brief: "Ungroup pane".into(),
+            doc: "Dissolves the active pane's group back into separate panes.".into(),
+            keys: vec![],
+            args: &[ArgType::ActivePane],
+            menubar: &["Window"],
+            icon: Some("md_call_split"),
+        },
+        PaneStackJoin(direction) => CommandDef {
+            brief: format!("Stack pane with the pane to the {}", direction_word(direction)).into(),
+            doc: "Moves the active pane or group into the neighbour's slot; only one of them shows at a time.".into(),
+            keys: vec![],
+            args: &[ArgType::ActivePane],
+            menubar: &["Window"],
+            icon: Some("md_layers"),
+        },
+        PaneStackCycle(direction) => CommandDef {
+            brief: format!("Show {} pane in stack", if matches!(direction, PaneDirection::Prev) { "previous" } else { "next" }).into(),
+            doc: "Swaps which pane or group is on show in the active stack.".into(),
+            keys: vec![],
+            args: &[ArgType::ActivePane],
+            menubar: &["Window"],
+            icon: Some("md_swap_horizontal"),
+        },
         ActivateLastTab => CommandDef {
             brief: "Activate the last active tab".into(),
             doc: "If there was no prior active tab, has no effect.".into(),
@@ -2239,6 +2282,17 @@ fn compute_default_actions() -> Vec<KeyAssignment> {
         ActivatePaneDirection(PaneDirection::Down),
         TogglePaneZoomState,
         TogglePaneHidden,
+        PaneGroup(PaneDirection::Left),
+        PaneGroup(PaneDirection::Right),
+        PaneGroup(PaneDirection::Up),
+        PaneGroup(PaneDirection::Down),
+        PaneUngroup,
+        PaneStackJoin(PaneDirection::Left),
+        PaneStackJoin(PaneDirection::Right),
+        PaneStackJoin(PaneDirection::Up),
+        PaneStackJoin(PaneDirection::Down),
+        PaneStackCycle(PaneDirection::Next),
+        PaneStackCycle(PaneDirection::Prev),
         ActivateLastTab,
         ShowLauncher,
         ShowTabNavigator,
