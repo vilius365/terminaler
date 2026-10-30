@@ -856,9 +856,44 @@ impl crate::TermWindow {
 
             // Pane sub-tiles for split tabs.
             if has_multiple_panes {
-                for pane_pos in &panes {
+                let unit_info = tab.pane_unit_info();
+                let mut prev_group = None;
+                let mut prev_stack = None;
+                for (pos_idx, pane_pos) in panes.iter().enumerate() {
                     let pane = &pane_pos.pane;
                     let pane_id = pane.pane_id();
+                    let unit = unit_info.get(&pane_id).copied();
+                    let (group, stack) = unit.map_or((None, None), |u| (u.group, u.stack));
+                    if stack.is_some() && stack != prev_stack {
+                        let mut head = TileArgs::new(&font, &title_font, &metrics, &label_metrics, &theme, sidebar_width);
+                        head.half = true;
+                        head.icon = "\u{29c9}".to_string(); // ⧉
+                        head.icon_color = theme.accent_blue;
+                        head.label = format!("stack of {}", unit.map_or(1, |u| u.stack_len));
+                        head.label_color = theme.text_tertiary;
+                        head.border_color = theme.border_subtle;
+                        head.bg = theme.bg_base;
+                        tab_elements.push(build_tile(head));
+                    }
+                    if group.is_some() && group != prev_group {
+                        let mut head = TileArgs::new(&font, &title_font, &metrics, &label_metrics, &theme, sidebar_width);
+                        head.half = true;
+                        head.icon = "\u{25eb}".to_string(); // ◫
+                        head.icon_color = theme.accent_orange;
+                        head.label = "group".to_string();
+                        head.label_color = theme.text_secondary;
+                        head.border_color = theme.border_subtle;
+                        head.bg = theme.bg_base;
+                        head.hover_bg = Some(theme.bg_elevated);
+                        head.item = Some(TabSidebarItem::Pane {
+                            tab_idx,
+                            pane_idx: pane_pos.index,
+                        });
+                        tab_elements.push(build_tile(head));
+                    }
+                    prev_group = group;
+                    prev_stack = stack;
+                    let on_show = unit.map_or(true, |u| u.on_show);
                     let pane_title = pane.get_title();
                     let pane_cwd = pane
                         .get_current_working_dir(CachePolicy::AllowStale)
@@ -891,9 +926,26 @@ impl crate::TermWindow {
                         sub.icon = "\u{2514}".to_string(); // └
                         sub.icon_color = theme.text_tertiary;
                     }
-                    sub.label = pane_label_src;
+                    if stack.is_some() {
+                        // In a stack: a marker for the unit on show, a hollow
+                        // one for those waiting behind it.
+                        if on_show {
+                            sub.icon = "\u{25b8}".to_string(); // ▸
+                            sub.icon_color = theme.accent_blue;
+                        } else {
+                            sub.icon = "\u{25cc}".to_string(); // ◌
+                            sub.icon_color = theme.text_tertiary;
+                        }
+                    }
+                    sub.label = if group.is_some() {
+                        format!(" {}", pane_label_src)
+                    } else {
+                        pane_label_src
+                    };
                     sub.label_color = if is_active_pane {
                         theme.text_primary
+                    } else if !on_show {
+                        theme.text_tertiary
                     } else {
                         theme.text_secondary
                     };
@@ -917,6 +969,28 @@ impl crate::TermWindow {
                         pane_idx: pane_pos.index,
                     });
                     tab_elements.push(build_tile(sub));
+
+                    // After the last member of a loose group: a row to dissolve it.
+                    let next_group = panes
+                        .get(pos_idx + 1)
+                        .and_then(|p| unit_info.get(&p.pane.pane_id()))
+                        .and_then(|u| u.group);
+                    if group.is_some() && stack.is_none() && next_group != group {
+                        let mut ung = TileArgs::new(&font, &title_font, &metrics, &label_metrics, &theme, sidebar_width);
+                        ung.half = true;
+                        ung.icon = "\u{2715}".to_string(); // ✕
+                        ung.icon_color = theme.text_tertiary;
+                        ung.label = "ungroup".to_string();
+                        ung.label_color = theme.text_tertiary;
+                        ung.border_color = theme.border_subtle;
+                        ung.bg = theme.bg_base;
+                        ung.hover_bg = Some(theme.bg_elevated);
+                        ung.item = Some(TabSidebarItem::UngroupPane {
+                            tab_idx,
+                            pane_idx: pane_pos.index,
+                        });
+                        tab_elements.push(build_tile(ung));
+                    }
                 }
             }
         }

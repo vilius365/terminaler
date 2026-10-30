@@ -30,6 +30,19 @@ pub struct PaneStack {
     pub active: usize,
 }
 
+/// How one pane sits in the tab's groups and stacks, for the sidebar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PaneUnitInfo {
+    /// The group the pane belongs to, if any.
+    pub group: Option<GroupId>,
+    /// Index of the stack holding the pane's unit, if any.
+    pub stack: Option<usize>,
+    /// How many units share that stack (1 when not stacked).
+    pub stack_len: usize,
+    /// False when the pane's unit is hidden behind another in its stack.
+    pub on_show: bool,
+}
+
 /// What a pane's removal asks the tab to do.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Removal {

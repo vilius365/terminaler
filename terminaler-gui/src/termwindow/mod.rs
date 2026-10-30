@@ -431,6 +431,8 @@ pub struct SidebarTabInfo {
 pub enum TabSidebarItem {
     Tab { tab_idx: usize, active: bool },
     Pane { tab_idx: usize, pane_idx: usize },
+    /// A group's "ungroup" row: dissolves the group holding that pane.
+    UngroupPane { tab_idx: usize, pane_idx: usize },
     ClosePane { pane_id: usize },
     MuteNotifications { pane_id: usize },
     NewTabButton,

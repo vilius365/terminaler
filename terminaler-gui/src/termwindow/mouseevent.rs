@@ -2002,6 +2002,17 @@ impl super::TermWindow {
                         }
                     }
                 }
+                TabSidebarItem::UngroupPane { tab_idx, pane_idx } => {
+                    self.activate_tab(tab_idx as isize).ok();
+                    let mux = Mux::get();
+                    if let Some(tab) = mux.get_active_tab_for_window(self.mux_window_id) {
+                        tab.set_active_idx(pane_idx);
+                        if tab.ungroup_active() {
+                            self.invalidate_tab_sidebar();
+                            context.invalidate();
+                        }
+                    }
+                }
                 TabSidebarItem::ClosePane { pane_id } => {
                     self.close_pane_by_id(pane_id as mux::pane::PaneId, true);
                 }
@@ -2149,6 +2160,7 @@ impl super::TermWindow {
                 | TabSidebarItem::TmuxRefreshButton
                 | TabSidebarItem::NotificationsBlockButton
                 | TabSidebarItem::OpacityToggleButton
+                | TabSidebarItem::UngroupPane { .. }
                 | TabSidebarItem::AgentsGroupHeading { .. } => {
                     context.set_cursor(Some(MouseCursor::Hand));
                 }

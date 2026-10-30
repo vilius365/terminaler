@@ -1,6 +1,6 @@
 use crate::domain::DomainId;
 use crate::pane::*;
-use crate::pane_group::{GroupState, PaneStack, Unit};
+use crate::pane_group::{GroupState, PaneStack, PaneUnitInfo, Unit};
 use crate::renderable::StableCursorPosition;
 use crate::session_state::{layout_leaves, PaneLayoutNode, SplitDirectionState};
 use crate::{Mux, MuxNotification, WindowId};
@@ -1183,6 +1183,11 @@ impl Tab {
         self.inner.lock().stack_join_with(target)
     }
 
+    /// Group and stack membership of every pane in the tab.
+    pub fn pane_unit_info(&self) -> HashMap<PaneId, PaneUnitInfo> {
+        self.inner.lock().pane_unit_info()
+    }
+
     /// Dissolve the active pane's group back into plain panes. Returns false
     /// when the active pane is in no group or its group sits in a stack.
     pub fn ungroup_active(&self) -> bool {
@@ -1781,6 +1786,27 @@ impl TabInner {
             return false;
         };
         self.group_units(active, neighbour, direction)
+    }
+
+    fn pane_unit_info(&self) -> HashMap<PaneId, PaneUnitInfo> {
+        let ids = self.pane.as_ref().map(leaf_order).unwrap_or_default();
+        ids.into_iter()
+            .map(|id| {
+                let unit = self.groups.unit_of(id);
+                let stack = self.groups.stack_of(&unit);
+                let on_show = !self.hidden.contains(&id);
+                let info = PaneUnitInfo {
+                    group: match unit {
+                        Unit::Group(g) => Some(g),
+                        Unit::Pane(_) => None,
+                    },
+                    stack,
+                    stack_len: stack.map_or(1, |i| self.groups.stacks[i].units.len()),
+                    on_show,
+                };
+                (id, info)
+            })
+            .collect()
     }
 
     fn group_with(&mut self, target: PaneId) -> bool {
@@ -4277,6 +4303,42 @@ mod test {
         activate(&tab, 1);
         assert!(!tab.stack_join_with(1));
         assert!(tab.hidden_pane_ids().is_empty());
+    }
+
+    #[test]
+    fn pane_unit_info_for_plain_panes_has_no_group_or_stack() {
+        let (tab, _) = three_across();
+        let info = tab.pane_unit_info();
+        for id in 1..=3 {
+            assert_eq!(None, info[&id].group);
+            assert_eq!(None, info[&id].stack);
+            assert!(info[&id].on_show);
+        }
+    }
+
+    #[test]
+    fn pane_unit_info_marks_group_members_with_one_group() {
+        let (tab, _) = three_across();
+        activate(&tab, 1);
+        assert!(tab.group_panes(PaneDirection::Right));
+        let info = tab.pane_unit_info();
+        assert!(info[&1].group.is_some());
+        assert_eq!(info[&1].group, info[&2].group);
+        assert_eq!(None, info[&3].group);
+    }
+
+    #[test]
+    fn pane_unit_info_marks_stacked_units_and_which_is_on_show() {
+        let tab = stacked_groups();
+        let info = tab.pane_unit_info();
+        let stack = info[&1].stack;
+        assert!(stack.is_some());
+        for id in 1..=4 {
+            assert_eq!(stack, info[&id].stack);
+            assert_eq!(2, info[&id].stack_len);
+        }
+        assert!(info[&1].on_show && info[&4].on_show);
+        assert!(!info[&2].on_show && !info[&3].on_show);
     }
 
     #[test]
