@@ -60,6 +60,15 @@ pub enum PaneLayoutNode {
         /// Whether this pane was the active pane.
         #[serde(default)]
         is_active: bool,
+        /// Id shared by the panes of one group.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        group: Option<u32>,
+        /// Id shared by the units of one stack.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        stack: Option<u32>,
+        /// Position of this pane's unit within its stack.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        stack_pos: Option<u32>,
     },
     /// A split containing two children.
     Split {
@@ -72,6 +81,36 @@ pub enum PaneLayoutNode {
         /// Second (right/bottom) child.
         second: Box<PaneLayoutNode>,
     },
+}
+
+/// Group and stack membership of one leaf of a saved layout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LeafUnitInfo {
+    pub group: Option<u32>,
+    pub stack: Option<u32>,
+    pub stack_pos: Option<u32>,
+}
+
+/// The leaves of `layout` in order, which is the order a rebuilt tab lists
+/// its panes in.
+pub fn layout_leaves(layout: &PaneLayoutNode) -> Vec<LeafUnitInfo> {
+    match layout {
+        PaneLayoutNode::Pane {
+            group,
+            stack,
+            stack_pos,
+            ..
+        } => vec![LeafUnitInfo {
+            group: *group,
+            stack: *stack,
+            stack_pos: *stack_pos,
+        }],
+        PaneLayoutNode::Split { first, second, .. } => {
+            let mut leaves = layout_leaves(first);
+            leaves.extend(layout_leaves(second));
+            leaves
+        }
+    }
 }
 
 /// Split direction for serialization.
@@ -170,6 +209,9 @@ mod tests {
                             command: Some("bash".into()),
                             hidden: false,
                             is_active: true,
+                            group: None,
+                            stack: None,
+                            stack_pos: None,
                         },
                     },
                     TabState {
@@ -182,12 +224,18 @@ mod tests {
                                 command: None,
                                 hidden: false,
                                 is_active: true,
+                                group: None,
+                                stack: None,
+                                stack_pos: None,
                             }),
                             second: Box::new(PaneLayoutNode::Pane {
                                 cwd: Some(PathBuf::from("/home/user/project")),
                                 command: None,
                                 hidden: false,
                                 is_active: false,
+                                group: None,
+                                stack: None,
+                                stack_pos: None,
                             }),
                         },
                     },
@@ -212,5 +260,22 @@ mod tests {
             path.to_string_lossy().contains("terminaler")
                 || path.to_string_lossy().contains("Terminaler")
         );
+    }
+
+    #[test]
+    fn old_session_json_without_group_fields_loads_with_no_groups() {
+        let json = r#"{"type":"pane","cwd":null,"hidden":false,"is_active":true}"#;
+        let node: PaneLayoutNode = serde_json::from_str(json).unwrap();
+        match node {
+            PaneLayoutNode::Pane {
+                group,
+                stack,
+                stack_pos,
+                ..
+            } => {
+                assert_eq!((None, None, None), (group, stack, stack_pos));
+            }
+            other => panic!("expected a pane, got {:?}", other),
+        }
     }
 }

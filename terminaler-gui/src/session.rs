@@ -121,6 +121,8 @@ pub async fn restore_session(
                         tab.toggle_pane_hidden(pane_id);
                     }
                 }
+
+                tab.restore_groups(&tab_state.layout);
             } else {
                 // Additional tabs: spawn a new tab in the same window
                 let tab = domain.spawn(size, None, first_cwd, window_id).await?;
@@ -154,6 +156,8 @@ pub async fn restore_session(
                         tab.toggle_pane_hidden(pane_id);
                     }
                 }
+
+                tab.restore_groups(&tab_state.layout);
             }
         }
 

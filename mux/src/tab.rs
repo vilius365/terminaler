@@ -2,7 +2,7 @@ use crate::domain::DomainId;
 use crate::pane::*;
 use crate::pane_group::{GroupState, PaneStack, Unit};
 use crate::renderable::StableCursorPosition;
-use crate::session_state::{PaneLayoutNode, SplitDirectionState};
+use crate::session_state::{layout_leaves, PaneLayoutNode, SplitDirectionState};
 use crate::{Mux, MuxNotification, WindowId};
 use bintree::PathBranch;
 use config::configuration;
@@ -304,6 +304,7 @@ fn convert_tree_to_session_layout(
     tree: &Tree,
     active: Option<&Arc<dyn Pane>>,
     hidden: &HashSet<PaneId>,
+    groups: &GroupState,
 ) -> PaneLayoutNode {
     match tree {
         Tree::Empty => PaneLayoutNode::Pane {
@@ -311,6 +312,9 @@ fn convert_tree_to_session_layout(
             command: None,
             hidden: false,
             is_active: false,
+            group: None,
+            stack: None,
+            stack_pos: None,
         },
         Tree::Leaf(pane) => {
             let cwd = pane
@@ -318,11 +322,29 @@ fn convert_tree_to_session_layout(
                 .and_then(|u| u.to_file_path().ok())
                 .map(|p| p.into());
             let is_active = active.map_or(false, |a| a.pane_id() == pane.pane_id());
+            let unit = groups.unit_of(pane.pane_id());
+            let (stack, stack_pos) = match groups.stack_of(&unit) {
+                Some(index) => (
+                    Some(index as u32),
+                    groups.stacks[index]
+                        .units
+                        .iter()
+                        .position(|u| *u == unit)
+                        .map(|pos| pos as u32),
+                ),
+                None => (None, None),
+            };
             PaneLayoutNode::Pane {
                 cwd,
                 command: None,
                 hidden: hidden.contains(&pane.pane_id()),
                 is_active,
+                group: match unit {
+                    Unit::Group(id) => Some(id),
+                    Unit::Pane(_) => None,
+                },
+                stack,
+                stack_pos,
             }
         }
         Tree::Node { left, right, data } => {
@@ -352,8 +374,8 @@ fn convert_tree_to_session_layout(
             PaneLayoutNode::Split {
                 direction,
                 ratio,
-                first: Box::new(convert_tree_to_session_layout(left, active, hidden)),
-                second: Box::new(convert_tree_to_session_layout(right, active, hidden)),
+                first: Box::new(convert_tree_to_session_layout(left, active, hidden, groups)),
+                second: Box::new(convert_tree_to_session_layout(right, active, hidden, groups)),
             }
         }
     }
@@ -1130,6 +1152,14 @@ impl Tab {
         self.inner.lock().swap_panes(a, b)
     }
 
+    /// Rebuild the groups and stacks a saved `layout` recorded, once the
+    /// tab has its panes (in the saved order) and its hidden panes back.
+    /// Returns false, leaving the tab with no groups, when the layout does
+    /// not describe valid groups for this tab's tree.
+    pub fn restore_groups(&self, layout: &PaneLayoutNode) -> bool {
+        self.inner.lock().restore_groups(layout)
+    }
+
     /// Bind the active unit and its neighbour in `direction` (Up, Down, Left
     /// or Right) into one group. Returns false, changing nothing, when there
     /// is no neighbour, both are already one unit, either sits in a stack,
@@ -1456,12 +1486,17 @@ impl TabInner {
     fn session_layout_tree(&mut self) -> PaneLayoutNode {
         let active = self.get_active_pane();
         match self.pane.as_ref() {
-            Some(tree) => convert_tree_to_session_layout(tree, active.as_ref(), &self.hidden),
+            Some(tree) => {
+                convert_tree_to_session_layout(tree, active.as_ref(), &self.hidden, &self.groups)
+            }
             None => PaneLayoutNode::Pane {
                 cwd: None,
                 command: None,
                 hidden: false,
                 is_active: false,
+                group: None,
+                stack: None,
+                stack_pos: None,
             },
         }
     }
@@ -1634,6 +1669,88 @@ impl TabInner {
         let size = self.size;
         self.resize(size);
         Mux::try_get().map(|mux| mux.notify(MuxNotification::TabResized(self.id)));
+    }
+
+    fn restore_groups(&mut self, layout: &PaneLayoutNode) -> bool {
+        let leaves = layout_leaves(layout);
+        let panes: Vec<PaneId> = self
+            .iter_panes_ignoring_zoom()
+            .iter()
+            .map(|p| p.pane.pane_id())
+            .collect();
+        if leaves.len() != panes.len() {
+            return false;
+        }
+
+        let mut group_members: Vec<(u32, Vec<PaneId>)> = vec![];
+        let mut stack_units: Vec<(u32, Vec<(u32, Vec<PaneId>)>)> = vec![];
+        for (leaf, pane) in leaves.iter().zip(&panes) {
+            if let Some(group) = leaf.group {
+                match group_members.iter_mut().find(|(id, _)| *id == group) {
+                    Some((_, members)) => members.push(*pane),
+                    None => group_members.push((group, vec![*pane])),
+                }
+            }
+            if let (Some(stack), Some(pos)) = (leaf.stack, leaf.stack_pos) {
+                let units = match stack_units.iter_mut().find(|(id, _)| *id == stack) {
+                    Some((_, units)) => units,
+                    None => {
+                        stack_units.push((stack, vec![]));
+                        &mut stack_units.last_mut().unwrap().1
+                    }
+                };
+                match units.iter_mut().find(|(p, _)| *p == pos) {
+                    Some((_, members)) => members.push(*pane),
+                    None => units.push((pos, vec![*pane])),
+                }
+            }
+        }
+
+        let mut state = GroupState::default();
+        for (_, members) in group_members {
+            state.create_group(members);
+        }
+        for (_, mut units) in stack_units {
+            units.sort_by_key(|(pos, _)| *pos);
+            let units: Vec<Unit> = units
+                .iter()
+                .map(|(_, members)| state.unit_of(members[0]))
+                .collect();
+            let visible: Vec<usize> = units
+                .iter()
+                .enumerate()
+                .filter(|(_, unit)| {
+                    state
+                        .unit_panes(unit)
+                        .iter()
+                        .all(|p| !self.hidden.contains(p))
+                })
+                .map(|(index, _)| index)
+                .collect();
+            let [active] = visible[..] else {
+                log::warn!("saved stack has {} visible units; dropping groups", visible.len());
+                return false;
+            };
+            state.stacks.push(PaneStack { units, active });
+        }
+
+        let valid = self.pane.as_ref().map_or(false, |tree| {
+            match state.validate(&subtree_leaf_sets(tree), &self.hidden) {
+                Ok(()) => true,
+                Err(err) => {
+                    log::warn!("saved pane groups do not fit the layout: {}", err);
+                    false
+                }
+            }
+        });
+        if !valid {
+            return false;
+        }
+        self.groups = state;
+        if let Some(active) = self.get_active_pane().map(|p| p.pane_id()) {
+            self.groups.note_active(active);
+        }
+        true
     }
 
     fn group_panes(&mut self, direction: PaneDirection) -> bool {
@@ -3276,7 +3393,7 @@ impl TabInner {
         // keep focus_layout's shape.
         self.focus_arranged = false;
 
-        let mut split_ids: (Option<PaneId>, Option<PaneId>) = (None, None);
+        let split_ids: (PaneId, PaneId);
         {
             let split_info = self
                 .compute_split_size(pane_index, request)
@@ -3360,7 +3477,7 @@ impl TabInner {
             };
 
             let existing_pane = Arc::clone(cursor.leaf_mut().unwrap());
-            split_ids = (Some(existing_pane.pane_id()), Some(pane.pane_id()));
+            split_ids = (existing_pane.pane_id(), pane.pane_id());
 
             let (pane1, pane2) = if request.target_is_second {
                 (existing_pane, pane)
@@ -3393,9 +3510,7 @@ impl TabInner {
             }
         }
 
-        if let (Some(existing_id), Some(new_id)) = (split_ids.0, split_ids.1) {
-            self.groups.adopt(existing_id, new_id);
-        }
+        self.groups.adopt(split_ids.0, split_ids.1);
 
         log::debug!("split info after split: {:#?}", self.iter_splits());
         log::debug!("pane info after split: {:#?}", self.iter_panes());
@@ -4220,6 +4335,50 @@ mod test {
             .unwrap();
         assert_eq!(vec![vec![1, 2, 9]], group_members(&tab));
         assert_valid(&tab);
+    }
+
+    #[test]
+    fn group_round_trips_through_session_layout() {
+        let (tab, _) = three_across();
+        activate(&tab, 1);
+        assert!(tab.group_panes(PaneDirection::Right));
+        let layout = tab.session_layout_tree();
+
+        // The GUI rebuilds the same tree shape, then asks for the groups.
+        let (fresh, _) = three_across();
+        activate(&fresh, 1);
+        assert!(fresh.group_panes(PaneDirection::Right));
+        fresh.inner.lock().groups = GroupState::default();
+        assert!(fresh.restore_groups(&layout));
+        assert_eq!(vec![vec![1, 2]], group_members(&fresh));
+        assert_valid(&fresh);
+    }
+
+    #[test]
+    fn stack_with_hidden_unit_round_trips() {
+        let tab = stacked_groups();
+        let layout = tab.session_layout_tree();
+
+        let fresh = stacked_groups();
+        fresh.inner.lock().groups = GroupState::default();
+        assert!(fresh.restore_groups(&layout));
+        assert_eq!(1, stack_count(&fresh));
+        assert_eq!(vec![1, 4], visible_ids(&fresh));
+        assert_valid(&fresh);
+        assert!(fresh.stack_cycle(PaneDirection::Next));
+        assert_eq!(vec![2, 3], visible_ids(&fresh));
+    }
+
+    #[test]
+    fn restoring_a_layout_that_does_not_fit_the_tree_leaves_no_groups() {
+        let (tab, _) = three_across();
+        activate(&tab, 1);
+        assert!(tab.group_panes(PaneDirection::Right));
+        let layout = tab.session_layout_tree();
+
+        let four = four_panes();
+        assert!(!four.restore_groups(&layout));
+        assert!(group_members(&four).is_empty());
     }
 
     #[test]
