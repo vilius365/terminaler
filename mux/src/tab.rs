@@ -684,9 +684,11 @@ fn collect_visible_panes(
                     left_tree, &data.first, left, top,
                     active_idx, zoomed_id, hidden, order, panes,
                 );
+                // One cell of divider sits between the halves, as in
+                // `iter_panes_impl`.
                 let (right_left, right_top) = match data.direction {
-                    SplitDirection::Horizontal => (left + data.first.cols as usize, top),
-                    SplitDirection::Vertical => (left, top + data.first.rows as usize),
+                    SplitDirection::Horizontal => (left + data.first.cols as usize + 1, top),
+                    SplitDirection::Vertical => (left, top + data.first.rows as usize + 1),
                 };
                 collect_visible_panes(
                     right_tree, &data.second, right_left, right_top,
@@ -1251,7 +1253,9 @@ impl Tab {
             Err(err) => {
                 // Never lose a running pane: put it back somewhere.
                 log::error!("dock_pane failed, restoring the pane: {:#}", err);
-                if let Err(err) = self.split_and_insert(0, SplitRequest::default(), pane) {
+                // Index 0 may be a hidden pane; put it back beside one on show.
+                let visible = self.iter_panes().first().map_or(0, |p| p.index);
+                if let Err(err) = self.split_and_insert(visible, SplitRequest::default(), pane) {
                     log::error!("dock_pane could not restore the pane: {:#}", err);
                 }
                 false
@@ -1573,18 +1577,18 @@ impl TabInner {
                 reveal.push(unit);
             }
         }
-        if reveal.is_empty() && !changed {
-            self.debug_validate_groups();
-            return;
-        }
         for unit in &reveal {
             self.set_unit_hidden(unit, false);
         }
         if self.pane.as_ref().map_or(true, |t| matches!(t, Tree::Empty)) {
             return;
         }
-        self.refresh_after_unit_change();
+        if changed || !reveal.is_empty() {
+            self.refresh_after_unit_change();
+        }
 
+        // Removing panes shifts the active index; it may now name a pane
+        // that is hidden.
         let active_hidden = self
             .get_active_pane()
             .map_or(false, |p| self.hidden.contains(&p.pane_id()));
@@ -1858,6 +1862,38 @@ impl TabInner {
         true
     }
 
+    /// Focusing a pane that is hidden inside a stack brings its unit on show.
+    fn reveal_stacked_pane(&mut self, pane: PaneId) {
+        if !self.hidden.contains(&pane) {
+            return;
+        }
+        let unit = self.groups.unit_of(pane);
+        self.show_stack_unit(&unit);
+    }
+
+    /// Put `unit` on show in its stack, hiding the unit that was there.
+    /// Returns false when `unit` is in no stack or already on show.
+    fn show_stack_unit(&mut self, unit: &Unit) -> bool {
+        let Some(index) = self.groups.stack_of(unit) else {
+            return false;
+        };
+        let stack = &self.groups.stacks[index];
+        let Some(to) = stack.units.iter().position(|u| u == unit) else {
+            return false;
+        };
+        if to == stack.active {
+            return false;
+        }
+        let old = stack.units[stack.active].clone();
+        // Show the new unit before hiding the old one: the tab never holds
+        // zero visible panes.
+        self.set_unit_hidden(unit, false);
+        self.set_unit_hidden(&old, true);
+        self.groups.stacks[index].active = to;
+        self.refresh_after_unit_change();
+        true
+    }
+
     fn stack_cycle(&mut self, direction: PaneDirection) -> bool {
         let forward = match direction {
             PaneDirection::Next => true,
@@ -1878,15 +1914,10 @@ impl TabInner {
         }
         let from = stack.active;
         let to = if forward { (from + 1) % count } else { (from + count - 1) % count };
-        let (old, new) = (stack.units[from].clone(), stack.units[to].clone());
+        let new = stack.units[to].clone();
 
         self.set_zoomed(false);
-        // Show the new unit before hiding the old one: the tab never holds
-        // zero visible panes.
-        self.set_unit_hidden(&new, false);
-        self.set_unit_hidden(&old, true);
-        self.groups.stacks[index].active = to;
-        self.refresh_after_unit_change();
+        self.show_stack_unit(&new);
         if let Some(id) = self.unit_focus_pane(&new) {
             self.focus_pane_id(id);
         }
@@ -1960,7 +1991,8 @@ impl TabInner {
             // Never lose a running pane: put them back somewhere.
             log::error!("dock_unit could not find the target subtree");
             for pane in panes {
-                if let Err(err) = self.split_and_insert(0, SplitRequest::default(), pane) {
+                let visible = self.iter_panes().first().map_or(0, |p| p.index);
+                if let Err(err) = self.split_and_insert(visible, SplitRequest::default(), pane) {
                     log::error!("dock_unit could not restore a pane: {:#}", err);
                 }
             }
@@ -1976,6 +2008,21 @@ impl TabInner {
     }
 
     fn toggle_pane_hidden(&mut self, pane_id: PaneId) {
+        // A stacked pane is shown or hidden with its whole unit, by swapping
+        // the stack: hiding one pane of a unit would split the unit.
+        let unit = self.groups.unit_of(pane_id);
+        if self.groups.stack_of(&unit).is_some() {
+            if self.hidden.contains(&pane_id) {
+                if self.show_stack_unit(&unit) {
+                    if let Some(id) = self.unit_focus_pane(&unit) {
+                        self.focus_pane_id(id);
+                    }
+                }
+            } else {
+                log::warn!("pane {} is on show in a stack; cycle the stack instead", pane_id);
+            }
+            return;
+        }
         if self.hidden.contains(&pane_id) {
             // Unhide
             self.hidden.remove(&pane_id);
@@ -2917,21 +2964,16 @@ impl TabInner {
         };
 
         if matches!(direction, PaneDirection::Next | PaneDirection::Prev) {
-            let max_pane_id = panes.iter().map(|p| p.index).max().unwrap_or(active.index);
-
-            return Some(if direction == PaneDirection::Next {
-                if active.index == max_pane_id {
-                    0
-                } else {
-                    active.index + 1
-                }
+            // Step through the panes that are on show; indices may skip
+            // hidden panes.
+            let position = panes.iter().position(|p| p.index == active.index).unwrap_or(0);
+            let count = panes.len();
+            let target = if direction == PaneDirection::Next {
+                (position + 1) % count
             } else {
-                if active.index == 0 {
-                    max_pane_id
-                } else {
-                    active.index - 1
-                }
-            });
+                (position + count - 1) % count
+            };
+            return Some(panes[target].index);
         }
 
         let mut best = None;
@@ -3215,6 +3257,7 @@ impl TabInner {
             self.toggle_zoom();
         }
 
+        self.reveal_stacked_pane(pane.pane_id());
         if let Some(item) = self
             .iter_panes_ignoring_zoom()
             .iter()
@@ -3257,6 +3300,14 @@ impl TabInner {
 
     fn set_active_idx(&mut self, pane_index: usize) {
         let prior = self.get_active_pane();
+        let target = self
+            .iter_panes_ignoring_zoom()
+            .into_iter()
+            .find(|p| p.index == pane_index)
+            .map(|p| p.pane.pane_id());
+        if let Some(id) = target {
+            self.reveal_stacked_pane(id);
+        }
         self.active = pane_index;
         self.recency.tag(pane_index);
         if let Some(id) = self.get_active_pane().map(|p| p.pane_id()) {
@@ -3374,9 +3425,10 @@ impl TabInner {
         // a bogus split state (https://github.com/wez/wezterm/issues/723)
         self.set_zoomed(false);
 
+        // `pane_index` counts every pane, hidden ones included.
         self.iter_panes()
-            .iter()
-            .nth(pane_index)
+            .into_iter()
+            .find(|pos| pos.index == pane_index)
             .map(|pos| split_size_for_extent(&cell_dims, pos.width, pos.height, request))
     }
 
@@ -4379,6 +4431,110 @@ mod test {
         let four = four_panes();
         assert!(!four.restore_groups(&layout));
         assert!(group_members(&four).is_empty());
+    }
+
+    fn index_of(tab: &Tab, id: PaneId) -> usize {
+        tab.iter_panes_ignoring_zoom()
+            .iter()
+            .find(|p| p.pane.pane_id() == id)
+            .unwrap()
+            .index
+    }
+
+    #[test]
+    fn fix_split_size_in_a_stacked_tab_uses_the_all_pane_index() {
+        let tab = stacked_groups();
+        let idx = index_of(&tab, 1);
+        let split = tab.compute_split_size(idx, dock_right());
+        assert!(split.is_some(), "shown pane 1 at index {} must be splittable", idx);
+        tab.split_and_insert(idx, dock_right(), FakePane::new(9, split.unwrap().second))
+            .unwrap();
+        let mut groups = group_members(&tab);
+        groups.sort();
+        assert_eq!(vec![vec![1, 4, 9], vec![2, 3]], groups);
+        assert_valid(&tab);
+    }
+
+    #[test]
+    fn fix_directional_navigation_works_with_a_pane_hidden() {
+        let (tab, _) = three_across();
+        tab.toggle_pane_hidden(3);
+        activate(&tab, 1);
+        tab.activate_pane_direction(PaneDirection::Right);
+        assert_eq!(2, active_id(&tab), "the divider cell must count in visible geometry");
+        tab.activate_pane_direction(PaneDirection::Left);
+        assert_eq!(1, active_id(&tab));
+    }
+
+    #[test]
+    fn fix_join_works_after_a_stack_exists() {
+        let tab = four_panes();
+        activate(&tab, 2);
+        assert!(tab.group_panes(PaneDirection::Right));
+        activate(&tab, 1);
+        assert!(tab.stack_join(PaneDirection::Right));
+        assert_eq!(vec![1, 4], visible_ids(&tab));
+        // 1 now fills the {2,3} slot, to the right of 4; neighbours must
+        // still be found with panes hidden.
+        activate(&tab, 4);
+        assert!(tab.stack_join(PaneDirection::Right));
+        assert_eq!(vec![4], visible_ids(&tab));
+        assert_eq!(1, stack_count(&tab));
+        assert_valid(&tab);
+    }
+
+    #[test]
+    fn fix_lone_death_in_shown_group_keeps_focus_visible() {
+        let tab = stacked_groups();
+        activate(&tab, 1);
+        tab.remove_pane(1);
+        assert!(!tab.hidden_pane_ids().contains(&active_id(&tab)));
+        assert_valid(&tab);
+    }
+
+    #[test]
+    fn fix_next_and_prev_skip_hidden_panes() {
+        let tab = stacked_groups();
+        for start in [1, 4] {
+            for direction in [PaneDirection::Next, PaneDirection::Prev] {
+                activate(&tab, start);
+                tab.activate_pane_direction(direction);
+                assert!(
+                    [1, 4].contains(&active_id(&tab)),
+                    "{:?} from {} reached a hidden pane",
+                    direction,
+                    start
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn fix_toggle_hidden_on_a_stacked_pane_never_splits_a_unit() {
+        let tab = stacked_groups();
+        tab.toggle_pane_hidden(2);
+        assert_eq!(vec![2, 3], visible_ids(&tab));
+        assert_valid(&tab);
+        tab.toggle_pane_hidden(2);
+        assert_eq!(vec![2, 3], visible_ids(&tab), "hiding a shown stacked pane is refused");
+        assert_valid(&tab);
+    }
+
+    #[test]
+    fn fix_clicking_a_hidden_stacked_pane_brings_its_unit_into_view() {
+        let tab = stacked_groups();
+        tab.set_active_idx(index_of(&tab, 2));
+        assert_eq!(vec![2, 3], visible_ids(&tab));
+        assert!([2, 3].contains(&active_id(&tab)));
+        assert_valid(&tab);
+    }
+
+    #[test]
+    fn fix_dock_pane_in_a_stacked_tab_keeps_the_model_valid() {
+        let tab = stacked_groups();
+        assert!(tab.dock_pane(4, 1, dock_right()));
+        assert_valid(&tab);
+        assert!(tab.hidden_pane_ids().iter().all(|id| [2, 3].contains(id)));
     }
 
     #[test]
