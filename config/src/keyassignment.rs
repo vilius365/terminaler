@@ -357,6 +357,10 @@ pub enum PaneSelectMode {
     SwapWithActiveKeepFocus,
     MoveToNewTab,
     MoveToNewWindow,
+    /// Bind the active pane and the chosen one into a group.
+    GroupWithActive,
+    /// Move the active pane into the chosen pane's slot as a stack.
+    StackWithActive,
 }
 
 impl Default for PaneSelectMode {

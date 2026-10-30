@@ -912,6 +912,28 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             menubar: &["Window"],
             icon: Some("cod_multiple_windows"),
         },
+        PaneSelect(PaneSelectArguments {
+            mode: PaneSelectMode::GroupWithActive,
+            ..
+        }) => CommandDef {
+            brief: "Group the active pane with a pane you pick".into(),
+            doc: "Shows a letter on each pane; press one to bind the active pane and that pane into one group.".into(),
+            keys: vec![],
+            args: &[ArgType::ActivePane],
+            menubar: &["Window"],
+            icon: Some("md_select_group"),
+        },
+        PaneSelect(PaneSelectArguments {
+            mode: PaneSelectMode::StackWithActive,
+            ..
+        }) => CommandDef {
+            brief: "Stack the active pane with a pane you pick".into(),
+            doc: "Shows a letter on each pane; press one to move the active pane into that pane's slot, swappable with it.".into(),
+            keys: vec![],
+            args: &[ArgType::ActivePane],
+            menubar: &["Window"],
+            icon: Some("md_layers"),
+        },
         DecreaseFontSize => CommandDef {
             brief: "Decrease font size".into(),
             doc: "Scales the font size smaller by 10%".into(),
@@ -2242,6 +2264,16 @@ fn compute_default_actions() -> Vec<KeyAssignment> {
         PaneSelect(PaneSelectArguments {
             alphabet: String::new(),
             mode: PaneSelectMode::MoveToNewWindow,
+            show_pane_ids: false,
+        }),
+        PaneSelect(PaneSelectArguments {
+            alphabet: String::new(),
+            mode: PaneSelectMode::GroupWithActive,
+            show_pane_ids: false,
+        }),
+        PaneSelect(PaneSelectArguments {
+            alphabet: String::new(),
+            mode: PaneSelectMode::StackWithActive,
             show_pane_ids: false,
         }),
         RotatePanes(RotationDirection::Clockwise),

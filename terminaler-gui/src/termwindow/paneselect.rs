@@ -10,6 +10,7 @@ use crate::TermWindow;
 use config::keyassignment::{KeyAssignment, PaneSelectArguments, PaneSelectMode};
 use config::Dimension;
 use mux::Mux;
+use window::WindowOps;
 use std::cell::{Ref, RefCell};
 use terminaler_term::{KeyCode, KeyModifiers, MouseEvent};
 
@@ -187,6 +188,22 @@ impl PaneSelector {
                         pane_index,
                         self.mode == PaneSelectMode::SwapWithActiveKeepFocus,
                     );
+                }
+                PaneSelectMode::GroupWithActive | PaneSelectMode::StackWithActive => {
+                    if let Some(pos) = panes.iter().find(|p| p.index == pane_index) {
+                        let target = pos.pane.pane_id();
+                        let done = if self.mode == PaneSelectMode::GroupWithActive {
+                            tab.group_with(target)
+                        } else {
+                            tab.stack_join_with(target)
+                        };
+                        if done {
+                            term_window.invalidate_tab_sidebar();
+                            if let Some(window) = term_window.window.as_ref() {
+                                window.invalidate();
+                            }
+                        }
+                    }
                 }
                 PaneSelectMode::MoveToNewWindow => {
                     if let Some(pos) = panes.iter().find(|p| p.index == pane_index) {

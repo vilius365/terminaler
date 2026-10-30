@@ -1170,6 +1170,19 @@ impl Tab {
         self.inner.lock().group_panes(direction)
     }
 
+    /// Bind the active unit and the unit holding the visible pane `target`
+    /// into one group, wherever `target` sits. Same refusals as
+    /// `group_panes`, plus: `target` is the active pane or not visible.
+    pub fn group_with(&self, target: PaneId) -> bool {
+        self.inner.lock().group_with(target)
+    }
+
+    /// Like `stack_join`, for the unit holding the visible pane `target`
+    /// instead of a neighbour in a direction.
+    pub fn stack_join_with(&self, target: PaneId) -> bool {
+        self.inner.lock().stack_join_with(target)
+    }
+
     /// Dissolve the active pane's group back into plain panes. Returns false
     /// when the active pane is in no group or its group sits in a stack.
     pub fn ungroup_active(&self) -> bool {
@@ -1767,6 +1780,43 @@ impl TabInner {
         let Some(neighbour) = self.neighbour_pane_id(direction) else {
             return false;
         };
+        self.group_units(active, neighbour, direction)
+    }
+
+    fn group_with(&mut self, target: PaneId) -> bool {
+        let Some((active, direction)) = self.direction_to_visible(target) else {
+            return false;
+        };
+        self.group_units(active, target, direction)
+    }
+
+    /// The active pane and the compass direction from it to the visible pane
+    /// `target`; None for the active pane itself, a hidden or unknown pane,
+    /// or a zoomed tab.
+    fn direction_to_visible(&mut self, target: PaneId) -> Option<(PaneId, PaneDirection)> {
+        if self.zoomed.is_some() {
+            return None;
+        }
+        let active = self.get_active_pane()?.pane_id();
+        if active == target {
+            return None;
+        }
+        let panes = self.iter_panes();
+        let from = panes.iter().find(|p| p.pane.pane_id() == active)?;
+        let to = panes.iter().find(|p| p.pane.pane_id() == target)?;
+        let dx = to.left as isize - from.left as isize;
+        let dy = to.top as isize - from.top as isize;
+        let direction = if dx.abs() >= dy.abs() {
+            if dx >= 0 { PaneDirection::Right } else { PaneDirection::Left }
+        } else if dy >= 0 {
+            PaneDirection::Down
+        } else {
+            PaneDirection::Up
+        };
+        Some((active, direction))
+    }
+
+    fn group_units(&mut self, active: PaneId, neighbour: PaneId, direction: PaneDirection) -> bool {
         let a = self.groups.unit_of(active);
         let b = self.groups.unit_of(neighbour);
         if a == b || self.groups.stack_of(&a).is_some() || self.groups.stack_of(&b).is_some() {
@@ -1823,6 +1873,17 @@ impl TabInner {
         let Some(neighbour) = self.neighbour_pane_id(direction) else {
             return false;
         };
+        self.stack_units(active, neighbour)
+    }
+
+    fn stack_join_with(&mut self, target: PaneId) -> bool {
+        let Some((active, _)) = self.direction_to_visible(target) else {
+            return false;
+        };
+        self.stack_units(active, target)
+    }
+
+    fn stack_units(&mut self, active: PaneId, neighbour: PaneId) -> bool {
         let a = self.groups.unit_of(active);
         let b = self.groups.unit_of(neighbour);
         if a == b || self.groups.stack_of(&a).is_some() {
@@ -4179,6 +4240,43 @@ mod test {
         assert!(!tab.group_panes(PaneDirection::Left));
         assert!(!tab.group_panes(PaneDirection::Next));
         assert!(group_members(&tab).is_empty());
+    }
+
+    #[test]
+    fn group_with_binds_active_pane_to_a_pane_that_is_not_adjacent() {
+        let (tab, _) = three_across();
+        activate(&tab, 1);
+        assert!(tab.group_with(3));
+        assert_eq!(vec![vec![1, 3]], group_members(&tab));
+        assert_eq!(1, active_id(&tab));
+        assert_valid(&tab);
+    }
+
+    #[test]
+    fn group_with_refuses_the_active_pane_and_unknown_panes() {
+        let (tab, _) = three_across();
+        activate(&tab, 1);
+        assert!(!tab.group_with(1));
+        assert!(!tab.group_with(99));
+        assert!(group_members(&tab).is_empty());
+    }
+
+    #[test]
+    fn stack_join_with_stacks_active_unit_onto_a_far_pane() {
+        let (tab, _) = three_across();
+        activate(&tab, 1);
+        assert!(tab.stack_join_with(3));
+        assert_eq!(set(&[3]), tab.hidden_pane_ids());
+        assert_eq!(1, active_id(&tab));
+        assert_valid(&tab);
+    }
+
+    #[test]
+    fn stack_join_with_refuses_the_active_pane() {
+        let (tab, _) = three_across();
+        activate(&tab, 1);
+        assert!(!tab.stack_join_with(1));
+        assert!(tab.hidden_pane_ids().is_empty());
     }
 
     #[test]
