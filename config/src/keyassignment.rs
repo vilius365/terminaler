@@ -695,6 +695,8 @@ pub enum KeyAssignment {
     ToggleRemoteAccess,
     /// Toggle the vertical tab sidebar on/off.
     ToggleTabSidebar,
+    /// Fold the top brief bar to one line, or unfold it.
+    ToggleBriefBar,
     /// Open the New Claude Agent overlay: create a git worktree and
     /// spawn a Claude session in it using the claude-code template.
     NewClaudeAgent,

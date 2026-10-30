@@ -495,6 +495,8 @@ pub enum UIItemType {
     TabSidebar(TabSidebarItem),
     /// The brief bar strip; inert, it only swallows clicks.
     BriefBar,
+    /// The chevron / summary that folds or unfolds the brief bar.
+    BriefBarToggle,
     /// A brief bar cell that resolves to an attachable tmux session.
     BriefBarSession { box_name: String, session: String },
 }
@@ -4991,6 +4993,9 @@ impl TermWindow {
                 mode,
             } => {
                 self.attach_tmux_session(box_name, session, *mode);
+            }
+            ToggleBriefBar => {
+                self.toggle_brief_bar();
             }
             ToggleTabSidebar => {
                 self.show_tab_sidebar = !self.show_tab_sidebar;

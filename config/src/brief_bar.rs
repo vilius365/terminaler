@@ -65,6 +65,19 @@ impl BriefBarConfig {
     pub fn strip_height_px(&self, cell_height: f32) -> f32 {
         self.effective_rows() as f32 * cell_height + BRIEF_BAR_PADDING_PX
     }
+
+    /// Height of the strip when folded down to its one-line summary.
+    pub fn collapsed_strip_height_px(&self, cell_height: f32) -> f32 {
+        cell_height + BRIEF_BAR_PADDING_PX
+    }
+
+    pub fn strip_height_px_for(&self, collapsed: bool, cell_height: f32) -> f32 {
+        if collapsed {
+            self.collapsed_strip_height_px(cell_height)
+        } else {
+            self.strip_height_px(cell_height)
+        }
+    }
 }
 
 /// Vertical padding added to the strip on top of its text rows.
@@ -124,5 +137,14 @@ mod tests {
         assert_eq!(c.strip_height_px(10.0), 14.0);
         c.rows = 9;
         assert_eq!(c.strip_height_px(10.0), 44.0);
+    }
+
+    #[test]
+    fn collapsed_strip_is_one_row_whatever_the_configured_rows() {
+        let mut c = BriefBarConfig::default();
+        c.rows = 4;
+        assert_eq!(c.collapsed_strip_height_px(20.0), 24.0);
+        assert_eq!(c.strip_height_px_for(true, 20.0), 24.0);
+        assert_eq!(c.strip_height_px_for(false, 20.0), 84.0);
     }
 }

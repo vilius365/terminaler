@@ -45,6 +45,7 @@ impl super::TermWindow {
             | UIItemType::Split(_)
             | UIItemType::ProfileDropdownItem(_)
             | UIItemType::BriefBar
+            | UIItemType::BriefBarToggle
             | UIItemType::BriefBarSession { .. }
             | UIItemType::TabSidebar(_) => {}
         }
@@ -60,6 +61,7 @@ impl super::TermWindow {
             | UIItemType::Split(_)
             | UIItemType::ProfileDropdownItem(_)
             | UIItemType::BriefBar
+            | UIItemType::BriefBarToggle
             | UIItemType::BriefBarSession { .. }
             | UIItemType::TabSidebar(_) => {}
         }
@@ -663,6 +665,11 @@ impl super::TermWindow {
                     context.set_cursor(Some(MouseCursor::Arrow));
                 }
             }
+            UIItemType::BriefBarToggle => match event.kind {
+                WMEK::Move => context.set_cursor(Some(MouseCursor::Hand)),
+                WMEK::Press(MousePress::Left) => self.toggle_brief_bar(),
+                _ => {}
+            },
             UIItemType::BriefBarSession {
                 ref box_name,
                 ref session,

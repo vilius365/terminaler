@@ -2126,6 +2126,14 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             menubar: &["View"],
             icon: None,
         },
+        ToggleBriefBar => CommandDef {
+            brief: "Collapse or expand the top bar".into(),
+            doc: "Folds the brief bar to a one-line summary, or unfolds it.".into(),
+            keys: vec![],
+            args: &[ArgType::ActiveWindow],
+            menubar: &["View"],
+            icon: Some("md_unfold_less_horizontal"),
+        },
         ToggleTabSidebar => CommandDef {
             brief: "Toggle Tab Sidebar".into(),
             doc: "Toggle the vertical tab sidebar on/off".into(),
@@ -2334,6 +2342,7 @@ fn compute_default_actions() -> Vec<KeyAssignment> {
         ColorSchemePicker,
         TmuxSessionPicker,
         ToggleTabSidebar,
+        ToggleBriefBar,
         // ----------------- Terminaler Claude Agents
         NewClaudeAgent,
         AgentDashboard,

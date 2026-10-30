@@ -236,7 +236,10 @@ impl crate::TermWindow {
         render_metrics: &RenderMetrics,
     ) -> f32 {
         match config.brief_bar.as_ref() {
-            Some(b) if b.enabled => b.strip_height_px(render_metrics.cell_size.height as f32),
+            Some(b) if b.enabled => b.strip_height_px_for(
+                crate::brief_bar::is_collapsed(),
+                render_metrics.cell_size.height as f32,
+            ),
             _ => 0.,
         }
     }
@@ -255,7 +258,12 @@ impl crate::TermWindow {
         crate::brief_bar::ensure_running();
 
         let cfg = self.config.brief_bar.clone().unwrap_or_default();
-        let rows = cfg.effective_rows() as usize;
+        let collapsed = crate::brief_bar::is_collapsed();
+        let rows = if collapsed {
+            1
+        } else {
+            cfg.effective_rows() as usize
+        };
         let width = self.dimensions.pixel_width as f32;
         let border = self.get_os_border();
         let y0 = (border.top.get() as f32 - strip_h).max(0.);
@@ -269,7 +277,11 @@ impl crate::TermWindow {
             .iter()
             .map(|r| crate::brief_bar::match_session(r, tmux_cfg.as_ref(), &tmux_snaps))
             .collect();
-        let fp = fingerprint(&snap, &targets, rows, width, strip_h, self.dimensions.dpi);
+        let fp = format!(
+            "c{}|{}",
+            collapsed,
+            fingerprint(&snap, &targets, rows, width, strip_h, self.dimensions.dpi)
+        );
         let rebuild = self
             .brief_bar_cache
             .as_ref()
@@ -336,6 +348,16 @@ impl crate::TermWindow {
         let chars_for = |px: f32| ((px - 2. * CELL_PAD_X).max(0.) / avg_adv) as usize;
 
         let mut out: Vec<ComputedElement> = vec![];
+        let collapsed = crate::brief_bar::is_collapsed();
+        if collapsed {
+            let label = match snap.rows.len() {
+                0 => " \u{25b8} top bar \u{2014} no live sessions ".to_string(),
+                1 => " \u{25b8} top bar \u{2014} 1 live session ".to_string(),
+                n => format!(" \u{25b8} top bar \u{2014} {} live sessions ", n),
+            };
+            out.push(self.brief_toggle_chip(&font, &ctx, theme, label, 0., y0, avg_adv)?);
+            return Ok(out);
+        }
         let place = |parts: Vec<Element>,
                      x: f32,
                      row: usize,
@@ -484,7 +506,63 @@ impl crate::TermWindow {
             computed.translate(euclid::vec2((width - w - 4.).max(0.), y0 + 2.));
             out.push(computed);
         }
+        let chevron = " \u{25be} ".to_string();
+        let cw = chevron.chars().count() as f32 * avg_adv + 2. * CELL_PAD_X;
+        out.push(self.brief_toggle_chip(
+            &font,
+            &ctx,
+            theme,
+            chevron,
+            (width - cw).max(0.),
+            y0,
+            avg_adv,
+        )?);
         Ok(out)
+    }
+
+    /// A clickable chip that folds or unfolds the strip.
+    fn brief_toggle_chip(
+        &self,
+        font: &std::rc::Rc<terminaler_font::LoadedFont>,
+        ctx: &LayoutContext,
+        theme: &SidebarTheme,
+        label: String,
+        x: f32,
+        y0: f32,
+        avg_adv: f32,
+    ) -> anyhow::Result<ComputedElement> {
+        let w = label.chars().count() as f32 * avg_adv + 2. * CELL_PAD_X;
+        let el = Element::new(font, ElementContent::Text(label))
+            .display(DisplayType::Block)
+            .item_type(UIItemType::BriefBarToggle)
+            .padding(BoxDimension {
+                left: Dimension::Pixels(CELL_PAD_X),
+                right: Dimension::Pixels(CELL_PAD_X),
+                top: Dimension::Pixels(0.),
+                bottom: Dimension::Pixels(0.),
+            })
+            .colors(text_colors(theme.text_tertiary))
+            .hover_colors(Some(ElementColors {
+                border: BorderColor::default(),
+                bg: theme.bg_elevated.into(),
+                text: theme.text_primary.into(),
+            }))
+            .min_width(Some(Dimension::Pixels(w)));
+        let mut computed = self.compute_element(ctx, &el)?;
+        computed.translate(euclid::vec2(x, y0 + 2.));
+        Ok(computed)
+    }
+
+    pub fn toggle_brief_bar(&mut self) {
+        crate::brief_bar::toggle_collapsed();
+        self.brief_bar_cache = None;
+        self.invalidate_tab_sidebar();
+        self.invalidate_fancy_tab_bar();
+        if let Some(window) = self.window.as_ref().map(|w| w.clone()) {
+            use window::WindowOps;
+            self.apply_dimensions(&self.dimensions.clone(), None, &window);
+            window.invalidate();
+        }
     }
 
     fn brief_layout_ctx<'a>(

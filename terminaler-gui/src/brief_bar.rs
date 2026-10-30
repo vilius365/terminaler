@@ -42,6 +42,17 @@ pub struct BriefSnapshot {
 static STATE: OnceLock<Mutex<BriefSnapshot>> = OnceLock::new();
 static WAKE: OnceLock<(Mutex<bool>, Condvar)> = OnceLock::new();
 static STARTED: AtomicBool = AtomicBool::new(false);
+static COLLAPSED: AtomicBool = AtomicBool::new(false);
+
+/// Whether the strip is folded to its one-line summary.
+pub fn is_collapsed() -> bool {
+    COLLAPSED.load(Ordering::Relaxed)
+}
+
+/// Flip the folded state; returns the new value.
+pub fn toggle_collapsed() -> bool {
+    !COLLAPSED.fetch_xor(true, Ordering::Relaxed)
+}
 
 fn state() -> &'static Mutex<BriefSnapshot> {
     STATE.get_or_init(|| Mutex::new(BriefSnapshot::default()))

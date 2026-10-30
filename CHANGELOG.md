@@ -3,6 +3,8 @@
 ## 2026-10-30
 
 ### Added
+- **Pick a pane to group or stack with.** Command palette entries "Group the active pane with a pane you pick" and "Stack the active pane with a pane you pick" show a letter on every pane; press one to merge the active pane with it, wherever it sits. No shortcuts to remember.
+- **Collapsible top bar.** The brief bar folds to a one-line summary ("top bar — N live sessions") and unfolds again: click the chevron at its right end or the summary, or run "Collapse or expand the top bar" (`"ToggleBriefBar"`) from the palette. The state lasts until the window closes.
 - **Pane groups and stacks.** Two or more panes can be bound into a group that focuses, hides and shows as one pane, for example a Claude pane with a plain shell. Several groups (or lone panes) can share one slot as a stack, with one on show at a time. Four actions, unbound by default so you choose the keys: `{ "PaneGroup": "Right" }` (bind the active pane with its neighbour in that direction), `"PaneUngroup"`, `{ "PaneStackJoin": "Right" }` (move the active pane or group into the neighbour's slot) and `{ "PaneStackCycle": "Next" }` (or `"Prev"`). They also appear in the command palette. Closing a pane in a group closes the whole group, after the usual confirm. A pane split off a group member joins the group. Groups and stacks survive a restart through the saved session. Local mux domain only; the sidebar does not show groups yet. While any group exists, rotate and the focus layout do nothing, and swapping a group member is refused, because they would break the group.
 
 ### Fixed
