@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-10-30
+
+### Added
+- **Pane groups and stacks.** Two or more panes can be bound into a group that focuses, hides and shows as one pane, for example a Claude pane with a plain shell. Several groups (or lone panes) can share one slot as a stack, with one on show at a time. Four actions, unbound by default so you choose the keys: `{ "PaneGroup": "Right" }` (bind the active pane with its neighbour in that direction), `"PaneUngroup"`, `{ "PaneStackJoin": "Right" }` (move the active pane or group into the neighbour's slot) and `{ "PaneStackCycle": "Next" }` (or `"Prev"`). They also appear in the command palette. Closing a pane in a group closes the whole group, after the usual confirm. A pane split off a group member joins the group. Groups and stacks survive a restart through the saved session. Local mux domain only; the sidebar does not show groups yet. While any group exists, rotate and the focus layout do nothing, and swapping a group member is refused, because they would break the group.
+
+### Fixed
+- **Moving focus by direction could land on a hidden pane.** Pane indices counted only visible panes while the active-pane index counted all of them, so with a hidden pane Left/Right (and a click) could focus the wrong pane. Indices now count every pane.
+
 ## 2026-10-28
 
 ### Changed
