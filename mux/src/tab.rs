@@ -1,6 +1,6 @@
 use crate::domain::DomainId;
 use crate::pane::*;
-use crate::pane_group::GroupState;
+use crate::pane_group::{GroupState, PaneStack, Unit};
 use crate::renderable::StableCursorPosition;
 use crate::session_state::{PaneLayoutNode, SplitDirectionState};
 use crate::{Mux, MuxNotification, WindowId};
@@ -893,6 +893,20 @@ fn chain_subtree(
     }
 }
 
+/// The split that docks a unit on the side of its neighbour opposite
+/// `direction`: with the neighbour to the right, the unit lands on its left.
+fn dock_request(direction: PaneDirection, percent: u8) -> SplitRequest {
+    SplitRequest {
+        direction: match direction {
+            PaneDirection::Left | PaneDirection::Right => SplitDirection::Horizontal,
+            _ => SplitDirection::Vertical,
+        },
+        target_is_second: matches!(direction, PaneDirection::Left | PaneDirection::Up),
+        top_level: false,
+        size: SplitSize::Percent(percent),
+    }
+}
+
 fn cell_dimensions(size: &TerminalSize) -> TerminalSize {
     TerminalSize {
         rows: 1,
@@ -1092,6 +1106,41 @@ impl Tab {
     /// has hidden panes.
     pub fn swap_panes(&self, a: PaneId, b: PaneId) -> bool {
         self.inner.lock().swap_panes(a, b)
+    }
+
+    /// Bind the active unit and its neighbour in `direction` (Up, Down, Left
+    /// or Right) into one group. Returns false, changing nothing, when there
+    /// is no neighbour, both are already one unit, either sits in a stack,
+    /// or the tab is zoomed.
+    pub fn group_panes(&self, direction: PaneDirection) -> bool {
+        self.inner.lock().group_panes(direction)
+    }
+
+    /// Dissolve the active pane's group back into plain panes. Returns false
+    /// when the active pane is in no group or its group sits in a stack.
+    pub fn ungroup_active(&self) -> bool {
+        self.inner.lock().ungroup_active()
+    }
+
+    /// Move the active unit into the slot of its neighbour in `direction`
+    /// (Up, Down, Left or Right), making both a stack with the moved unit on
+    /// show. Returns false, changing nothing, when there is no neighbour, the
+    /// active unit is already stacked, or the tab is zoomed.
+    pub fn stack_join(&self, direction: PaneDirection) -> bool {
+        self.inner.lock().stack_join(direction)
+    }
+
+    /// Show the next (`Next`) or previous (`Prev`) unit of the active unit's
+    /// stack. Any other direction, or an active unit in no stack, returns
+    /// false.
+    pub fn stack_cycle(&self, direction: PaneDirection) -> bool {
+        self.inner.lock().stack_cycle(direction)
+    }
+
+    /// The panes that move with `pane`: its whole group, or just itself.
+    pub fn unit_panes_of(&self, pane: PaneId) -> Vec<PaneId> {
+        let inner = self.inner.lock();
+        inner.groups.unit_panes(&inner.groups.unit_of(pane))
     }
 
     /// Move every pane of `source` out of its place and dock them, chained
@@ -1447,6 +1496,218 @@ impl TabInner {
         Mux::try_get().map(|mux| mux.notify(MuxNotification::TabResized(self.id)));
     }
 
+    fn is_spatial(direction: PaneDirection) -> bool {
+        matches!(
+            direction,
+            PaneDirection::Up | PaneDirection::Down | PaneDirection::Left | PaneDirection::Right
+        )
+    }
+
+    /// The visible pane next to the active one in `direction`.
+    fn neighbour_pane_id(&mut self, direction: PaneDirection) -> Option<PaneId> {
+        let index = self.get_pane_direction(direction, false)?;
+        self.iter_panes()
+            .into_iter()
+            .find(|p| p.index == index)
+            .map(|p| p.pane.pane_id())
+    }
+
+    /// The pane that takes focus when `unit` is focused.
+    fn unit_focus_pane(&self, unit: &Unit) -> Option<PaneId> {
+        match unit {
+            Unit::Pane(id) => Some(*id),
+            Unit::Group(gid) => self
+                .groups
+                .groups
+                .iter()
+                .find(|g| g.id == *gid)
+                .map(|g| g.last_active),
+        }
+    }
+
+    fn focus_pane_id(&mut self, id: PaneId) {
+        let pane = self
+            .iter_panes_ignoring_zoom()
+            .into_iter()
+            .find(|p| p.pane.pane_id() == id)
+            .map(|p| p.pane);
+        if let Some(pane) = pane {
+            self.set_active_pane(&pane);
+        }
+    }
+
+    /// Show or hide every pane of `unit`. Edits the hidden set directly:
+    /// `toggle_pane_hidden` moves one pane at a time and refuses to hide the
+    /// last visible pane, which a unit swap passes through.
+    fn set_unit_hidden(&mut self, unit: &Unit, hidden: bool) {
+        for id in self.groups.unit_panes(unit) {
+            if hidden {
+                self.hidden.insert(id);
+            } else {
+                self.hidden.remove(&id);
+            }
+        }
+    }
+
+    fn debug_validate_groups(&self) {
+        if !cfg!(debug_assertions) {
+            return;
+        }
+        if let Some(tree) = &self.pane {
+            if let Err(err) = self.groups.validate(&subtree_leaf_sets(tree), &self.hidden) {
+                log::error!("pane group invariant broken: {}", err);
+                debug_assert!(false, "pane group invariant broken: {}", err);
+            }
+        }
+    }
+
+    fn refresh_after_unit_change(&mut self) {
+        let size = self.size;
+        self.resize(size);
+        Mux::try_get().map(|mux| mux.notify(MuxNotification::TabResized(self.id)));
+    }
+
+    fn group_panes(&mut self, direction: PaneDirection) -> bool {
+        if self.zoomed.is_some() || !Self::is_spatial(direction) {
+            return false;
+        }
+        let Some(active) = self.get_active_pane().map(|p| p.pane_id()) else {
+            return false;
+        };
+        let Some(neighbour) = self.neighbour_pane_id(direction) else {
+            return false;
+        };
+        let a = self.groups.unit_of(active);
+        let b = self.groups.unit_of(neighbour);
+        if a == b || self.groups.stack_of(&a).is_some() || self.groups.stack_of(&b).is_some() {
+            return false;
+        }
+        let panes_a = self.groups.unit_panes(&a);
+        let panes_b = self.groups.unit_panes(&b);
+        let union: HashSet<PaneId> = panes_a.iter().chain(panes_b.iter()).copied().collect();
+        let adjacent = self
+            .pane
+            .as_ref()
+            .map_or(false, |tree| subtree_leaf_sets(tree).contains(&union));
+        if !adjacent && !self.dock_unit(&panes_a, &panes_b, dock_request(direction, 50)) {
+            return false;
+        }
+
+        for unit in [&a, &b] {
+            if let Unit::Group(id) = unit {
+                self.groups.dissolve(*id);
+            }
+        }
+        let mut members = panes_a;
+        members.extend(panes_b);
+        let id = self.groups.create_group(members);
+        if let Some(group) = self.groups.groups.iter_mut().find(|g| g.id == id) {
+            group.last_active = active;
+        }
+        self.focus_pane_id(active);
+        self.debug_validate_groups();
+        true
+    }
+
+    fn ungroup_active(&mut self) -> bool {
+        let Some(active) = self.get_active_pane().map(|p| p.pane_id()) else {
+            return false;
+        };
+        match self.groups.unit_of(active) {
+            Unit::Group(id) if self.groups.stack_of(&Unit::Group(id)).is_none() => {
+                self.groups.dissolve(id);
+                self.debug_validate_groups();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn stack_join(&mut self, direction: PaneDirection) -> bool {
+        if self.zoomed.is_some() || !Self::is_spatial(direction) {
+            return false;
+        }
+        let Some(active) = self.get_active_pane().map(|p| p.pane_id()) else {
+            return false;
+        };
+        let Some(neighbour) = self.neighbour_pane_id(direction) else {
+            return false;
+        };
+        let a = self.groups.unit_of(active);
+        let b = self.groups.unit_of(neighbour);
+        if a == b || self.groups.stack_of(&a).is_some() {
+            return false;
+        }
+        let panes_a = self.groups.unit_panes(&a);
+        let panes_b = self.groups.unit_panes(&b);
+        // The joined unit takes half of the neighbour's slot; hiding the
+        // neighbour then gives it the whole slot.
+        let request = SplitRequest {
+            direction: SplitDirection::Horizontal,
+            target_is_second: true,
+            top_level: false,
+            size: SplitSize::Percent(50),
+        };
+        if !self.dock_unit(&panes_a, &panes_b, request) {
+            return false;
+        }
+
+        match self.groups.stack_of(&b) {
+            Some(index) => {
+                let stack = &mut self.groups.stacks[index];
+                stack.units.push(a.clone());
+                stack.active = stack.units.len() - 1;
+            }
+            None => self.groups.stacks.push(PaneStack {
+                units: vec![b.clone(), a.clone()],
+                active: 1,
+            }),
+        }
+        self.set_unit_hidden(&b, true);
+        self.refresh_after_unit_change();
+        if let Some(id) = self.unit_focus_pane(&a) {
+            self.focus_pane_id(id);
+        }
+        self.debug_validate_groups();
+        true
+    }
+
+    fn stack_cycle(&mut self, direction: PaneDirection) -> bool {
+        let forward = match direction {
+            PaneDirection::Next => true,
+            PaneDirection::Prev => false,
+            _ => return false,
+        };
+        let Some(active) = self.get_active_pane().map(|p| p.pane_id()) else {
+            return false;
+        };
+        let current = self.groups.unit_of(active);
+        let Some(index) = self.groups.stack_of(&current) else {
+            return false;
+        };
+        let stack = &self.groups.stacks[index];
+        let count = stack.units.len();
+        if count < 2 {
+            return false;
+        }
+        let from = stack.active;
+        let to = if forward { (from + 1) % count } else { (from + count - 1) % count };
+        let (old, new) = (stack.units[from].clone(), stack.units[to].clone());
+
+        self.set_zoomed(false);
+        // Show the new unit before hiding the old one: the tab never holds
+        // zero visible panes.
+        self.set_unit_hidden(&new, false);
+        self.set_unit_hidden(&old, true);
+        self.groups.stacks[index].active = to;
+        self.refresh_after_unit_change();
+        if let Some(id) = self.unit_focus_pane(&new) {
+            self.focus_pane_id(id);
+        }
+        self.debug_validate_groups();
+        true
+    }
+
     fn dock_unit(&mut self, source: &[PaneId], target: &[PaneId], request: SplitRequest) -> bool {
         if self.zoomed.is_some() || source.is_empty() || target.is_empty() {
             return false;
@@ -1479,7 +1740,7 @@ impl TabInner {
         for id in source {
             self.remove_pane(*id);
         }
-        let positions = self.iter_panes_ignoring_zoom();
+        let positions = self.iter_panes();
         let (mut left, mut top, mut right, mut bottom) = (usize::MAX, usize::MAX, 0, 0);
         for p in positions.iter().filter(|p| target_set.contains(&p.pane.pane_id())) {
             left = left.min(p.left);
@@ -3564,6 +3825,168 @@ mod test {
         assert!(!tab.dock_unit(&[], &[3], dock_right()));
         assert!(!tab.dock_unit(&[99], &[1], dock_right()));
         assert_eq!(ids(&tab), vec![1, 2, 3]);
+    }
+
+    fn activate(tab: &Tab, id: PaneId) {
+        let idx = tab
+            .iter_panes_ignoring_zoom()
+            .iter()
+            .find(|p| p.pane.pane_id() == id)
+            .unwrap()
+            .index;
+        tab.set_active_idx(idx);
+    }
+
+    fn active_id(tab: &Tab) -> PaneId {
+        tab.get_active_pane().unwrap().pane_id()
+    }
+
+    fn assert_valid(tab: &Tab) {
+        let inner = tab.inner.lock();
+        let tree = inner.pane.as_ref().unwrap();
+        assert_eq!(
+            Ok(()),
+            inner.groups.validate(&subtree_leaf_sets(tree), &inner.hidden)
+        );
+    }
+
+    fn visible_ids(tab: &Tab) -> Vec<PaneId> {
+        let mut ids = ids(tab);
+        ids.sort();
+        ids
+    }
+
+    fn group_members(tab: &Tab) -> Vec<Vec<PaneId>> {
+        let inner = tab.inner.lock();
+        inner
+            .groups
+            .groups
+            .iter()
+            .map(|g| {
+                let mut m = g.members.clone();
+                m.sort();
+                m
+            })
+            .collect()
+    }
+
+    /// Two groups, {2,3} and {1,4}, stacked in one slot with {1,4} on show.
+    fn stacked_groups() -> Tab {
+        let tab = four_panes();
+        activate(&tab, 2);
+        assert!(tab.group_panes(PaneDirection::Right));
+        activate(&tab, 1);
+        assert!(tab.group_panes(PaneDirection::Down));
+        activate(&tab, 1);
+        assert!(tab.stack_join(PaneDirection::Right));
+        tab
+    }
+
+    #[test]
+    fn group_panes_merges_active_pane_with_right_neighbour() {
+        let (tab, _) = three_across();
+        activate(&tab, 1);
+        assert!(tab.group_panes(PaneDirection::Right));
+        assert_eq!(vec![vec![1, 2]], group_members(&tab));
+        assert!(leaf_sets(&tab).contains(&set(&[1, 2])));
+        assert_eq!(1, active_id(&tab));
+        assert_valid(&tab);
+    }
+
+    #[test]
+    fn group_panes_into_existing_group_extends_it() {
+        let (tab, _) = three_across();
+        activate(&tab, 1);
+        assert!(tab.group_panes(PaneDirection::Right));
+        activate(&tab, 3);
+        assert!(tab.group_panes(PaneDirection::Left));
+        assert_eq!(vec![vec![1, 2, 3]], group_members(&tab));
+        assert_valid(&tab);
+    }
+
+    #[test]
+    fn group_panes_returns_false_with_no_neighbour() {
+        let (tab, _) = three_across();
+        activate(&tab, 1);
+        assert!(!tab.group_panes(PaneDirection::Left));
+        assert!(!tab.group_panes(PaneDirection::Next));
+        assert!(group_members(&tab).is_empty());
+    }
+
+    #[test]
+    fn ungroup_active_restores_plain_panes() {
+        let (tab, _) = three_across();
+        activate(&tab, 1);
+        assert!(tab.group_panes(PaneDirection::Right));
+        assert!(tab.ungroup_active());
+        assert!(group_members(&tab).is_empty());
+        assert!(!tab.ungroup_active(), "a lone pane has no group to dissolve");
+        assert_eq!(vec![1, 2, 3], visible_ids(&tab));
+    }
+
+    #[test]
+    fn stack_join_hides_previous_unit_and_shows_joined_one() {
+        let (tab, _) = three_across();
+        activate(&tab, 1);
+        assert!(tab.stack_join(PaneDirection::Right));
+        assert_eq!(set(&[2]), tab.hidden_pane_ids());
+        assert_eq!(vec![1, 3], visible_ids(&tab));
+        assert_eq!(1, active_id(&tab));
+        assert_valid(&tab);
+        for p in tab.iter_panes() {
+            assert!(p.width > 0 && p.height > 0, "pane {} collapsed", p.index);
+        }
+    }
+
+    #[test]
+    fn stack_join_hidden_panes_leave_exactly_one_visible_unit() {
+        let tab = stacked_groups();
+        assert_eq!(set(&[2, 3]), tab.hidden_pane_ids());
+        assert_eq!(vec![1, 4], visible_ids(&tab));
+        assert_valid(&tab);
+    }
+
+    #[test]
+    fn stack_join_in_a_two_pane_tab_keeps_one_pane_visible() {
+        let size = TerminalSize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 800,
+            pixel_height: 600,
+            dpi: 96,
+        };
+        let tab = Tab::new(&size);
+        tab.assign_pane(&FakePane::new(1, size));
+        let split = tab.compute_split_size(0, dock_right()).unwrap();
+        tab.split_and_insert(0, dock_right(), FakePane::new(2, split.second))
+            .unwrap();
+        activate(&tab, 1);
+        assert!(tab.stack_join(PaneDirection::Right));
+        assert_eq!(vec![1], visible_ids(&tab));
+        assert_valid(&tab);
+    }
+
+    #[test]
+    fn stack_cycle_next_swaps_visible_unit_and_wraps() {
+        let tab = stacked_groups();
+        assert!(tab.stack_cycle(PaneDirection::Next));
+        assert_eq!(vec![2, 3], visible_ids(&tab));
+        assert!([2, 3].contains(&active_id(&tab)));
+        assert_valid(&tab);
+        assert!(tab.stack_cycle(PaneDirection::Next));
+        assert_eq!(vec![1, 4], visible_ids(&tab));
+        assert!(tab.stack_cycle(PaneDirection::Prev));
+        assert_eq!(vec![2, 3], visible_ids(&tab));
+        assert_valid(&tab);
+    }
+
+    #[test]
+    fn stack_cycle_on_single_unit_is_noop_false() {
+        let (tab, _) = three_across();
+        activate(&tab, 1);
+        assert!(!tab.stack_cycle(PaneDirection::Next));
+        assert!(!tab.stack_cycle(PaneDirection::Right));
+        assert_eq!(vec![1, 2, 3], visible_ids(&tab));
     }
 
     #[test]
