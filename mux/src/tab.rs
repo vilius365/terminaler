@@ -1,5 +1,6 @@
 use crate::domain::DomainId;
 use crate::pane::*;
+use crate::pane_group::GroupState;
 use crate::renderable::StableCursorPosition;
 use crate::session_state::{PaneLayoutNode, SplitDirectionState};
 use crate::{Mux, MuxNotification, WindowId};
@@ -55,6 +56,8 @@ struct TabInner {
     /// resize is only read as a focus width while the tree is one that
     /// focus_layout built.
     focus_arranged: bool,
+    /// Pane groups and stacks laid over the split tree.
+    groups: GroupState,
 }
 
 /// A Tab is a container of Panes
@@ -738,6 +741,158 @@ fn is_subtree_hidden(tree: &Tree, hidden: &HashSet<PaneId>) -> bool {
     }
 }
 
+fn split_dimension(dim: usize, request: SplitRequest) -> (usize, usize) {
+    let target_size = match request.size {
+        SplitSize::Cells(n) => n,
+        SplitSize::Percent(n) => (dim * (n as usize)) / 100,
+    }
+    .max(1);
+
+    let remain = dim.saturating_sub(target_size + 1);
+
+    if request.target_is_second {
+        (remain, target_size)
+    } else {
+        (target_size, remain)
+    }
+}
+
+/// The split that divides a `width` x `height` region (in cells) as
+/// `request` describes.
+fn split_size_for_extent(
+    cell_dims: &TerminalSize,
+    width: usize,
+    height: usize,
+    request: SplitRequest,
+) -> SplitDirectionAndSize {
+    let ((width1, width2), (height1, height2)) = match request.direction {
+        SplitDirection::Horizontal => (split_dimension(width, request), (height, height)),
+        SplitDirection::Vertical => ((width, width), split_dimension(height, request)),
+    };
+
+    SplitDirectionAndSize {
+        direction: request.direction,
+        first: TerminalSize {
+            rows: height1 as _,
+            cols: width1 as _,
+            pixel_height: cell_dims.pixel_height * height1,
+            pixel_width: cell_dims.pixel_width * width1,
+            dpi: cell_dims.dpi,
+        },
+        second: TerminalSize {
+            rows: height2 as _,
+            cols: width2 as _,
+            pixel_height: cell_dims.pixel_height * height2,
+            pixel_width: cell_dims.pixel_width * width2,
+            dpi: cell_dims.dpi,
+        },
+    }
+}
+
+/// The leaf pane ids of `tree`.
+fn leaf_ids(tree: &Tree) -> HashSet<PaneId> {
+    match tree {
+        Tree::Empty => HashSet::new(),
+        Tree::Leaf(pane) => std::iter::once(pane.pane_id()).collect(),
+        Tree::Node { left, right, .. } => {
+            let mut ids = leaf_ids(left);
+            ids.extend(leaf_ids(right));
+            ids
+        }
+    }
+}
+
+/// The leaf set of every subtree of `tree`, leaves included.
+pub(crate) fn subtree_leaf_sets(tree: &Tree) -> Vec<HashSet<PaneId>> {
+    fn walk(tree: &Tree, out: &mut Vec<HashSet<PaneId>>) -> HashSet<PaneId> {
+        let ids = match tree {
+            Tree::Empty => return HashSet::new(),
+            Tree::Leaf(pane) => std::iter::once(pane.pane_id()).collect(),
+            Tree::Node { left, right, .. } => {
+                let mut ids = walk(left, out);
+                ids.extend(walk(right, out));
+                ids
+            }
+        };
+        out.push(ids.clone());
+        ids
+    }
+    let mut out = vec![];
+    walk(tree, &mut out);
+    out
+}
+
+/// Replaces the subtree whose leaves are exactly `target` with a split node
+/// holding that subtree and `docked`. Returns whether it found the subtree.
+fn replace_subtree_with_pair(
+    tree: Tree,
+    target: &HashSet<PaneId>,
+    docked: &mut Option<Tree>,
+    data: &SplitDirectionAndSize,
+    docked_second: bool,
+) -> (Tree, bool) {
+    if &leaf_ids(&tree) == target {
+        let Some(new) = docked.take() else {
+            return (tree, false);
+        };
+        let (left, right) = if docked_second { (tree, new) } else { (new, tree) };
+        return (
+            Tree::Node {
+                left: Box::new(left),
+                right: Box::new(right),
+                data: Some(data.clone()),
+            },
+            true,
+        );
+    }
+    match tree {
+        Tree::Node { left, right, data: node_data } => {
+            let (left, found) = replace_subtree_with_pair(*left, target, docked, data, docked_second);
+            if found {
+                return (
+                    Tree::Node { left: Box::new(left), right, data: node_data },
+                    true,
+                );
+            }
+            let (right, found) = replace_subtree_with_pair(*right, target, docked, data, docked_second);
+            (
+                Tree::Node { left: Box::new(left), right: Box::new(right), data: node_data },
+                found,
+            )
+        }
+        other => (other, false),
+    }
+}
+
+/// `panes` chained left to right as a tree, with each pane given an equal
+/// share of `width` x `height`. Needs at least one pane.
+fn chain_subtree(
+    panes: &[Arc<dyn Pane>],
+    width: usize,
+    height: usize,
+    cell_dims: &TerminalSize,
+) -> Tree {
+    let [first, rest @ ..] = panes else {
+        return Tree::Empty;
+    };
+    if rest.is_empty() {
+        return Tree::Leaf(Arc::clone(first));
+    }
+    let request = SplitRequest {
+        direction: SplitDirection::Horizontal,
+        target_is_second: false,
+        top_level: false,
+        size: SplitSize::Cells((width.saturating_sub(rest.len()) / panes.len()).max(1)),
+    };
+    let data = split_size_for_extent(cell_dims, width, height, request);
+    let rest_width = data.second.cols;
+    Tree::Node {
+        left: Box::new(Tree::Leaf(Arc::clone(first))),
+        right: Box::new(chain_subtree(rest, rest_width, height, cell_dims)),
+        data: Some(data),
+    }
+}
+
 fn cell_dimensions(size: &TerminalSize) -> TerminalSize {
     TerminalSize {
         rows: 1,
@@ -939,6 +1094,17 @@ impl Tab {
         self.inner.lock().swap_panes(a, b)
     }
 
+    /// Move every pane of `source` out of its place and dock them, chained
+    /// side by side, against the whole subtree made of exactly the `target`
+    /// panes, as the split `request` describes. The panes keep running and
+    /// the first of them becomes the active one. Returns false, leaving the
+    /// layout untouched, when a pane is missing, `source` is empty or shares
+    /// a pane with `target`, the tab is zoomed, or `target` is not one
+    /// subtree of the layout.
+    pub fn dock_unit(&self, source: &[PaneId], target: &[PaneId], request: SplitRequest) -> bool {
+        self.inner.lock().dock_unit(source, target, request)
+    }
+
     /// Move `source` out of its place and dock it against `target` as the
     /// split `request` describes (the same request a drag-to-split builds).
     /// The pane keeps running and becomes the active one. Returns false,
@@ -1120,6 +1286,7 @@ impl TabInner {
             recency: Recency::default(),
             hidden: HashSet::new(),
             focus_arranged: false,
+            groups: GroupState::default(),
         }
     }
 
@@ -1278,6 +1445,85 @@ impl TabInner {
             }
         }
         Mux::try_get().map(|mux| mux.notify(MuxNotification::TabResized(self.id)));
+    }
+
+    fn dock_unit(&mut self, source: &[PaneId], target: &[PaneId], request: SplitRequest) -> bool {
+        if self.zoomed.is_some() || source.is_empty() || target.is_empty() {
+            return false;
+        }
+        let source_set: HashSet<PaneId> = source.iter().copied().collect();
+        let target_set: HashSet<PaneId> = target.iter().copied().collect();
+        if source_set.len() != source.len() || !source_set.is_disjoint(&target_set) {
+            return false;
+        }
+        let Some(tree) = self.pane.as_ref() else {
+            return false;
+        };
+        if !subtree_leaf_sets(tree).contains(&target_set) {
+            return false;
+        }
+        let all = self.iter_panes_ignoring_zoom();
+        let mut panes = vec![];
+        for id in source {
+            match all.iter().find(|p| p.pane.pane_id() == *id) {
+                Some(p) => panes.push(Arc::clone(&p.pane)),
+                None => return false,
+            }
+        }
+        if !target.iter().all(|id| all.iter().any(|p| p.pane.pane_id() == *id)) {
+            return false;
+        }
+
+        // Taking the source out only gives room back, and leaves the target
+        // subtree intact because the source panes are not inside it.
+        for id in source {
+            self.remove_pane(*id);
+        }
+        let positions = self.iter_panes_ignoring_zoom();
+        let (mut left, mut top, mut right, mut bottom) = (usize::MAX, usize::MAX, 0, 0);
+        for p in positions.iter().filter(|p| target_set.contains(&p.pane.pane_id())) {
+            left = left.min(p.left);
+            top = top.min(p.top);
+            right = right.max(p.left + p.width);
+            bottom = bottom.max(p.top + p.height);
+        }
+        let (width, height) = (right.saturating_sub(left), bottom.saturating_sub(top));
+        let cell_dims = self.cell_dimensions();
+        let data = split_size_for_extent(&cell_dims, width, height, request);
+        let docked_size = if request.target_is_second {
+            &data.second
+        } else {
+            &data.first
+        };
+        let (docked_cols, docked_rows) = (docked_size.cols, docked_size.rows);
+
+        let docked_tree = chain_subtree(&panes, docked_cols, docked_rows, &cell_dims);
+        let mut docked = Some(docked_tree);
+        let (tree, found) = replace_subtree_with_pair(
+            self.pane.take().unwrap(),
+            &target_set,
+            &mut docked,
+            &data,
+            request.target_is_second,
+        );
+        self.pane.replace(tree);
+        if !found {
+            // Never lose a running pane: put them back somewhere.
+            log::error!("dock_unit could not find the target subtree");
+            for pane in panes {
+                if let Err(err) = self.split_and_insert(0, SplitRequest::default(), pane) {
+                    log::error!("dock_unit could not restore a pane: {:#}", err);
+                }
+            }
+            return false;
+        }
+
+        self.focus_arranged = false;
+        let size = self.size;
+        self.resize(size);
+        self.set_active_pane(&panes[0]);
+        Mux::try_get().map(|mux| mux.notify(MuxNotification::TabResized(self.id)));
+        true
     }
 
     fn toggle_pane_hidden(&mut self, pane_id: PaneId) {
@@ -2512,17 +2758,23 @@ impl TabInner {
     }
 
     fn advise_focus_change(&mut self, prior: Option<Arc<dyn Pane>>) {
-        let mux = Mux::get();
+        // No Mux exists in unit tests; focus still has to reach the panes.
+        let mux = Mux::try_get();
+        let notify_focused = |pane_id: PaneId| {
+            if let Some(mux) = &mux {
+                mux.notify(MuxNotification::PaneFocused(pane_id));
+            }
+        };
         let current = self.get_active_pane();
         match (prior, current) {
             (Some(prior), Some(current)) if prior.pane_id() != current.pane_id() => {
                 prior.focus_changed(false);
                 current.focus_changed(true);
-                mux.notify(MuxNotification::PaneFocused(current.pane_id()));
+                notify_focused(current.pane_id());
             }
             (None, Some(current)) => {
                 current.focus_changed(true);
-                mux.notify(MuxNotification::PaneFocused(current.pane_id()));
+                notify_focused(current.pane_id());
             }
             (Some(prior), None) => {
                 prior.focus_changed(false);
@@ -2612,22 +2864,6 @@ impl TabInner {
     ) -> Option<SplitDirectionAndSize> {
         let cell_dims = self.cell_dimensions();
 
-        fn split_dimension(dim: usize, request: SplitRequest) -> (usize, usize) {
-            let target_size = match request.size {
-                SplitSize::Cells(n) => n,
-                SplitSize::Percent(n) => (dim * (n as usize)) / 100,
-            }
-            .max(1);
-
-            let remain = dim.saturating_sub(target_size + 1);
-
-            if request.target_is_second {
-                (remain, target_size)
-            } else {
-                (target_size, remain)
-            }
-        }
-
         if request.top_level {
             let size = self.size;
 
@@ -2665,35 +2901,10 @@ impl TabInner {
         // a bogus split state (https://github.com/wez/wezterm/issues/723)
         self.set_zoomed(false);
 
-        self.iter_panes().iter().nth(pane_index).map(|pos| {
-            let ((width1, width2), (height1, height2)) = match request.direction {
-                SplitDirection::Horizontal => (
-                    split_dimension(pos.width, request),
-                    (pos.height, pos.height),
-                ),
-                SplitDirection::Vertical => {
-                    ((pos.width, pos.width), split_dimension(pos.height, request))
-                }
-            };
-
-            SplitDirectionAndSize {
-                direction: request.direction,
-                first: TerminalSize {
-                    rows: height1 as _,
-                    cols: width1 as _,
-                    pixel_height: cell_dims.pixel_height * height1,
-                    pixel_width: cell_dims.pixel_width * width1,
-                    dpi: cell_dims.dpi,
-                },
-                second: TerminalSize {
-                    rows: height2 as _,
-                    cols: width2 as _,
-                    pixel_height: cell_dims.pixel_height * height2,
-                    pixel_width: cell_dims.pixel_width * width2,
-                    dpi: cell_dims.dpi,
-                },
-            }
-        })
+        self.iter_panes()
+            .iter()
+            .nth(pane_index)
+            .map(|pos| split_size_for_extent(&cell_dims, pos.width, pos.height, request))
     }
 
     fn split_and_insert(
@@ -3273,6 +3484,85 @@ mod test {
         // Nothing to do: same pane, or a pane that is not in the tab.
         assert!(!tab.swap_panes(2, 2));
         assert!(!tab.swap_panes(2, 99));
+        assert_eq!(ids(&tab), vec![1, 2, 3]);
+    }
+
+    fn set(ids: &[PaneId]) -> HashSet<PaneId> {
+        ids.iter().copied().collect()
+    }
+
+    fn leaf_sets(tab: &Tab) -> Vec<HashSet<PaneId>> {
+        let inner = tab.inner.lock();
+        subtree_leaf_sets(inner.pane.as_ref().unwrap())
+    }
+
+    /// Panes 1 | 2 | 3 as the tree (1,(2,3)), then 4 split off pane 1:
+    /// ((1,4),(2,3)).
+    fn four_panes() -> Tab {
+        let (tab, _) = three_across();
+        let req = SplitRequest {
+            direction: SplitDirection::Vertical,
+            ..Default::default()
+        };
+        let split = tab.compute_split_size(0, req).unwrap();
+        tab.split_and_insert(0, req, FakePane::new(4, split.second))
+            .unwrap();
+        tab
+    }
+
+    fn dock_right() -> SplitRequest {
+        SplitRequest {
+            direction: SplitDirection::Horizontal,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn dock_unit_places_two_panes_beside_a_single_pane() {
+        let (tab, _) = three_across();
+        assert!(tab.dock_unit(&[2, 3], &[1], dock_right()));
+        let sets = leaf_sets(&tab);
+        assert!(sets.contains(&set(&[1])));
+        assert!(sets.contains(&set(&[2, 3])));
+        assert!(sets.contains(&set(&[1, 2, 3])));
+    }
+
+    #[test]
+    fn dock_unit_wraps_a_multi_pane_target_without_splitting_it() {
+        let tab = four_panes();
+        assert!(tab.dock_unit(&[4], &[2, 3], dock_right()));
+        let sets = leaf_sets(&tab);
+        assert!(sets.contains(&set(&[2, 3])), "target subtree stays whole");
+        assert!(sets.contains(&set(&[2, 3, 4])), "joined under one parent");
+        assert!(!sets.contains(&set(&[3, 4])));
+    }
+
+    #[test]
+    fn dock_unit_keeps_all_panes_alive_and_sized() {
+        let tab = four_panes();
+        assert!(tab.dock_unit(&[4], &[2, 3], dock_right()));
+        let panes = tab.iter_panes();
+        let mut found: Vec<PaneId> = panes.iter().map(|p| p.pane.pane_id()).collect();
+        found.sort();
+        assert_eq!(vec![1, 2, 3, 4], found);
+        for p in &panes {
+            assert!(p.width > 0 && p.height > 0, "pane {} collapsed", p.index);
+        }
+    }
+
+    #[test]
+    fn dock_unit_rejects_a_target_that_is_not_a_whole_subtree() {
+        let (tab, _) = three_across();
+        assert!(!tab.dock_unit(&[3], &[1, 2], dock_right()));
+        assert_eq!(ids(&tab), vec![1, 2, 3], "nothing was taken out");
+    }
+
+    #[test]
+    fn dock_unit_rejects_overlapping_source_and_target() {
+        let (tab, _) = three_across();
+        assert!(!tab.dock_unit(&[2, 3], &[3], dock_right()));
+        assert!(!tab.dock_unit(&[], &[3], dock_right()));
+        assert!(!tab.dock_unit(&[99], &[1], dock_right()));
         assert_eq!(ids(&tab), vec![1, 2, 3]);
     }
 
