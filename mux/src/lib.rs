@@ -42,6 +42,7 @@ pub mod pane;
 pub mod renderable;
 // STRIPPED: pub mod ssh;
 // STRIPPED: pub mod ssh_agent;
+pub mod pane_group;
 pub mod tab;
 pub mod termwiztermtab;
 pub mod tmux;
