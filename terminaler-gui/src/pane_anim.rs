@@ -447,6 +447,19 @@ impl PaneAnimations {
         })
     }
 
+    /// How high `id` is lifted right now, 0..=1: zero on the ground, one at
+    /// the top of the lift. None when the pane is not part of a lift.
+    pub fn lift_height(&self, id: PaneId, now: Instant) -> Option<f32> {
+        let tween = self.tweens.get(&id)?;
+        tween.lift?;
+        let dur = lift_duration();
+        if dur.is_zero() {
+            return None;
+        }
+        let raw = (now.saturating_duration_since(tween.start).as_secs_f32() / dur.as_secs_f32()).clamp(0.0, 1.0);
+        Some((raw * std::f32::consts::PI).sin().max(0.0))
+    }
+
     pub fn has_tweens(&self) -> bool {
         !self.tweens.is_empty()
     }
@@ -610,6 +623,22 @@ mod test {
         assert!(a.current(1, t0 + MS(100), MS(150)).is_some());
         assert!(a.current(3, t0 + MS(100), MS(150)).is_some());
         assert!(a.current(2, t0 + MS(100), MS(150)).is_none(), "the bystander stays put");
+    }
+
+    #[test]
+    fn a_lifted_pane_rises_then_lands() {
+        let t0 = Instant::now();
+        let mut a = PaneAnimations::default();
+        a.observe_frame(&[(1, snap(0.0, 100.0)), (2, snap(100.0, 100.0))], ENV, CELL, t0, MS(150));
+        let swapped = [(1, snap(100.0, 100.0)), (2, snap(0.0, 100.0))];
+        a.observe_frame(&swapped, ENV, CELL, t0 + MS(16), MS(150));
+        let start = t0 + MS(16);
+        assert_eq!(a.lift_height(1, start), Some(0.0));
+        let top = a.lift_height(1, start + lift_duration().mul_f32(0.5)).unwrap();
+        assert!(top > 0.99, "highest mid-flight: {top}");
+        let late = a.lift_height(1, start + lift_duration().mul_f32(0.95)).unwrap();
+        assert!(late < 0.2, "nearly landed: {late}");
+        assert_eq!(a.lift_height(9, start), None, "unknown pane");
     }
 
     #[test]

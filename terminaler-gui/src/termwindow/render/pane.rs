@@ -549,6 +549,39 @@ impl crate::TermWindow {
         Some(crate::agent_color::unit_ring_color(key, active))
     }
 
+    /// Soft drop shadow under a lifted pane: the higher it is, the further
+    /// the shadow falls and the wider it spreads. Concentric translucent
+    /// rects approximate the blur.
+    pub fn paint_lift_shadow(
+        &self,
+        layers: &mut TripleLayerQuadAllocator,
+        rect: &crate::pane_anim::PxRect,
+        height: f32,
+        cell: (f32, f32),
+    ) -> anyhow::Result<()> {
+        const STEPS: usize = 8;
+        let reach = cell.1 * 1.4 * height;
+        if reach < 0.5 {
+            return Ok(());
+        }
+        let (pad_x, pad_y) = (cell.0 / 2.0, cell.1 / 2.0);
+        // Falls down and slightly to the right, as if lit from above left.
+        let (off_x, off_y) = (reach * 0.35, reach * 0.8);
+        for i in 0..STEPS {
+            let grow = reach * (1.0 - i as f32 / STEPS as f32);
+            let alpha = 0.55 * height / STEPS as f32 * 1.6;
+            let r = euclid::rect(
+                rect.x - pad_x - grow + off_x,
+                rect.y - pad_y - grow + off_y,
+                rect.w + 2.0 * (pad_x + grow),
+                rect.h + 2.0 * (pad_y + grow),
+            );
+            self.filled_rectangle(layers, 0, r, LinearRgba::with_components(0.0, 0.0, 0.0, alpha))
+                .context("lift shadow step")?;
+        }
+        Ok(())
+    }
+
     pub fn paint_pane(
         &mut self,
         pos: &PositionedPane,

@@ -330,6 +330,22 @@ impl crate::TermWindow {
             }
         }
 
+        let any_lift = anim_duration.is_some()
+            && snaps
+                .iter()
+                .any(|(id, _)| self.pane_anims.borrow().lift_height(*id, frame_now).is_some());
+        let lifted_layer = if any_lift {
+            Some(
+                self.render_state
+                    .as_ref()
+                    .unwrap()
+                    .layer_for_zindex(1)
+                    .context("layer_for_zindex(1)")?,
+            )
+        } else {
+            None
+        };
+        let mut lifted = lifted_layer.as_ref().map(|l| l.quad_allocator());
         for (pos, (_, snap)) in panes.into_iter().zip(snaps.iter()) {
             if pos.is_active {
                 self.update_text_cursor(&pos);
@@ -348,12 +364,34 @@ impl crate::TermWindow {
                 ),
                 None => None,
             };
+            let lift = match anim_duration {
+                Some(_) => self.pane_anims.borrow().lift_height(pos.pane.pane_id(), frame_now),
+                None => None,
+            };
+            if let (Some(height), Some(tr)) = (lift, transform) {
+                // A lifted pane is painted on the layer above the others,
+                // with a shadow that deepens as it rises.
+                let lifted_layers = lifted.as_mut().context("lift layer")?;
+                let rect = crate::pane_anim::PxRect {
+                    x: snap.rect.x + tr.dx,
+                    y: snap.rect.y + tr.dy,
+                    w: snap.rect.w,
+                    h: snap.rect.h,
+                };
+                self.paint_lift_shadow(lifted_layers, &rect, height, cell_size)
+                    .context("lift shadow")?;
+                let mark = lifted_layers.mark();
+                self.paint_pane(&pos, lifted_layers).context("paint_pane")?;
+                lifted_layers.transform_since(mark, tr.dx, tr.dy, tr.clip);
+                continue;
+            }
             let mark = layers.mark();
             self.paint_pane(&pos, &mut layers).context("paint_pane")?;
             if let Some(tr) = transform {
                 layers.transform_since(mark, tr.dx, tr.dy, tr.clip);
             }
         }
+        drop(lifted);
 
         let sliding = match anim_duration {
             Some(duration) => {
