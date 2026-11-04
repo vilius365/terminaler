@@ -99,6 +99,9 @@ pub struct LineToEleShapeCacheKey {
     pub shape_hash: [u8; 16],
     pub composing: Option<(usize, String)>,
     pub shape_generation: usize,
+    /// The cell size the line was laid out with: panes can have their own font
+    /// scale, and identical lines in two panes must not share an entry.
+    pub cell: (i32, i32),
 }
 
 pub struct LineToElementShapeItem {

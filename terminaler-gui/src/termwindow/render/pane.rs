@@ -1194,6 +1194,10 @@ impl crate::TermWindow {
                     let shape_key = LineToEleShapeCacheKey {
                         shape_hash,
                         shape_generation: quad_key.shape_generation,
+                        cell: (
+                            self.term_window.render_metrics.cell_size.width as i32,
+                            self.term_window.render_metrics.cell_size.height as i32,
+                        ),
                         composing: if self.cursor.y == stable_row && self.pos.is_active {
                             if let DeadKeyStatus::Composing(composing) =
                                 &self.term_window.dead_key_status
