@@ -161,10 +161,11 @@ impl ToastGeom {
     }
 
     /// The pill's buttons, left to right: focus only when the tab has another
-    /// pane to stack (otherwise it would be dead), then close in the corner.
+    /// pane to stack (otherwise it would be dead), then fit (font size), then
+    /// close in the corner.
     pub fn pill_buttons(&self, pane_count: usize) -> &'static [&'static str] {
         if pane_count >= 2 {
-            &["fit", "focus", "close"]
+            &["focus", "fit", "close"]
         } else {
             &["fit", "close"]
         }
@@ -1765,7 +1766,7 @@ mod geometry_tests {
         assert!(!g.shows_pill(1000.0, g.min_pane_height - 1.0));
         // A lone pane has nothing to stack: focus would be dead, close stays.
         assert_eq!(g.pill_buttons(1), &["fit", "close"]);
-        assert_eq!(g.pill_buttons(2), &["fit", "focus", "close"]);
+        assert_eq!(g.pill_buttons(2), &["focus", "fit", "close"]);
     }
 
     #[test]

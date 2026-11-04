@@ -3,7 +3,7 @@
 ## 2026-11-04
 
 ### Added
-- **A "fit" button in the pane header sizes each pane's own font to the pane.** It sits left of the focus and close buttons. Click it and that pane keeps its font fitted: the bigger the pane, the larger the text, in 5% steps, so it always shows at least `pane_fit_columns` columns and `pane_fit_rows` rows (defaults 80 and 24, limits 0.5x to 3x). Every pane fits on its own, and a pane refits after a resize or a divider drag settles. Click the button again to go back to the window's font size; ctrl+scroll or the font size actions also switch fitting off for that pane. The same action is `"FitPaneFontSize"` in the command palette. Each pane's font scale and fit setting are saved with the session.
+- **A "fit" button in the pane header sizes each pane's own font to the pane.** It sits between the focus and close buttons (focus, fit, close, left to right). Click it and that pane keeps its font fitted: the bigger the pane, the larger the text, in 5% steps, so it always shows at least `pane_fit_columns` columns and `pane_fit_rows` rows (defaults 80 and 24, limits 0.5x to 3x). Every pane fits on its own, and a pane refits after a resize or a divider drag settles. Click the button again to go back to the window's font size; ctrl+scroll or the font size actions also switch fitting off for that pane. The same action is `"FitPaneFontSize"` in the command palette. Each pane's font scale and fit setting are saved with the session.
 
 ### Changed
 - **The sidebar is 1.5x wider.** `tab_sidebar_width` now defaults to 300 (was 180); the width is read when a window opens.
