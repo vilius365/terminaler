@@ -5507,6 +5507,26 @@ impl TermWindow {
                 break;
             }
         }
+        // Cell heights are whole pixels, so the rows rarely fill the box
+        // exactly and the leftover shows as a gap under the last line. Look at
+        // the 1% steps just below the chosen scale and take the one whose rows
+        // fill the box best (the larger scale on a tie).
+        let leftover = |this: &mut Self, scale: f64| -> usize {
+            let (_, metrics) = this.get_or_create_scaled_config(scale);
+            area_h % (metrics.cell_size.height.max(1) as usize)
+        };
+        let mut best = (leftover(self, scale), scale);
+        for k in 1..=6 {
+            let candidate = ((scale * 100.0).round() - k as f64) / 100.0;
+            if candidate < 0.5 || (candidate - 1.0).abs() < 0.001 || !fits(self, candidate) {
+                continue;
+            }
+            let gap = leftover(self, candidate);
+            if gap < best.0 {
+                best = (gap, candidate);
+            }
+        }
+        let scale = best.1;
         self.set_pane_font_scale(pane_id, scale);
         self.resize_pane_for_font_scale(pane_id);
         self.shape_generation += 1;
