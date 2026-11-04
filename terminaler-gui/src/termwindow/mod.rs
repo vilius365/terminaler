@@ -5263,14 +5263,29 @@ impl TermWindow {
         if let Some(entry) = self.scaled_font_configs.get(&key) {
             return entry.clone();
         }
-        let dpi = self.dimensions.dpi;
+        // A pane's scale is relative to the window's own font, so build the
+        // scaled font from the window font's dpi and scale. Using the window
+        // dimensions' dpi here gave cells half the size of the window's at the
+        // same nominal scale on this HiDPI setup.
+        let base_dpi = self.fonts.get_dpi();
+        let base_scale = self.fonts.get_font_scale();
         let fonts = Rc::new(
-            FontConfiguration::new(Some(self.config.clone()), dpi)
+            FontConfiguration::new(Some(self.config.clone()), base_dpi)
                 .expect("FontConfiguration::new for scaled config"),
         );
-        fonts.change_scaling(scale, dpi);
+        fonts.change_scaling(base_scale * scale, base_dpi);
         let metrics =
             RenderMetrics::new(&fonts).expect("RenderMetrics::new for scaled config");
+        log::info!(
+            "scaled font {:.2}: window dpi {} scale {:.2}, cell {}x{} (window {}x{})",
+            scale,
+            base_dpi,
+            base_scale,
+            metrics.cell_size.width,
+            metrics.cell_size.height,
+            self.render_metrics.cell_size.width,
+            self.render_metrics.cell_size.height
+        );
         self.scaled_font_configs
             .insert(key, (Rc::clone(&fonts), metrics));
         (fonts, metrics)
