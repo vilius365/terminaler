@@ -670,6 +670,11 @@ pub struct Config {
     #[dynamic(default = "default_pane_fit_columns")]
     pub pane_fit_columns: u16,
 
+    /// Rows the pane header's "fit" button also keeps visible, so a fitted
+    /// font fits the pane vertically as well as horizontally.
+    #[dynamic(default = "default_pane_fit_rows")]
+    pub pane_fit_rows: u16,
+
     /// Length in milliseconds of the lift-and-drop move: when panes swap or
     /// rearrange, each is lifted, glides to the middle and falls into place.
     #[dynamic(default = "default_pane_lift_ms")]
@@ -1865,6 +1870,10 @@ fn default_anim_fps() -> u8 {
 
 fn default_pane_animation_ms() -> u32 {
     225
+}
+
+fn default_pane_fit_rows() -> u16 {
+    30
 }
 
 fn default_pane_fit_columns() -> u16 {

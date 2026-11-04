@@ -574,13 +574,35 @@ impl super::TermWindow {
         if let Some(tab) = mux.get_active_tab_for_window(self.mux_window_id) {
             for pos in tab.iter_panes() {
                 if pos.pane.pane_id() == pane_id {
-                    let cols = pos.pixel_width / cell_w.max(1);
-                    let rows = pos.pixel_height / cell_h.max(1);
+                    // The pane's painted box, in window pixels: the same area the
+                    // background fills and the scaled text is laid out in. The mux's
+                    // own pixel size for the pane can be stale (a restored pane
+                    // keeps the size it was spawned with), which left the terminal
+                    // grid smaller than its box.
+                    let (_, _, area_w, area_h) = self.pane_content_rect(&pos);
+                    let (area_w, area_h) = (area_w as usize, area_h as usize);
+                    let cols = (area_w / cell_w.max(1)).max(1);
+                    let rows = (area_h / cell_h.max(1)).max(1);
+                    log::info!(
+                        "pane {} scale {:.2}: area {}x{}px, cell {}x{}px (base {}x{}), mux px {}x{} -> {}x{} cells",
+                        pane_id,
+                        scale,
+                        area_w,
+                        area_h,
+                        cell_w,
+                        cell_h,
+                        self.render_metrics.cell_size.width,
+                        self.render_metrics.cell_size.height,
+                        pos.pixel_width,
+                        pos.pixel_height,
+                        cols,
+                        rows
+                    );
                     pos.pane.resize(TerminalSize {
                         cols,
                         rows,
-                        pixel_width: pos.pixel_width,
-                        pixel_height: pos.pixel_height,
+                        pixel_width: area_w,
+                        pixel_height: area_h,
                         dpi: self.dimensions.dpi as u32,
                     }).ok();
                     break;

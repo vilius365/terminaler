@@ -5288,32 +5288,55 @@ impl TermWindow {
     }
 
     /// Size `pane_id`'s font to the largest scale that still shows
-    /// `pane_fit_columns` columns. Returns the new scale, or None when the
+    /// `pane_fit_columns` columns and `pane_fit_rows` rows. Returns the new scale, or None when the
     /// pane is not in the active tab.
     pub fn fit_pane_font_size(&mut self, pane_id: PaneId) -> Option<f64> {
-        let wanted = self.config.pane_fit_columns.max(10) as usize;
+        let wanted_cols = self.config.pane_fit_columns.max(10) as usize;
+        let wanted_rows = self.config.pane_fit_rows.max(5) as usize;
         let mux = Mux::get();
         let tab = mux.get_active_tab_for_window(self.mux_window_id)?;
-        let pixel_width = tab
+        let pos = tab
             .iter_panes()
             .into_iter()
-            .find(|p| p.pane.pane_id() == pane_id)?
-            .pixel_width;
+            .find(|p| p.pane.pane_id() == pane_id)?;
+        let (_, _, area_w, area_h) = self.pane_content_rect(&pos);
         drop(tab);
         drop(mux);
+        let (area_w, area_h) = (area_w as usize, area_h as usize);
 
-        let base_cell = self.render_metrics.cell_size.width.max(1) as f64;
-        let mut scale = pixel_width as f64 / (wanted as f64 * base_cell);
-        // Cell widths are whole pixels, so the estimate can land one column
-        // short: step down in 1% steps until the columns fit.
-        scale = ((scale * 100.0).floor() / 100.0).clamp(0.5, 3.0);
-        for _ in 0..20 {
-            let (_, metrics) = self.get_or_create_scaled_config(scale);
-            let cols = pixel_width / (metrics.cell_size.width.max(1) as usize);
-            if cols >= wanted || scale <= 0.5 {
+        // Whether the pane shows at least the wanted columns AND rows at
+        // `scale`, from the same scaled metrics it is laid out and painted with.
+        let fits = |this: &mut Self, scale: f64| -> bool {
+            let (_, metrics) = this.get_or_create_scaled_config(scale);
+            area_w / (metrics.cell_size.width.max(1) as usize) >= wanted_cols
+                && area_h / (metrics.cell_size.height.max(1) as usize) >= wanted_rows
+        };
+        // A scale of exactly 1.0 paints with the window's base metrics, which
+        // can differ from the scaled ones, so the search stays off it.
+        let step = |scale: f64, delta: f64| -> f64 {
+            let next = ((scale + delta) * 100.0).round() / 100.0;
+            if (next - 1.0).abs() < 0.005 { next + delta.signum() * 0.01 } else { next }
+        };
+
+        // Start from the scale that would just fit each direction, take the
+        // smaller, then settle it against the real whole-pixel cell sizes.
+        let (_, unit) = self.get_or_create_scaled_config(1.01);
+        let by_width = area_w as f64 / (wanted_cols as f64 * unit.cell_size.width.max(1) as f64 / 1.01);
+        let by_height = area_h as f64 / (wanted_rows as f64 * unit.cell_size.height.max(1) as f64 / 1.01);
+        let mut scale = step((by_width.min(by_height).clamp(0.5, 3.0) * 100.0).floor() / 100.0, 0.0);
+        for _ in 0..40 {
+            let up = step(scale, 0.01);
+            if up <= 3.0 && fits(self, up) {
+                scale = up;
+            } else {
                 break;
             }
-            scale = ((scale - 0.01) * 100.0).round() / 100.0;
+        }
+        for _ in 0..40 {
+            if scale <= 0.5 || fits(self, scale) {
+                break;
+            }
+            scale = step(scale, -0.01).max(0.5);
         }
         let scale = scale.clamp(0.5, 3.0);
         self.set_pane_font_scale(pane_id, scale);
@@ -5321,7 +5344,15 @@ impl TermWindow {
         self.shape_generation += 1;
         self.shape_cache.borrow_mut().clear();
         self.invalidate_tab_sidebar();
-        log::info!("fit: pane {} font scale {:.2} for {} columns", pane_id, scale, wanted);
+        log::info!(
+            "fit: pane {} area {}x{}px, scale {:.2} for {}x{} cells",
+            pane_id,
+            area_w,
+            area_h,
+            scale,
+            wanted_cols,
+            wanted_rows
+        );
         Some(scale)
     }
 

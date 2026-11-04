@@ -3,7 +3,7 @@
 ## 2026-11-04
 
 ### Added
-- **A "fit" button in the pane header sizes the font to the pane.** It sits left of the focus and close buttons and sets that pane's font to the largest size that still shows `pane_fit_columns` columns (default 100, limits 0.5x to 3x). The same action is `"FitPaneFontSize"` in the command palette. Each pane's font scale is now saved with the session and restored.
+- **A "fit" button in the pane header sizes the font to the pane.** It sits left of the focus and close buttons and sets that pane's font to the largest size that still shows `pane_fit_columns` columns and `pane_fit_rows` rows (defaults 100 and 30, limits 0.5x to 3x), so it fits both across and down. The pane's terminal grid is sized from the box the pane is painted in, so text fills it without a blank band at the right or bottom. The same action is `"FitPaneFontSize"` in the command palette. Each pane's font scale is now saved with the session and restored.
 
 ### Changed
 - **The sidebar is 1.5x wider.** `tab_sidebar_width` now defaults to 300 (was 180); the width is read when a window opens.
