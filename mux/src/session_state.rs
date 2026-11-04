@@ -31,6 +31,11 @@ pub struct WindowState {
     /// Window size (width, height) in pixels.
     #[serde(default)]
     pub size: Option<(u32, u32)>,
+    /// Terminal grid (columns, rows) the layout was saved at. A restore builds
+    /// the splits at this size, so their ratios survive: built at a small
+    /// default size, a few rows per pane round to nonsense.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_size: Option<(usize, usize)>,
 }
 
 /// State of a single tab.
@@ -251,6 +256,7 @@ mod tests {
                 active_tab_index: 0,
                 position: Some((100, 200)),
                 size: Some((1920, 1080)),
+                terminal_size: None,
             }],
             active_workspace: Some("default".into()),
         };

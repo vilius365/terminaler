@@ -31,6 +31,10 @@ pub fn capture_session() -> SessionState {
             tabs.push(TabState { title, layout });
         }
 
+        let terminal_size = mux_window
+            .get_active()
+            .map(|tab| tab.get_size())
+            .map(|size| (size.cols, size.rows));
         windows.push(WindowState {
             title: mux_window.get_title().to_string(),
             workspace: Some(mux_window.get_workspace().to_string()),
@@ -38,6 +42,7 @@ pub fn capture_session() -> SessionState {
             active_tab_index: active_tab_idx,
             position: None,
             size: None,
+            terminal_size,
         });
     }
 
@@ -118,11 +123,12 @@ pub fn load_previous_session() -> Option<SessionState> {
 pub async fn restore_session(
     session: &SessionState,
     domain: &Arc<dyn Domain>,
-    size: TerminalSize,
+    default_size: TerminalSize,
 ) -> anyhow::Result<()> {
     let mux = Mux::get();
 
     for win_state in &session.windows {
+        let size = sized_like(win_state.terminal_size, default_size);
         let workspace = win_state
             .workspace
             .clone()
@@ -291,6 +297,21 @@ async fn restore_subtree(
     }
 }
 
+/// `default` resized to the saved grid, keeping its cell size, so the splits
+/// are rebuilt at the size they were saved at.
+fn sized_like(saved: Option<(usize, usize)>, default: TerminalSize) -> TerminalSize {
+    match saved {
+        Some((cols, rows)) if cols >= 2 && rows >= 2 && default.cols > 0 && default.rows > 0 => TerminalSize {
+            cols,
+            rows,
+            pixel_width: default.pixel_width / default.cols * cols,
+            pixel_height: default.pixel_height / default.rows * rows,
+            dpi: default.dpi,
+        },
+        _ => default,
+    }
+}
+
 /// Percent of a split the new (second) pane gets, given the saved size ratio
 /// of the first child. `SplitRequest` sizes the NEW pane when it goes second,
 /// so passing the first child's share would mirror every lopsided layout.
@@ -301,6 +322,15 @@ fn second_percent(first_ratio: f64) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn restore_uses_the_saved_grid_and_keeps_the_cell_size() {
+        let default = TerminalSize { rows: 24, cols: 80, pixel_width: 800, pixel_height: 480, dpi: 96 };
+        let got = sized_like(Some((200, 60)), default);
+        assert_eq!((got.cols, got.rows, got.pixel_width, got.pixel_height), (200, 60, 2000, 1200));
+        assert_eq!(sized_like(None, default).cols, 80);
+        assert_eq!(sized_like(Some((1, 1)), default).cols, 80, "a nonsense grid is ignored");
+    }
 
     #[test]
     fn second_pane_gets_the_rest_of_the_split() {

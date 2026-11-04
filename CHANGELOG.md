@@ -9,7 +9,7 @@
 - **Notifications start blocked and panes start opaque.** The dock buttons still switch them off for the session.
 
 ### Fixed
-- **Restarting reopens the panes you had, not an empty shell.** The session file was written only on a clean quit, and a close wrote an empty one over it, so a kill or restart left nothing to restore. The GUI now saves every 5 seconds while it runs, never saves an empty session, and keeps the file after a restore. Panes that were running `ssh` (tmux attaches to other boxes) reconnect with the same command; other panes reopen as a shell in their directory. With a saved session there is no extra default terminal.
+- **Restarting reopens the panes you had, not an empty shell.** The session file was written only on a clean quit, and a close wrote an empty one over it, so a kill or restart left nothing to restore. The GUI now saves every 5 seconds while it runs, never saves an empty session, and keeps the file after a restore. Panes that were running `ssh` (tmux attaches to other boxes) reconnect with the same command; other panes reopen as a shell in their directory. With a saved session there is no extra default terminal. Splits are rebuilt at the grid size they were saved at, and a new pane gets the second child's share of a split, so lopsided layouts come back as they were.
 - **EaseIn and EaseInOut jumped at the first frame.** The easing code used a curve's four control numbers as a one-dimensional sum, so those curves started 42% along. Pane animations now solve the cubic Bézier properly. The visual bell still uses the old evaluation.
 
 ### Added
