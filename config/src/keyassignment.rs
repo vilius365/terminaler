@@ -571,6 +571,8 @@ pub enum KeyAssignment {
     IncreaseFontSize,
     DecreaseFontSize,
     ResetFontSize,
+    /// Set the active pane's font size so the pane shows `pane_fit_columns` columns.
+    FitPaneFontSize,
     ResetFontAndWindowSize,
     TogglePaneNotifications,
     ActivateTab(isize),

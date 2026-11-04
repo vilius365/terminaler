@@ -101,6 +101,17 @@ lazy_static::lazy_static! {
     pub static ref MUTED_PANES: Mutex<HashSet<PaneId>> = Mutex::new(HashSet::new());
 }
 
+/// Each pane's own font scale, by pane id. The window's per-pane state holds
+/// the live value; this copy is what the session autosave reads and what a
+/// restore seeds before the window exists.
+pub static PANE_FONT_SCALES: std::sync::LazyLock<parking_lot::Mutex<std::collections::HashMap<PaneId, f64>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// The saved font scale for `pane_id`, 1.0 when it has none.
+pub fn recorded_pane_font_scale(pane_id: PaneId) -> Option<f64> {
+    PANE_FONT_SCALES.lock().get(&pane_id).copied()
+}
+
 /// Global notification kill switch, toggled from the sidebar dock. When set,
 /// Terminaler raises no notifications at all: OSC 9/777 toasts, Claude idle
 /// toasts, and the Slack webhook are all suppressed, and the sidebar's
@@ -4423,7 +4434,7 @@ impl TermWindow {
                 let pane_id = pane.pane_id();
                 let current = self.pane_font_scale(pane_id);
                 let new_scale = (current / 1.1).max(0.5);
-                self.pane_state(pane_id).font_scale = new_scale;
+                self.set_pane_font_scale(pane_id, new_scale);
                 self.resize_pane_for_font_scale(pane_id);
                 self.shape_generation += 1;
                 self.shape_cache.borrow_mut().clear();
@@ -4436,7 +4447,7 @@ impl TermWindow {
                 let pane_id = pane.pane_id();
                 let current = self.pane_font_scale(pane_id);
                 let new_scale = (current * 1.1).min(3.0);
-                self.pane_state(pane_id).font_scale = new_scale;
+                self.set_pane_font_scale(pane_id, new_scale);
                 self.resize_pane_for_font_scale(pane_id);
                 self.shape_generation += 1;
                 self.shape_cache.borrow_mut().clear();
@@ -4445,14 +4456,18 @@ impl TermWindow {
                     w.invalidate();
                 }
             }
+            FitPaneFontSize => {
+                let pane_id = pane.pane_id();
+                if self.fit_pane_font_size(pane_id).is_some() {
+                    if let Some(w) = window.as_ref() {
+                        w.invalidate();
+                    }
+                }
+            }
             ResetFontSize => {
                 let pane_id = pane.pane_id();
-                let had_scale = {
-                    let mut ps = self.pane_state(pane_id);
-                    let had = (ps.font_scale - 1.0).abs() > 0.001;
-                    ps.font_scale = 1.0;
-                    had
-                };
+                let had_scale = (self.pane_font_scale(pane_id) - 1.0).abs() > 0.001;
+                self.set_pane_font_scale(pane_id, 1.0);
                 if had_scale {
                     self.resize_pane_for_font_scale(pane_id);
                     self.shape_generation += 1;
@@ -5226,7 +5241,13 @@ impl TermWindow {
 
     pub fn pane_state(&self, pane_id: PaneId) -> RefMut<'_, PaneState> {
         RefMut::map(self.pane_state.borrow_mut(), |state| {
-            state.entry(pane_id).or_insert_with(PaneState::default)
+            state.entry(pane_id).or_insert_with(|| {
+                let mut fresh = PaneState::default();
+                if let Some(scale) = recorded_pane_font_scale(pane_id) {
+                    fresh.font_scale = scale;
+                }
+                fresh
+            })
         })
     }
 
@@ -5253,6 +5274,55 @@ impl TermWindow {
         self.scaled_font_configs
             .insert(key, (Rc::clone(&fonts), metrics));
         (fonts, metrics)
+    }
+
+    /// Set a pane's own font scale and remember it for the session file.
+    pub fn set_pane_font_scale(&mut self, pane_id: PaneId, scale: f64) {
+        self.pane_state(pane_id).font_scale = scale;
+        let mut recorded = PANE_FONT_SCALES.lock();
+        if (scale - 1.0).abs() > 0.001 {
+            recorded.insert(pane_id, scale);
+        } else {
+            recorded.remove(&pane_id);
+        }
+    }
+
+    /// Size `pane_id`'s font to the largest scale that still shows
+    /// `pane_fit_columns` columns. Returns the new scale, or None when the
+    /// pane is not in the active tab.
+    pub fn fit_pane_font_size(&mut self, pane_id: PaneId) -> Option<f64> {
+        let wanted = self.config.pane_fit_columns.max(10) as usize;
+        let mux = Mux::get();
+        let tab = mux.get_active_tab_for_window(self.mux_window_id)?;
+        let pixel_width = tab
+            .iter_panes()
+            .into_iter()
+            .find(|p| p.pane.pane_id() == pane_id)?
+            .pixel_width;
+        drop(tab);
+        drop(mux);
+
+        let base_cell = self.render_metrics.cell_size.width.max(1) as f64;
+        let mut scale = pixel_width as f64 / (wanted as f64 * base_cell);
+        // Cell widths are whole pixels, so the estimate can land one column
+        // short: step down in 1% steps until the columns fit.
+        scale = ((scale * 100.0).floor() / 100.0).clamp(0.5, 3.0);
+        for _ in 0..20 {
+            let (_, metrics) = self.get_or_create_scaled_config(scale);
+            let cols = pixel_width / (metrics.cell_size.width.max(1) as usize);
+            if cols >= wanted || scale <= 0.5 {
+                break;
+            }
+            scale = ((scale - 0.01) * 100.0).round() / 100.0;
+        }
+        let scale = scale.clamp(0.5, 3.0);
+        self.set_pane_font_scale(pane_id, scale);
+        self.resize_pane_for_font_scale(pane_id);
+        self.shape_generation += 1;
+        self.shape_cache.borrow_mut().clear();
+        self.invalidate_tab_sidebar();
+        log::info!("fit: pane {} font scale {:.2} for {} columns", pane_id, scale, wanted);
+        Some(scale)
     }
 
     pub fn pane_font_scale(&self, pane_id: PaneId) -> f64 {

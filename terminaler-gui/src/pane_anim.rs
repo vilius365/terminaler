@@ -581,6 +581,11 @@ mod test {
         assert_eq!(end.dx, 0.0);
     }
 
+    /// A moment in the fall, three quarters of the way through a lift that began at `start`.
+    fn start_of_fall(start: Instant) -> Instant {
+        start + lift_duration().mul_f32(0.75)
+    }
+
     #[test]
     fn swapped_panes_pass_through_the_centre() {
         let t0 = Instant::now();
@@ -595,7 +600,7 @@ mod test {
         assert!((cur.x - 50.0).abs() < 0.5, "x was {}", cur.x);
         let early = a.current(1, t0 + MS(16 + 50), MS(150)).unwrap();
         assert!(early.x > 0.0 && early.x < 50.0, "still rising: {}", early.x);
-        let late = a.current(1, t0 + MS(16 + 800), MS(150)).unwrap();
+        let late = a.current(1, start_of_fall(t0 + MS(16)), MS(150)).unwrap();
         assert!(late.x > 50.0 && late.x < 100.0, "falling: {}", late.x);
     }
 

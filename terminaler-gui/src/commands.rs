@@ -967,6 +967,14 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             menubar: &["View", "Font Size"],
             icon: Some("md_format_size"),
         },
+        FitPaneFontSize => CommandDef {
+            brief: "Fit the font size to the pane".into(),
+            doc: "Sets the active pane's font to the largest size that still shows pane_fit_columns columns".into(),
+            keys: vec![],
+            args: &[ArgType::ActivePane],
+            menubar: &["View", "Font Size"],
+            icon: Some("md_format_size"),
+        },
         ResetFontAndWindowSize => CommandDef {
             brief: "Reset the window and font size".into(),
             doc: "Restores the original window and font size".into(),
@@ -2258,6 +2266,7 @@ fn compute_default_actions() -> Vec<KeyAssignment> {
         DecreaseFontSize,
         IncreaseFontSize,
         ResetFontSize,
+        FitPaneFontSize,
         ResetFontAndWindowSize,
         ScrollByPage(NotNan::new(-1.0).unwrap()),
         ScrollByPage(NotNan::new(1.0).unwrap()),

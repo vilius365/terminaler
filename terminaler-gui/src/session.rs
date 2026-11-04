@@ -27,7 +27,16 @@ pub fn capture_session() -> SessionState {
 
         for tab in mux_window.iter() {
             let title = tab.get_title();
-            let layout = tab.session_layout_tree();
+            let mut layout = tab.session_layout_tree();
+            // Each pane's own font scale lives in the window, not the mux.
+            let scales: Vec<Option<f64>> = tab
+                .iter_panes_ignoring_zoom()
+                .iter()
+                .map(|p| crate::termwindow::recorded_pane_font_scale(p.pane.pane_id()))
+                .collect();
+            if scales.len() == mux::session_state::layout_font_scales(&layout).len() {
+                mux::session_state::set_layout_font_scales(&mut layout, &mut scales.into_iter());
+            }
             tabs.push(TabState { title, layout });
         }
 
@@ -179,6 +188,7 @@ pub async fn restore_session(
                 }
 
                 tab.restore_groups(&tab_state.layout);
+                seed_font_scales(&tab, &tab_state.layout);
             } else {
                 // Additional tabs: spawn a new tab in the same window
                 let tab = domain
@@ -216,6 +226,7 @@ pub async fn restore_session(
                 }
 
                 tab.restore_groups(&tab_state.layout);
+                seed_font_scales(&tab, &tab_state.layout);
             }
         }
 
@@ -293,6 +304,22 @@ async fn restore_subtree(
             Box::pin(restore_subtree(second, domain, tab_id, new_pane_id, hidden_panes)).await?;
 
             Ok(())
+        }
+    }
+}
+
+/// Give the restored panes of `tab` their saved font scales. The window reads
+/// them when it first sees each pane and resizes the pane to match.
+fn seed_font_scales(tab: &Arc<mux::tab::Tab>, layout: &PaneLayoutNode) {
+    let saved = mux::session_state::layout_font_scales(layout);
+    let panes = tab.iter_panes_ignoring_zoom();
+    if saved.len() != panes.len() {
+        return;
+    }
+    let mut hints = crate::termwindow::PANE_FONT_SCALES.lock();
+    for (pane, scale) in panes.iter().zip(saved) {
+        if let Some(scale) = scale {
+            hints.insert(pane.pane.pane_id(), scale);
         }
     }
 }

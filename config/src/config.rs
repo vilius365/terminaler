@@ -666,6 +666,10 @@ pub struct Config {
     #[dynamic(default = "default_pane_animation_ms")]
     pub pane_animation_ms: u32,
 
+    /// Columns the pane header's "fit" button sizes a pane's font to show.
+    #[dynamic(default = "default_pane_fit_columns")]
+    pub pane_fit_columns: u16,
+
     /// Length in milliseconds of the lift-and-drop move: when panes swap or
     /// rearrange, each is lifted, glides to the middle and falls into place.
     #[dynamic(default = "default_pane_lift_ms")]
@@ -1861,6 +1865,10 @@ fn default_anim_fps() -> u8 {
 
 fn default_pane_animation_ms() -> u32 {
     225
+}
+
+fn default_pane_fit_columns() -> u16 {
+    100
 }
 
 fn default_pane_lift_ms() -> u32 {

@@ -164,9 +164,9 @@ impl ToastGeom {
     /// pane to stack (otherwise it would be dead), then close in the corner.
     pub fn pill_buttons(&self, pane_count: usize) -> &'static [&'static str] {
         if pane_count >= 2 {
-            &["focus", "close"]
+            &["fit", "focus", "close"]
         } else {
-            &["close"]
+            &["fit", "close"]
         }
     }
 
@@ -204,7 +204,7 @@ impl ToastGeom {
     /// widest pill, so the two never overlap (and the grip never jumps when a
     /// pane is added).
     pub fn fits_grip(&self, pane_w: f32, pane_h: f32) -> bool {
-        pane_w >= self.grip_gap * 2.0 + self.grip_w + self.pill_width(2) + 10.0 * self.scale
+        pane_w >= self.grip_gap * 2.0 + self.grip_w + self.pill_width(3) + 10.0 * self.scale
             && pane_h >= self.grip_gap * 2.0 + self.grip_h + 10.0 * self.scale
     }
 
@@ -220,7 +220,8 @@ impl ToastGeom {
             width,
             height: width,
             collapse_margin: 8.0 * s,
-            min_pane_width: width + 10.0 * s,
+            // Room for the widest pill: fit, focus and close.
+            min_pane_width: width + 2.0 * (btn + padding) + 10.0 * s,
             min_pane_height: width + 10.0 * s,
             top_offset: 10.0 * s,
             scale: s,
@@ -313,6 +314,8 @@ fn layout_icon_rects(name: &str) -> Option<&'static [(f32, f32, f32, f32)]> {
         "focus" => &[(0.0, 0.0, 0.6, 1.0), (0.68, 0.0, 0.32, 0.28),
                      (0.68, 0.36, 0.32, 0.28), (0.68, 0.72, 0.32, 0.28)],
         "flip-split" => ICON_FLIP_SPLIT,
+        // fit: a small block beside a large one, for "size the text to fit"
+        "fit" => &[(0.0, 0.5, 0.3, 0.5), (0.4, 0.0, 0.6, 1.0)],
         _ => return None,
     })
 }
@@ -1761,34 +1764,35 @@ mod geometry_tests {
         assert!(!g.shows_pill(g.min_pane_width - 1.0, 1000.0));
         assert!(!g.shows_pill(1000.0, g.min_pane_height - 1.0));
         // A lone pane has nothing to stack: focus would be dead, close stays.
-        assert_eq!(g.pill_buttons(1), &["close"]);
-        assert_eq!(g.pill_buttons(2), &["focus", "close"]);
+        assert_eq!(g.pill_buttons(1), &["fit", "close"]);
+        assert_eq!(g.pill_buttons(2), &["fit", "focus", "close"]);
     }
 
     #[test]
     fn pill_hit_test_matches_the_painted_buttons() {
         let g = ToastGeom::for_dpi(96);
         let (right, top) = (500.0, 20.0);
-        let n = 2;
-        for (idx, &name) in g.pill_buttons(n).iter().enumerate() {
+        let panes = 2;
+        let n = g.pill_buttons(panes).len();
+        for (idx, &name) in g.pill_buttons(panes).iter().enumerate() {
             let l = g.button_left(right, n, idx);
             let mid_y = top + g.padding + g.btn / 2.0;
-            assert_eq!(g.pill_button_at(n, right, top, l + 1.0, mid_y), Some(name));
-            assert_eq!(g.pill_button_at(n, right, top, l + g.btn - 1.0, mid_y), Some(name));
+            assert_eq!(g.pill_button_at(panes, right, top, l + 1.0, mid_y), Some(name));
+            assert_eq!(g.pill_button_at(panes, right, top, l + g.btn - 1.0, mid_y), Some(name));
         }
         // Close is the rightmost button, in the corner.
-        assert_eq!(g.pill_button_at(n, right, top, right - 2.0, top + 5.0), Some("close"));
-        // Outside the pill hits nothing; a lone pane's pill is one button wide.
-        assert_eq!(g.pill_button_at(n, right, top, right + 1.0, top + 5.0), None);
-        assert_eq!(g.pill_button_at(n, right, top, right - g.pill_width(n) - 1.0, top + 5.0), None);
-        assert_eq!(g.pill_button_at(1, right, top, right - g.width - 1.0, top + 5.0), None);
+        assert_eq!(g.pill_button_at(panes, right, top, right - 2.0, top + 5.0), Some("close"));
+        // Outside the pill hits nothing; a lone pane's pill is fit and close.
+        assert_eq!(g.pill_button_at(panes, right, top, right + 1.0, top + 5.0), None);
+        assert_eq!(g.pill_button_at(panes, right, top, right - g.pill_width(n) - 1.0, top + 5.0), None);
+        assert_eq!(g.pill_button_at(1, right, top, right - g.pill_width(2) - 1.0, top + 5.0), None);
         assert_eq!(g.pill_width(1), g.width);
     }
 
     #[test]
     fn grip_needs_room_beside_the_focus_pill() {
         let g = ToastGeom::for_dpi(96);
-        let min_w = g.grip_gap * 2.0 + g.grip_w + g.pill_width(2) + 10.0;
+        let min_w = g.grip_gap * 2.0 + g.grip_w + g.pill_width(3) + 10.0;
         assert!(g.fits_grip(min_w, 200.0));
         assert!(!g.fits_grip(min_w - 1.0, 200.0), "would touch the pill");
         assert!(!g.fits_grip(1000.0, g.grip_h), "too short for the grip");
@@ -1828,7 +1832,7 @@ mod geometry_tests {
 
     #[test]
     fn every_button_has_an_icon() {
-        for name in OVERLAY_BUTTON_NAMES.iter().chain(["focus"].iter()) {
+        for name in OVERLAY_BUTTON_NAMES.iter().chain(["focus", "fit"].iter()) {
             assert!(
                 matches!(*name, "close" | "move-to-tab") || layout_icon_rects(name).is_some(),
                 "no icon for {}",

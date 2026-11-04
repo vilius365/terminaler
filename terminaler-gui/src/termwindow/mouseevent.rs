@@ -312,7 +312,11 @@ impl super::TermWindow {
         // Header pill (focus, close): the only pane buttons besides the grip.
         if matches!(event.kind, WMEK::Press(MousePress::Left)) {
             if let Some((pane_id, btn)) = self.toast_button_at(&event) {
-                if btn == "close" {
+                if btn == "fit" {
+                    self.close_armed = None;
+                    self.fit_pane_font_size(pane_id);
+                    self.hovered_pane_id = None;
+                } else if btn == "close" {
                     if self.close_is_armed(pane_id) {
                         self.close_armed = None;
                         Mux::get().remove_pane(pane_id);
@@ -375,11 +379,7 @@ impl super::TermWindow {
                 let factor = if amount > 0 { 1.1 } else { 1.0 / 1.1 };
                 let current = self.pane_font_scale(pane_id);
                 let new_scale = (current * factor).clamp(0.5, 3.0);
-                {
-                    let mut states = self.pane_state.borrow_mut();
-                    let state = states.entry(pane_id).or_insert_with(Default::default);
-                    state.font_scale = new_scale;
-                }
+                self.set_pane_font_scale(pane_id, new_scale);
                 self.resize_pane_for_font_scale(pane_id);
                 self.shape_generation += 1;
                 self.shape_cache.borrow_mut().clear();

@@ -63,6 +63,9 @@ pub enum PaneLayoutNode {
         /// restore reconnects instead of opening a plain shell.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         argv: Option<Vec<String>>,
+        /// The pane's own font scale when it differs from 1.0.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        font_scale: Option<f64>,
         /// Whether this pane was hidden.
         #[serde(default)]
         hidden: bool,
@@ -118,6 +121,32 @@ pub fn layout_leaves(layout: &PaneLayoutNode) -> Vec<LeafUnitInfo> {
             let mut leaves = layout_leaves(first);
             leaves.extend(layout_leaves(second));
             leaves
+        }
+    }
+}
+
+/// The saved font scale of every leaf of `layout`, in leaf order.
+pub fn layout_font_scales(layout: &PaneLayoutNode) -> Vec<Option<f64>> {
+    match layout {
+        PaneLayoutNode::Pane { font_scale, .. } => vec![*font_scale],
+        PaneLayoutNode::Split { first, second, .. } => {
+            let mut scales = layout_font_scales(first);
+            scales.extend(layout_font_scales(second));
+            scales
+        }
+    }
+}
+
+/// Set the font scale of every leaf of `layout`, in leaf order. Extra scales
+/// or leaves are ignored.
+pub fn set_layout_font_scales(layout: &mut PaneLayoutNode, scales: &mut impl Iterator<Item = Option<f64>>) {
+    match layout {
+        PaneLayoutNode::Pane { font_scale, .. } => {
+            *font_scale = scales.next().flatten();
+        }
+        PaneLayoutNode::Split { first, second, .. } => {
+            set_layout_font_scales(first, scales);
+            set_layout_font_scales(second, scales);
         }
     }
 }
@@ -217,6 +246,7 @@ mod tests {
                             cwd: Some(PathBuf::from("/home/user")),
                             command: Some("bash".into()),
                             argv: None,
+                            font_scale: None,
                             hidden: false,
                             is_active: true,
                             group: None,
@@ -233,6 +263,7 @@ mod tests {
                                 cwd: Some(PathBuf::from("/home/user/project")),
                                 command: None,
                                 argv: None,
+                                font_scale: None,
                                 hidden: false,
                                 is_active: true,
                                 group: None,
@@ -243,6 +274,7 @@ mod tests {
                                 cwd: Some(PathBuf::from("/home/user/project")),
                                 command: None,
                                 argv: None,
+                                font_scale: None,
                                 hidden: false,
                                 is_active: false,
                                 group: None,
@@ -299,6 +331,7 @@ mod tests {
             cwd: None,
             command: None,
             argv: Some(argv.clone()),
+            font_scale: None,
             hidden: false,
             is_active: true,
             group: None,
@@ -315,5 +348,30 @@ mod tests {
             PaneLayoutNode::Pane { argv, .. } => assert_eq!(argv, None),
             other => panic!("expected a pane, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn font_scales_round_trip_in_leaf_order() {
+        let leaf = |scale: Option<f64>| PaneLayoutNode::Pane {
+            cwd: None,
+            command: None,
+            argv: None,
+            font_scale: scale,
+            hidden: false,
+            is_active: false,
+            group: None,
+            stack: None,
+            stack_pos: None,
+        };
+        let mut layout = PaneLayoutNode::Split {
+            direction: SplitDirectionState::Horizontal,
+            ratio: 0.5,
+            first: Box::new(leaf(None)),
+            second: Box::new(leaf(None)),
+        };
+        set_layout_font_scales(&mut layout, &mut vec![Some(0.8), None].into_iter());
+        let json = serde_json::to_string(&layout).unwrap();
+        let back: PaneLayoutNode = serde_json::from_str(&json).unwrap();
+        assert_eq!(layout_font_scales(&back), vec![Some(0.8), None]);
     }
 }
