@@ -583,6 +583,7 @@ impl super::TermWindow {
                     let (area_w, area_h) = (area_w as usize, area_h as usize);
                     let cols = (area_w / cell_w.max(1)).max(1);
                     let rows = (area_h / cell_h.max(1)).max(1);
+                    log::info!("bottom slack {:.0}px", self.window_bottom_slack());
                     log::info!(
                         "pane {} scale {:.2}: area {}x{}px, cell {}x{}px (base {}x{}), mux px {}x{} -> {}x{} cells",
                         pane_id,

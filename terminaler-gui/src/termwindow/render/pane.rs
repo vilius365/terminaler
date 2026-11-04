@@ -11,7 +11,7 @@ use crate::termwindow::{ScrollHit, UIItem, UIItemType};
 use ::window::bitmaps::TextureRect;
 use ::window::DeadKeyStatus;
 use anyhow::Context;
-use config::VisualBellTarget;
+use config::{DimensionContext, VisualBellTarget};
 use mux::pane::{PaneId, WithPaneLines};
 use mux::renderable::{RenderableDimensions, StableCursorPosition};
 use mux::tab::PositionedPane;
@@ -376,6 +376,33 @@ impl crate::TermWindow {
 
     /// A pane's content rect in window pixels: (left, top, width, height).
     /// The same box the mouse code tests with pane_id_at_pixel_coords.
+    /// Pixels left under the last row of the window's terminal grid: the window
+    /// height is rarely a whole number of cells, and a pane with its own font
+    /// size can use the leftover for extra rows.
+    pub(crate) fn window_bottom_slack(&self) -> f32 {
+        let v_context = DimensionContext {
+            dpi: self.dimensions.dpi as f32,
+            pixel_max: self.terminal_size.pixel_height as f32,
+            pixel_cell: self.render_metrics.cell_size.height as f32,
+        };
+        let padding_top = self.config.window_padding.top.evaluate_as_pixels(v_context);
+        let padding_bottom = self.config.window_padding.bottom.evaluate_as_pixels(v_context);
+        let tab_bar = if self.show_tab_bar {
+            self.tab_bar_pixel_height().unwrap_or(0.)
+        } else {
+            0.
+        };
+        let border = self.get_os_border();
+        let slack = self.dimensions.pixel_height as f32
+            - self.terminal_size.pixel_height as f32
+            - padding_top
+            - padding_bottom
+            - tab_bar
+            - border.top.get() as f32
+            - border.bottom.get() as f32;
+        slack.max(0.0)
+    }
+
     pub(crate) fn pane_content_rect(&self, pos: &PositionedPane) -> (f32, f32, f32, f32) {
         let (padding_left, padding_top) = self.padding_left_top();
         let tab_bar_height = if self.show_tab_bar {
@@ -388,11 +415,17 @@ impl crate::TermWindow {
         let top_pixel_y = top_bar_height + padding_top + border.top.get() as f32;
         let cell_width = self.render_metrics.cell_size.width as f32;
         let cell_height = self.render_metrics.cell_size.height as f32;
+        // A pane on the bottom edge also owns the pixels left under the grid.
+        let extra = if pos.top + pos.height >= self.terminal_size.rows {
+            self.window_bottom_slack()
+        } else {
+            0.0
+        };
         (
             padding_left + border.left.get() as f32 + self.sidebar_x_offset() + pos.left as f32 * cell_width,
             top_pixel_y + pos.top as f32 * cell_height,
             pos.width as f32 * cell_width,
-            pos.height as f32 * cell_height,
+            pos.height as f32 * cell_height + extra,
         )
     }
 
