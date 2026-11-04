@@ -99,7 +99,7 @@ fn rects_resized(a: &PxRect, b: &PxRect) -> bool {
 
 /// Length of a lift-and-drop move, in milliseconds. The window sets it from
 /// `pane_lift_ms`.
-static LIFT_MS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(900);
+static LIFT_MS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(675);
 
 pub fn set_lift_ms(ms: u32) {
     LIFT_MS.store(ms, std::sync::atomic::Ordering::Relaxed);

@@ -1860,11 +1860,11 @@ fn default_anim_fps() -> u8 {
 }
 
 fn default_pane_animation_ms() -> u32 {
-    300
+    225
 }
 
 fn default_pane_lift_ms() -> u32 {
-    900
+    675
 }
 
 fn default_pane_animation_easing() -> crate::bell::EasingFunction {
@@ -1940,7 +1940,8 @@ fn default_tab_max_width() -> usize {
 fn default_tab_sidebar_width() -> u16 {
     // The compact tile rail's reference width; tiles anchor to both edges and
     // the rail font scales from this (see terminaler-gui tab_sidebar.rs).
-    180
+    // 1.5x the original 180 (user request, 2026-11-04).
+    270
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
