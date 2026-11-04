@@ -535,8 +535,9 @@ impl super::TermWindow {
         mut item: UIItem,
         split: PositionedSplit,
         start_event: MouseEvent,
-        x: usize,
-        y: i64,
+        event: MouseEvent,
+        _x: usize,
+        _y: i64,
         context: &dyn WindowOps,
     ) {
         let mux = Mux::get();
@@ -544,10 +545,51 @@ impl super::TermWindow {
             Some(tab) => tab,
             None => return,
         };
-        let delta = match split.direction {
-            SplitDirection::Horizontal => (x as isize).saturating_sub(split.left as isize),
-            SplitDirection::Vertical => (y as isize).saturating_sub(split.top as isize),
+
+        // A press that has not really moved is a click, not a drag: leave the
+        // divider alone so clicking on it never nudges the layout.
+        let moved_x = (event.coords.x - start_event.coords.x).abs();
+        let moved_y = (event.coords.y - start_event.coords.y).abs();
+        if moved_x < 4 && moved_y < 4 {
+            self.dragging.replace((item, start_event));
+            return;
+        }
+
+        // Where the divider's line is drawn, in window pixels, against where
+        // the pointer is: the divider follows the pointer's centre, in the
+        // window's own cells (a pane's own font size does not enter into it).
+        let base = self.render_metrics.cell_size;
+        let (cw, ch) = (base.width as f32, base.height as f32);
+        let (padding_left, padding_top) = self.padding_left_top();
+        let border = self.get_os_border();
+        let tab_bar = if self.show_tab_bar && !self.config.tab_bar_at_bottom {
+            self.tab_bar_pixel_height().unwrap_or(0.)
+        } else {
+            0.
         };
+        let origin_x = padding_left + border.left.get() as f32 + self.sidebar_x_offset();
+        let origin_y = tab_bar + padding_top + border.top.get() as f32;
+        let delta = match split.direction {
+            SplitDirection::Horizontal => {
+                let line = origin_x + split.left as f32 * cw + cw / 2.0;
+                ((event.coords.x as f32 - line) / cw).round() as isize
+            }
+            SplitDirection::Vertical => {
+                let line = origin_y + split.top as f32 * ch + ch / 2.0;
+                ((event.coords.y as f32 - line) / ch).round() as isize
+            }
+        };
+        if delta != 0 {
+            log::info!(
+                "split drag: pointer {},{} divider at cell {},{} ({:?}) -> move by {} cells",
+                event.coords.x,
+                event.coords.y,
+                split.left,
+                split.top,
+                split.direction,
+                delta
+            );
+        }
 
         if delta != 0 {
             tab.resize_split_by(split.index, delta);
@@ -617,7 +659,7 @@ impl super::TermWindow {
     ) {
         match item.item_type {
             UIItemType::Split(split) => {
-                self.drag_split(item, split, start_event, x, y, context);
+                self.drag_split(item, split, start_event, event, x, y, context);
             }
             UIItemType::ScrollThumb { pane_id } => {
                 self.drag_scroll_thumb(item, pane_id, start_event, event, context);
