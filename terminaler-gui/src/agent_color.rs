@@ -53,6 +53,18 @@ pub fn agent_accent_color(seed: &str, active: bool) -> LinearRgba {
     }
 }
 
+/// Ring colour for a pane group or stack. `key` picks the palette slot, so
+/// every pane of one group (or one stack) shares a colour. Dimmed when the
+/// pane is not the active one, like `agent_accent_color`.
+pub fn unit_ring_color(key: usize, active: bool) -> LinearRgba {
+    let (r, g, b) = AGENT_PALETTE[key % AGENT_PALETTE.len()];
+    if active {
+        LinearRgba::with_components(r, g, b, 1.0)
+    } else {
+        LinearRgba::with_components(r * 0.8, g * 0.8, b * 0.8, 0.8)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -786,6 +786,9 @@ pub struct TermWindow {
     pub current_event: Option<Value>,
     has_animation: RefCell<Option<Instant>>,
     pane_anims: RefCell<crate::pane_anim::PaneAnimations>,
+    /// Pane whose border flashes to say "this one is already open", and when
+    /// the flash began.
+    pane_flash: RefCell<Option<(PaneId, Instant)>>,
     /// We use this to attempt to do something reasonable
     /// if we run out of texture space
     allow_images: AllowImage,
@@ -1179,6 +1182,7 @@ impl TermWindow {
             current_event: None,
             has_animation: RefCell::new(None),
             pane_anims: RefCell::new(Default::default()),
+            pane_flash: RefCell::new(None),
             scheduled_animation: RefCell::new(None),
             allow_images: AllowImage::Yes,
             semantic_zones: HashMap::new(),
@@ -3425,6 +3429,10 @@ impl TermWindow {
             return;
         };
 
+        if mode != TmuxAttachMode::CurrentPane && self.focus_attached_session(box_name, session) {
+            return;
+        }
+
         if mode == TmuxAttachMode::CurrentPane {
             // Type the attach command into the active pane's shell, replacing
             // its content with the session UI (pane must be at a prompt).
@@ -3487,36 +3495,78 @@ impl TermWindow {
         self.spawn_command(&spawn, spawn_where);
     }
 
+    /// Flash `pane_id`'s border so the eye finds it.
+    pub fn flash_pane(&self, pane_id: PaneId) {
+        *self.pane_flash.borrow_mut() = Some((pane_id, Instant::now()));
+        self.update_next_frame_time(Some(Instant::now()));
+    }
+
+    /// A pane in this window that already runs an attach of `box_name:session`:
+    /// one this app spawned, or one whose foreground process carries exactly
+    /// the argv an attach would spawn.
+    fn find_attached_pane(&self, box_name: &str, session: &str) -> Option<PaneId> {
+        use mux::pane::CachePolicy;
+        let mux = Mux::get();
+        if let Some(pane_id) = crate::spawn::live_tmux_attach_pane(box_name, session) {
+            if let Some((_domain, window_id, _tab)) = mux.resolve_pane_id(pane_id) {
+                if window_id == self.mux_window_id {
+                    return Some(pane_id);
+                }
+            }
+        }
+        let tmux = self.config.tmux.clone().unwrap_or_default();
+        let tmux_box = tmux.boxes.iter().find(|b| b.enabled && b.name == box_name)?;
+        let wanted = [tmux_box.attach_plain_argv(session), tmux_box.attach_argv(session)];
+        let window = mux.get_window(self.mux_window_id)?;
+        for tab in window.iter() {
+            for pos in tab.iter_panes_ignoring_zoom() {
+                if let Some(info) = pos.pane.get_foreground_process_info(CachePolicy::AllowStale) {
+                    if wanted.iter().any(|argv| *argv == info.argv) {
+                        return Some(pos.pane.pane_id());
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Focus the pane this window already attached to `box_name:session` and
+    /// flash its border. False when there is none.
+    fn focus_attached_session(&mut self, box_name: &str, session: &str) -> bool {
+        let Some(pane_id) = self.find_attached_pane(box_name, session) else {
+            return false;
+        };
+        let mux = Mux::get();
+        let Some((_domain, window_id, tab_id)) = mux.resolve_pane_id(pane_id) else {
+            return false;
+        };
+        let tab = mux.get_window(window_id).and_then(|w| {
+            w.iter()
+                .enumerate()
+                .find(|(_, t)| t.tab_id() == tab_id)
+                .map(|(idx, t)| (idx, t.clone()))
+        });
+        let (Some((idx, tab)), Some(pane)) = (tab, mux.get_pane(pane_id)) else {
+            return false;
+        };
+        if self.activate_tab(idx as isize).is_err() {
+            return false;
+        }
+        tab.set_active_pane(&pane);
+        self.flash_pane(pane_id);
+        self.invalidate_tab_sidebar();
+        log::info!("focused existing pane {} for {}:{}", pane_id, box_name, session);
+        true
+    }
+
     /// Brief bar click: focus the pane this window already attached to
     /// `box_name:session`, otherwise plain `tmux attach` in a split of the
     /// active pane (the `TmuxAttachMode::SplitPlain` behaviour).
     pub fn activate_brief_session(&mut self, box_name: &str, session: &str) {
         use crate::spawn::SpawnWhere;
 
-        if let Some(pane_id) = crate::spawn::live_tmux_attach_pane(box_name, session) {
-            let mux = Mux::get();
-            if let Some((_domain, window_id, tab_id)) = mux.resolve_pane_id(pane_id) {
-                if window_id == self.mux_window_id {
-                    let tab = mux.get_window(window_id).and_then(|w| {
-                        w.iter()
-                            .enumerate()
-                            .find(|(_, t)| t.tab_id() == tab_id)
-                            .map(|(idx, t)| (idx, t.clone()))
-                    });
-                    if let (Some((idx, tab)), Some(pane)) = (tab, mux.get_pane(pane_id)) {
-                        if self.activate_tab(idx as isize).is_ok() {
-                            tab.set_active_pane(&pane);
-                            log::info!(
-                                "brief bar: focused existing pane {} for {}:{}",
-                                pane_id,
-                                box_name,
-                                session
-                            );
-                            return;
-                        }
-                    }
-                }
-            }
+        if self.focus_attached_session(box_name, session) {
+            return;
         }
 
         let tmux = self.config.tmux.clone().unwrap_or_default();
@@ -4731,6 +4781,7 @@ impl TermWindow {
                     PaneStackJoin(_) => tab.stack_join(*direction),
                     _ => tab.stack_cycle(*direction),
                 };
+                log::info!("{:?}: {}", assignment, if changed { "applied" } else { "refused (no neighbour, already grouped/stacked, or zoomed)" });
                 if changed {
                     self.invalidate_tab_sidebar();
                     if let Some(window) = self.window.as_ref() {
@@ -4753,6 +4804,7 @@ impl TermWindow {
                     },
                     _ => false,
                 };
+                log::info!("{:?}: {}", assignment, if changed { "applied" } else { "refused (target hidden, same unit, stacked, or zoomed)" });
                 if changed {
                     self.invalidate_tab_sidebar();
                     if let Some(window) = self.window.as_ref() {
@@ -4766,7 +4818,9 @@ impl TermWindow {
                     Some(tab) => tab,
                     None => return Ok(PerformAssignmentResult::Handled),
                 };
-                if tab.ungroup_active() {
+                let done = tab.ungroup_active();
+                log::info!("PaneUngroup: {}", if done { "applied" } else { "refused (active pane is in no group, or its group is stacked)" });
+                if done {
                     self.invalidate_tab_sidebar();
                     if let Some(window) = self.window.as_ref() {
                         window.invalidate();

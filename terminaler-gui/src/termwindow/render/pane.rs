@@ -536,6 +536,19 @@ impl crate::TermWindow {
         self.render_element(&computed, gl_state, None)
     }
 
+    /// Ring colour shared by the panes of one group or one stack; None for a
+    /// pane in neither, or hidden behind another in its stack.
+    fn unit_ring_color_for(&self, pane_id: PaneId, active: bool) -> Option<LinearRgba> {
+        let tab = mux::Mux::try_get()?.get_active_tab_for_window(self.mux_window_id)?;
+        let info = *tab.pane_unit_info().get(&pane_id)?;
+        let key = match (info.group, info.stack) {
+            (Some(group), _) => group as usize,
+            (None, Some(stack)) if info.stack_len > 1 => stack + 5,
+            _ => return None,
+        };
+        Some(crate::agent_color::unit_ring_color(key, active))
+    }
+
     pub fn paint_pane(
         &mut self,
         pos: &PositionedPane,
@@ -692,6 +705,10 @@ impl crate::TermWindow {
             let notif_color = LinearRgba::with_components(1.0, 0.4, 0.2, 0.8);
             self.draw_border_ring(layers, 2, background_rect, 3.0, notif_color)
                 .context("notification ring")?;
+        } else if let Some(color) = self.unit_ring_color_for(pane_id, pos.is_active) {
+            // Panes of one group, or one stack, share a ring colour.
+            self.draw_border_ring(layers, 2, background_rect, 3.0, color)
+                .context("group ring")?;
         } else if let Some(seed) = pos
             .pane
             .copy_user_vars()
@@ -701,6 +718,30 @@ impl crate::TermWindow {
             let color = crate::agent_color::agent_accent_color(seed, pos.is_active);
             self.draw_border_ring(layers, 2, background_rect, 2.0, color)
                 .context("agent identity ring")?;
+        }
+
+        // "Already open" flash: two quick pulses over whatever ring is there.
+        let flash_started = match *self.pane_flash.borrow() {
+            Some((id, started)) if id == pane_id => Some(started),
+            _ => None,
+        };
+        if let Some(started) = flash_started {
+            const FLASH_MS: f32 = 700.0;
+            let elapsed = started.elapsed().as_secs_f32() * 1000.0;
+            if elapsed >= FLASH_MS {
+                let mut flash = self.pane_flash.borrow_mut();
+                if matches!(*flash, Some((id, _)) if id == pane_id) {
+                    *flash = None;
+                }
+            } else {
+                // Two sine pulses across FLASH_MS, each from 0 up to 1 and back.
+                let pulse = (elapsed / FLASH_MS * 2.0 * std::f32::consts::PI * 2.0 - std::f32::consts::FRAC_PI_2).sin() * 0.5 + 0.5;
+                let color = LinearRgba::with_components(1.0, 0.85, 0.2, 0.25 + 0.75 * pulse);
+                self.draw_border_ring(layers, 2, background_rect, 4.0, color)
+                    .context("flash ring")?;
+                let frame = std::time::Duration::from_millis(1000 / self.config.max_fps.clamp(1, 240));
+                self.update_next_frame_time(Some(Instant::now() + frame));
+            }
         }
 
         {

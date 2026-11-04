@@ -2016,6 +2016,7 @@ impl super::TermWindow {
                         let panes = tab.iter_panes();
                         if let Some(pos) = panes.iter().find(|p| p.index == pane_idx) {
                             let pid = pos.pane.pane_id();
+                            self.flash_pane(pid);
                             let mut ps = self.pane_state(pid);
                             ps.notification_start = None;
                             ps.notification_count = 0;
