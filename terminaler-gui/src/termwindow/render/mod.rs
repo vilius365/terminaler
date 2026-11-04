@@ -234,6 +234,7 @@ impl crate::TermWindow {
     /// Duration of pane animations, or None when they are switched off.
     pub fn pane_animation_duration(&self) -> Option<std::time::Duration> {
         if self.config.pane_animation && self.config.pane_animation_ms > 0 {
+            crate::pane_anim::set_easing(self.config.pane_animation_easing);
             Some(std::time::Duration::from_millis(
                 self.config.pane_animation_ms as u64,
             ))

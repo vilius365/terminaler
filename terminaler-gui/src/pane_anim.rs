@@ -94,6 +94,13 @@ fn rects_resized(a: &PxRect, b: &PxRect) -> bool {
     (a.w - b.w).abs() >= 1.0 || (a.h - b.h).abs() >= 1.0
 }
 
+static EASING: parking_lot::Mutex<EasingFunction> = parking_lot::Mutex::new(EasingFunction::EaseOut);
+
+/// Set the curve every animation uses; the window calls this from its config.
+pub fn set_easing(easing: EasingFunction) {
+    *EASING.lock() = easing;
+}
+
 /// Eased progress in 0..=1 of an animation that began at `start`.
 pub fn progress(start: Instant, now: Instant, duration: Duration) -> f32 {
     if duration.is_zero() {
@@ -101,7 +108,8 @@ pub fn progress(start: Instant, now: Instant, duration: Duration) -> f32 {
     }
     let elapsed = now.saturating_duration_since(start).as_secs_f32();
     let linear = (elapsed / duration.as_secs_f32()).clamp(0.0, 1.0);
-    EasingFunction::EaseOut
+    let easing = *EASING.lock();
+    easing
         .evaluate_at_position(linear)
         .clamp(0.0, 1.0)
 }

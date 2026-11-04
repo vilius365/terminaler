@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-11-04
+
+### Changed
+- **Pane animations are slower and ease in.** The default `pane_animation_ms` is now 450 (was 250) and the new `pane_animation_easing` setting defaults to `"EaseIn"` (starts slowly, finishes fast). Other values: `"Linear"`, `"Ease"`, `"EaseInOut"`, `"EaseOut"` or `{ "CubicBezier": [0.4, 0.0, 0.2, 1.0] }`. Both settings reload live.
+- **Stacking no longer hides panes.** `PaneStackJoin`, `PaneStackWith` and the drop menu's "Stack with this pane" group the panes instead; every pane stays visible. Panes of one group share a border colour, and a pane in a group or stack shows a small ◫ or ⧉ icon in its sidebar entry. The "groups" sidebar section and its group, stack and ungroup rows are gone.
+- **Notifications start blocked and panes start opaque.** The dock buttons still switch them off for the session.
+
+### Added
+- **Clicking an open session focuses it.** A tmux session this window already shows (sidebar, `Ctrl+Shift+S` picker, top bar) is focused and its border flashes, instead of attaching a second copy.
+
 ## 2026-10-30
 
 ### Added

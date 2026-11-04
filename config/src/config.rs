@@ -666,6 +666,11 @@ pub struct Config {
     #[dynamic(default = "default_pane_animation_ms")]
     pub pane_animation_ms: u32,
 
+    /// Easing curve of pane animations: Linear, Ease, EaseIn, EaseInOut,
+    /// EaseOut or a CubicBezier. EaseIn starts slowly and finishes fast.
+    #[dynamic(default = "default_pane_animation_easing")]
+    pub pane_animation_easing: crate::bell::EasingFunction,
+
     #[dynamic(default)]
     pub text_min_contrast_ratio: Option<f32>,
 
@@ -1850,7 +1855,11 @@ fn default_anim_fps() -> u8 {
 }
 
 fn default_pane_animation_ms() -> u32 {
-    250
+    450
+}
+
+fn default_pane_animation_easing() -> crate::bell::EasingFunction {
+    crate::bell::EasingFunction::EaseIn
 }
 
 fn default_max_fps() -> u64 {
