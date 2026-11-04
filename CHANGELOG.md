@@ -3,9 +3,12 @@
 ## 2026-11-04
 
 ### Changed
-- **Pane animations are slower and ease in.** The default `pane_animation_ms` is now 450 (was 250) and the new `pane_animation_easing` setting defaults to `"EaseIn"` (starts slowly, finishes fast). Other values: `"Linear"`, `"Ease"`, `"EaseInOut"`, `"EaseOut"` or `{ "CubicBezier": [0.4, 0.0, 0.2, 1.0] }`. Both settings reload live.
+- **Rearranged panes lift, glide to the middle and fall into place.** When panes swap, rotate, dock or change places in a focus layout, each pane that moves glides to the centre of the pane area and then drops into its new spot (900 ms, `pane_lift_ms`). Splits, closes and resizes keep their short reveal (`pane_animation_ms`, now 300). The new `pane_animation_easing` setting (default `"EaseOut"`; also `Linear`, `Ease`, `EaseIn`, `EaseInOut`, `{ "CubicBezier": [...] }`) picks the curve for those. Both durations reload live.
 - **Stacking no longer hides panes.** `PaneStackJoin`, `PaneStackWith` and the drop menu's "Stack with this pane" group the panes instead; every pane stays visible. Panes of one group share a border colour, and a pane in a group or stack shows a small ◫ or ⧉ icon in its sidebar entry. The "groups" sidebar section and its group, stack and ungroup rows are gone.
 - **Notifications start blocked and panes start opaque.** The dock buttons still switch them off for the session.
+
+### Fixed
+- **EaseIn and EaseInOut jumped at the first frame.** The easing code used a curve's four control numbers as a one-dimensional sum, so those curves started 42% along. Pane animations now solve the cubic Bézier properly. The visual bell still uses the old evaluation.
 
 ### Added
 - **Clicking an open session focuses it.** A tmux session this window already shows (sidebar, `Ctrl+Shift+S` picker, top bar) is focused and its border flashes, instead of attaching a second copy.

@@ -37,6 +37,9 @@ struct Tween {
     /// window boundary; those are never clipped while they stay put.
     bounds: [bool; 4],
     start: Instant,
+    /// Set for a rearrangement of existing panes: the pane is lifted out of
+    /// its place, glides to this centre point, then falls into its new place.
+    lift: Option<(f32, f32)>,
 }
 
 /// A pane as painted in one frame.
@@ -94,6 +97,66 @@ fn rects_resized(a: &PxRect, b: &PxRect) -> bool {
     (a.w - b.w).abs() >= 1.0 || (a.h - b.h).abs() >= 1.0
 }
 
+/// Length of a lift-and-drop move, in milliseconds. The window sets it from
+/// `pane_lift_ms`.
+static LIFT_MS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(900);
+
+pub fn set_lift_ms(ms: u32) {
+    LIFT_MS.store(ms, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn lift_duration() -> Duration {
+    Duration::from_millis(LIFT_MS.load(std::sync::atomic::Ordering::Relaxed) as u64)
+}
+
+/// CSS `cubic-bezier(x1, y1, x2, y2)` evaluated at time fraction `pos`.
+/// `EasingFunction::as_bezier_array` yields exactly those four numbers, but
+/// `evaluate_at_position` feeds them to a one-dimensional Bernstein sum
+/// instead, so EaseIn and EaseInOut jump 42% at the first frame. Solve for
+/// the curve parameter properly here.
+fn css_ease(easing: EasingFunction, pos: f32) -> f32 {
+    let [x1, y1, x2, y2] = easing.as_bezier_array();
+    if pos <= 0.0 {
+        return 0.0;
+    }
+    if pos >= 1.0 || matches!(easing, EasingFunction::Constant) {
+        return 1.0;
+    }
+    let bez = |a: f32, b: f32, t: f32| 3.0 * (1.0 - t).powi(2) * t * a + 3.0 * (1.0 - t) * t * t * b + t.powi(3);
+    let (mut lo, mut hi) = (0.0f32, 1.0f32);
+    for _ in 0..24 {
+        let mid = (lo + hi) / 2.0;
+        if bez(x1, x2, mid) < pos {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    bez(y1, y2, (lo + hi) / 2.0)
+}
+
+/// Share of a lift spent rising and gliding to the centre; the rest is the fall.
+const LIFT_RISE: f32 = 0.45;
+
+fn lift_rect(tween: &Tween, centre: (f32, f32), raw: f32) -> PxRect {
+    let raw = raw.clamp(0.0, 1.0);
+    let f = (tween.from.x + tween.from.w / 2.0, tween.from.y + tween.from.h / 2.0);
+    let g = (tween.to.x + tween.to.w / 2.0, tween.to.y + tween.to.h / 2.0);
+    let (cx, cy) = if raw < LIFT_RISE {
+        // Rise and glide: slow start, smooth arrival.
+        let e = css_ease(EasingFunction::EaseInOut, raw / LIFT_RISE);
+        (f.0 + (centre.0 - f.0) * e, f.1 + (centre.1 - f.1) * e)
+    } else {
+        // Fall: starts gently and speeds up, like something dropped.
+        let e = css_ease(EasingFunction::EaseIn, (raw - LIFT_RISE) / (1.0 - LIFT_RISE));
+        (centre.0 + (g.0 - centre.0) * e, centre.1 + (g.1 - centre.1) * e)
+    };
+    let size = css_ease(EasingFunction::EaseInOut, raw);
+    let w = tween.from.w + (tween.to.w - tween.from.w) * size;
+    let h = tween.from.h + (tween.to.h - tween.from.h) * size;
+    PxRect { x: cx - w / 2.0, y: cy - h / 2.0, w, h }
+}
+
 static EASING: parking_lot::Mutex<EasingFunction> = parking_lot::Mutex::new(EasingFunction::EaseOut);
 
 /// Set the curve every animation uses; the window calls this from its config.
@@ -109,9 +172,7 @@ pub fn progress(start: Instant, now: Instant, duration: Duration) -> f32 {
     let elapsed = now.saturating_duration_since(start).as_secs_f32();
     let linear = (elapsed / duration.as_secs_f32()).clamp(0.0, 1.0);
     let easing = *EASING.lock();
-    easing
-        .evaluate_at_position(linear)
-        .clamp(0.0, 1.0)
+    css_ease(easing, linear).clamp(0.0, 1.0)
 }
 
 impl PaneAnimations {
@@ -125,7 +186,7 @@ impl PaneAnimations {
         now: Instant,
         duration: Duration,
     ) {
-        self.start_bounded(pane, from, to, [false; 4], now, duration);
+        self.start_bounded(pane, from, to, [false; 4], None, now, duration);
     }
 
     fn start_bounded(
@@ -134,6 +195,7 @@ impl PaneAnimations {
         from: PxRect,
         to: PxRect,
         bounds: [bool; 4],
+        lift: Option<(f32, f32)>,
         now: Instant,
         duration: Duration,
     ) {
@@ -146,6 +208,7 @@ impl PaneAnimations {
                     to,
                     bounds,
                     start: now,
+                    lift,
                 },
             );
         }
@@ -162,6 +225,15 @@ impl PaneAnimations {
     /// The rect to draw for `pane` now, or None when it is not animating.
     pub fn current(&self, pane: PaneId, now: Instant, duration: Duration) -> Option<PxRect> {
         let tween = self.tweens.get(&pane)?;
+        if let Some(centre) = tween.lift {
+            let dur = lift_duration();
+            let raw = if dur.is_zero() {
+                1.0
+            } else {
+                now.saturating_duration_since(tween.start).as_secs_f32() / dur.as_secs_f32()
+            };
+            return Some(lift_rect(tween, centre, raw));
+        }
         let t = progress(tween.start, now, duration);
         Some(tween.from.lerp(&tween.to, t))
     }
@@ -177,8 +249,10 @@ impl PaneAnimations {
     /// Drop finished tweens and ghosts. Returns true while anything is
     /// still running, i.e. the caller must schedule another frame.
     pub fn prune(&mut self, now: Instant, duration: Duration) -> bool {
-        self.tweens
-            .retain(|_, t| now.saturating_duration_since(t.start) < duration);
+        self.tweens.retain(|_, t| {
+            let dur = if t.lift.is_some() { lift_duration() } else { duration };
+            now.saturating_duration_since(t.start) < dur
+        });
         self.ghosts
             .retain(|g| now.saturating_duration_since(g.start) < duration);
         !self.tweens.is_empty() || !self.ghosts.is_empty()
@@ -218,16 +292,33 @@ impl PaneAnimations {
         } else if snaps.iter().any(|(id, _)| self.last_rects.contains_key(id)) {
             // At least one pane survived, so this is a layout change inside
             // the tab and not a tab switch.
+            //
+            // The same panes before and after is a rearrangement (swap,
+            // rotate, focus layout, dock): those panes are lifted, glided to
+            // the middle of the pane area and dropped into their new places.
+            let rearranged = snaps.len() == self.last_rects.len()
+                && snaps.iter().all(|(id, _)| self.last_rects.contains_key(id));
+            let centre = {
+                let left = snaps.iter().map(|(_, s)| s.rect.x).fold(f32::MAX, f32::min);
+                let top = snaps.iter().map(|(_, s)| s.rect.y).fold(f32::MAX, f32::min);
+                let right = snaps.iter().map(|(_, s)| s.rect.x + s.rect.w).fold(f32::MIN, f32::max);
+                let bottom = snaps.iter().map(|(_, s)| s.rect.y + s.rect.h).fold(f32::MIN, f32::max);
+                ((left + right) / 2.0, (top + bottom) / 2.0)
+            };
             for (id, snap) in snaps {
                 match self.last_rects.get(id) {
                     Some(prev) => {
                         if rects_differ(&prev.rect, &snap.rect) {
-                            self.start_bounded(*id, prev.rect, snap.rect, snap.bounds, now, duration);
+                            let from = [prev.rect.x, prev.rect.y, prev.rect.x + prev.rect.w, prev.rect.y + prev.rect.h];
+                            let to = [snap.rect.x, snap.rect.y, snap.rect.x + snap.rect.w, snap.rect.y + snap.rect.h];
+                            let moved_edges = (0..4).filter(|&i| (from[i] - to[i]).abs() >= 1.0).count();
+                            let lift = (rearranged && moved_edges > 1).then_some(centre);
+                            self.start_bounded(*id, prev.rect, snap.rect, snap.bounds, lift, now, duration);
                         }
                     }
                     None => {
                         if let Some(from) = self.split_origin(snaps, &snap.rect, cell) {
-                            self.start_bounded(*id, from, snap.rect, snap.bounds, now, duration);
+                            self.start_bounded(*id, from, snap.rect, snap.bounds, None, now, duration);
                         }
                     }
                 }
@@ -309,7 +400,7 @@ impl PaneAnimations {
         // pane is being relocated; a clip would leave part of it undrawn
         // until the tween ends, so slide it instead.
         let moved_edges = (0..4).filter(|&i| (from[i] - to[i]).abs() >= 1.0).count();
-        if !rects_resized(&tween.from, &tween.to) || moved_edges > 1 {
+        if tween.lift.is_some() || !rects_resized(&tween.from, &tween.to) || moved_edges > 1 {
             return Some(Transform {
                 dx: cur.x - final_rect.x,
                 dy: cur.y - final_rect.y,
@@ -453,8 +544,26 @@ mod test {
         a.observe_frame(&swapped, ENV, CELL, t0 + MS(16), MS(150));
         let tr = at(&a, 1, &swapped[0].1, t0 + MS(16)).unwrap();
         assert_eq!((tr.dx, tr.clip), (-100.0, None));
-        let end = at(&a, 1, &swapped[0].1, t0 + MS(16 + 150)).unwrap();
+        let end = at(&a, 1, &swapped[0].1, t0 + MS(16 + 2000)).unwrap();
         assert_eq!(end.dx, 0.0);
+    }
+
+    #[test]
+    fn swapped_panes_pass_through_the_centre() {
+        let t0 = Instant::now();
+        let mut a = PaneAnimations::default();
+        a.observe_frame(&[(1, snap(0.0, 100.0)), (2, snap(100.0, 100.0))], ENV, CELL, t0, MS(150));
+        let swapped = [(1, snap(100.0, 100.0)), (2, snap(0.0, 100.0))];
+        a.observe_frame(&swapped, ENV, CELL, t0 + MS(16), MS(150));
+        let rise_end = t0 + MS(16) + lift_duration().mul_f32(LIFT_RISE);
+        let cur = a.current(1, rise_end, MS(150)).unwrap();
+        // The pane area spans x 0..200, so its centre is x = 100 and a
+        // 100-wide pane centred there starts at x = 50.
+        assert!((cur.x - 50.0).abs() < 0.5, "x was {}", cur.x);
+        let early = a.current(1, t0 + MS(16 + 50), MS(150)).unwrap();
+        assert!(early.x > 0.0 && early.x < 50.0, "still rising: {}", early.x);
+        let late = a.current(1, t0 + MS(16 + 800), MS(150)).unwrap();
+        assert!(late.x > 50.0 && late.x < 100.0, "falling: {}", late.x);
     }
 
     #[test]
@@ -508,6 +617,8 @@ mod test {
         let tr = at(&a, 1, &after[0].1, t0 + MS(16)).unwrap();
         assert_eq!(tr.clip, None, "no clip, or half the pane would be undrawn");
         assert_eq!(tr.dx, -150.0);
+        let end = at(&a, 1, &after[0].1, t0 + MS(16 + 2000)).unwrap();
+        assert_eq!((end.dx, end.clip), (0.0, None));
     }
 
     #[test]

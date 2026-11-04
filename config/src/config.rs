@@ -666,8 +666,13 @@ pub struct Config {
     #[dynamic(default = "default_pane_animation_ms")]
     pub pane_animation_ms: u32,
 
+    /// Length in milliseconds of the lift-and-drop move: when panes swap or
+    /// rearrange, each is lifted, glides to the middle and falls into place.
+    #[dynamic(default = "default_pane_lift_ms")]
+    pub pane_lift_ms: u32,
+
     /// Easing curve of pane animations: Linear, Ease, EaseIn, EaseInOut,
-    /// EaseOut or a CubicBezier. EaseIn starts slowly and finishes fast.
+    /// EaseOut or a CubicBezier. EaseOut (the default) starts fast and settles gently.
     #[dynamic(default = "default_pane_animation_easing")]
     pub pane_animation_easing: crate::bell::EasingFunction,
 
@@ -1855,11 +1860,15 @@ fn default_anim_fps() -> u8 {
 }
 
 fn default_pane_animation_ms() -> u32 {
-    450
+    300
+}
+
+fn default_pane_lift_ms() -> u32 {
+    900
 }
 
 fn default_pane_animation_easing() -> crate::bell::EasingFunction {
-    crate::bell::EasingFunction::EaseIn
+    crate::bell::EasingFunction::EaseOut
 }
 
 fn default_max_fps() -> u64 {

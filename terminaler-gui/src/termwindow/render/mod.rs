@@ -235,6 +235,7 @@ impl crate::TermWindow {
     pub fn pane_animation_duration(&self) -> Option<std::time::Duration> {
         if self.config.pane_animation && self.config.pane_animation_ms > 0 {
             crate::pane_anim::set_easing(self.config.pane_animation_easing);
+            crate::pane_anim::set_lift_ms(self.config.pane_lift_ms);
             Some(std::time::Duration::from_millis(
                 self.config.pane_animation_ms as u64,
             ))
