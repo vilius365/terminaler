@@ -3,7 +3,7 @@
 ## 2026-11-04
 
 ### Added
-- **Automatic per-pane font fitting, on by default.** Every pane fits its own font to its size: the bigger the pane, the larger the text, in 5% steps, so it shows a number of columns that grows with the pane's width (80 columns up to 700 px wide, then 90, 100, 110 and 120 for panes wider than 1800 px, measured at 96 dpi) and at least `pane_fit_rows` rows (default 24; `pane_fit_columns` sets the fewest columns, default 80; limits 0.5x to 3x). A pane refits after a resize or a divider drag settles. Ctrl+scroll or the font size actions size one pane by hand and switch fitting off for it; "Reset font size" switches it back on. Set `pane_font_auto` to `false` to size fonts by hand only. Each pane's font scale and fit setting are saved with the session.
+- **Automatic per-pane font fitting, on by default.** Every pane fits its own font to its size: the bigger the pane, the larger the text, in 5% steps, so it shows a number of columns that grows with the pane's width (80 columns up to 700 px wide, then 90, 100, 110 and 120 for panes wider than 1800 px, measured at 96 dpi) and at least `pane_fit_rows` rows (default 16; `pane_fit_columns` sets the fewest columns, default 80; limits 0.5x to 3x). A pane refits after a resize or a divider drag settles. Ctrl+scroll or the font size actions size one pane by hand and switch fitting off for it; "Reset font size" switches it back on. Set `pane_font_auto` to `false` to size fonts by hand only. Each pane's font scale and fit setting are saved with the session.
 
 ### Changed
 - **The sidebar is 1.5x wider.** `tab_sidebar_width` now defaults to 300 (was 180); the width is read when a window opens.

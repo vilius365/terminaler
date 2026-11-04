@@ -1882,7 +1882,7 @@ fn default_pane_animation_ms() -> u32 {
 }
 
 fn default_pane_fit_rows() -> u16 {
-    24
+    16
 }
 
 fn default_pane_fit_columns() -> u16 {
