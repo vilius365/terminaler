@@ -414,6 +414,10 @@ impl crate::TermWindow {
         let tile_budget_px = (px_budget - error_reserve).max(0.);
         let mut px_used = 0f32;
         let brief_rows = crate::brief_bar::snapshot().rows;
+        let pane_units = mux::Mux::try_get()
+            .and_then(|m| m.get_active_tab_for_window(self.mux_window_id))
+            .map(|t| t.pane_unit_info())
+            .unwrap_or_default();
 
         for snap in &snaps {
             // A box with no sessions comes FIRST — a box whose probe was
@@ -644,6 +648,21 @@ impl crate::TermWindow {
                     (false, false) => None,
                 };
 
+                // A small icon when the pane hosting this session sits in a
+                // group or a stack, in that group's ring colour.
+                let unit_mark = crate::spawn::live_tmux_attach_pane(&snap.box_name, &session.session)
+                    .and_then(|pane_id| pane_units.get(&pane_id).copied())
+                    .and_then(|u| match (u.group, u.stack) {
+                        (Some(g), _) => Some(("\u{25eb}", g as usize)),
+                        (None, Some(st)) if u.stack_len > 1 => Some(("\u{29c9}", st + 5)),
+                        _ => None,
+                    });
+                let count = match (unit_mark, count) {
+                    (Some((icon, _)), Some(c)) => Some(format!("{} {}", icon, c)),
+                    (Some((icon, _)), None) => Some(icon.to_string()),
+                    (None, c) => c,
+                };
+
                 let dimf = if stale || session.attached { 0.55 } else { 1.0 };
                 let mut tile = TileArgs::new(font, title_font, metrics, &label_metrics, theme, sidebar_width);
                 tile.icon = icon.to_string();
@@ -651,7 +670,11 @@ impl crate::TermWindow {
                 tile.icon_label = agent_line.map(|(t, c)| (t, c.mul_alpha(dimf)));
                 tile.label = label;
                 tile.label_color = label_color.mul_alpha(dimf);
-                tile.right_hint = count.map(|c| (c, theme.text_tertiary.mul_alpha(dimf)));
+                let hint_color = match unit_mark {
+                    Some((_, key)) => crate::agent_color::unit_ring_color(key, true),
+                    None => theme.text_tertiary.mul_alpha(dimf),
+                };
+                tile.right_hint = count.map(|c| (c, hint_color));
                 tile.border_color = theme.border_subtle.mul_alpha(dimf);
                 if session.attachable {
                     tile.item = Some(TabSidebarItem::TmuxSession {
@@ -736,9 +759,6 @@ impl crate::TermWindow {
         let label_metrics = RenderMetrics::with_font_metrics(&title_font.metrics());
 
         let mut tab_elements = vec![];
-        // Group and stack rows of tabs that have them. Kept apart so they
-        // still show when the LOCAL tab list is switched off.
-        let mut unit_elements: Vec<Element> = vec![];
 
         // Group heading for this window's own panes, matching the box eyebrows
         // the discovered machines get below. No status dot: live mux state has
@@ -860,43 +880,11 @@ impl crate::TermWindow {
             // Pane sub-tiles for split tabs.
             if has_multiple_panes {
                 let unit_info = tab.pane_unit_info();
-                let rows_start = tab_elements.len();
-                let mut prev_group = None;
-                let mut prev_stack = None;
-                for (pos_idx, pane_pos) in panes.iter().enumerate() {
+                for pane_pos in panes.iter() {
                     let pane = &pane_pos.pane;
                     let pane_id = pane.pane_id();
                     let unit = unit_info.get(&pane_id).copied();
                     let (group, stack) = unit.map_or((None, None), |u| (u.group, u.stack));
-                    if stack.is_some() && stack != prev_stack {
-                        let mut head = TileArgs::new(&font, &title_font, &metrics, &label_metrics, &theme, sidebar_width);
-                        head.half = true;
-                        head.icon = "\u{29c9}".to_string(); // ⧉
-                        head.icon_color = theme.accent_blue;
-                        head.label = format!("stack of {}", unit.map_or(1, |u| u.stack_len));
-                        head.label_color = theme.text_tertiary;
-                        head.border_color = theme.border_subtle;
-                        head.bg = theme.bg_base;
-                        tab_elements.push(build_tile(head));
-                    }
-                    if group.is_some() && group != prev_group {
-                        let mut head = TileArgs::new(&font, &title_font, &metrics, &label_metrics, &theme, sidebar_width);
-                        head.half = true;
-                        head.icon = "\u{25eb}".to_string(); // ◫
-                        head.icon_color = theme.accent_orange;
-                        head.label = "group".to_string();
-                        head.label_color = theme.text_secondary;
-                        head.border_color = theme.border_subtle;
-                        head.bg = theme.bg_base;
-                        head.hover_bg = Some(theme.bg_elevated);
-                        head.item = Some(TabSidebarItem::Pane {
-                            tab_idx,
-                            pane_idx: pane_pos.index,
-                        });
-                        tab_elements.push(build_tile(head));
-                    }
-                    prev_group = group;
-                    prev_stack = stack;
                     let on_show = unit.map_or(true, |u| u.on_show);
                     let pane_title = pane.get_title();
                     let pane_cwd = pane
@@ -930,19 +918,11 @@ impl crate::TermWindow {
                         sub.icon = "\u{2514}".to_string(); // └
                         sub.icon_color = theme.text_tertiary;
                     }
-                    if stack.is_some() {
-                        // In a stack: a marker for the unit on show, a hollow
-                        // one for those waiting behind it.
-                        if on_show {
-                            sub.icon = "\u{25b8}".to_string(); // ▸
-                            sub.icon_color = theme.accent_blue;
-                        } else {
-                            sub.icon = "\u{25cc}".to_string(); // ◌
-                            sub.icon_color = theme.text_tertiary;
-                        }
-                    }
+                    // A small icon marks a pane that sits in a group or a stack.
                     sub.label = if group.is_some() {
-                        format!(" {}", pane_label_src)
+                        format!("\u{25eb} {}", pane_label_src)
+                    } else if stack.is_some() {
+                        format!("\u{29c9} {}", pane_label_src)
                     } else {
                         pane_label_src
                     };
@@ -974,32 +954,6 @@ impl crate::TermWindow {
                     });
                     tab_elements.push(build_tile(sub));
 
-                    // After the last member of a loose group: a row to dissolve it.
-                    let next_group = panes
-                        .get(pos_idx + 1)
-                        .and_then(|p| unit_info.get(&p.pane.pane_id()))
-                        .and_then(|u| u.group);
-                    if group.is_some() && stack.is_none() && next_group != group {
-                        let mut ung = TileArgs::new(&font, &title_font, &metrics, &label_metrics, &theme, sidebar_width);
-                        ung.half = true;
-                        ung.icon = "\u{2715}".to_string(); // ✕
-                        ung.icon_color = theme.text_tertiary;
-                        ung.label = "ungroup".to_string();
-                        ung.label_color = theme.text_tertiary;
-                        ung.border_color = theme.border_subtle;
-                        ung.bg = theme.bg_base;
-                        ung.hover_bg = Some(theme.bg_elevated);
-                        ung.item = Some(TabSidebarItem::UngroupPane {
-                            tab_idx,
-                            pane_idx: pane_pos.index,
-                        });
-                        tab_elements.push(build_tile(ung));
-                    }
-                }
-                if !self.config.tab_sidebar_show_local
-                    && unit_info.values().any(|u| u.group.is_some() || u.stack.is_some())
-                {
-                    unit_elements.extend(tab_elements.drain(rows_start..));
                 }
             }
         }
@@ -1048,17 +1002,6 @@ impl crate::TermWindow {
         // sections start at the top and no hit areas are registered for it.
         if !self.config.tab_sidebar_show_local {
             tab_elements.clear();
-            if !unit_elements.is_empty() {
-                tab_elements.push(sidebar_eyebrow(
-                    &title_font,
-                    "groups",
-                    None,
-                    &theme,
-                    sidebar_width,
-                    false,
-                ));
-                tab_elements.append(&mut unit_elements);
-            }
         }
         let tabs_avail = (window_height - dock_h - 40.).max(60.);
         let el_heights: Vec<f32> = tab_elements

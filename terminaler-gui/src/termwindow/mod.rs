@@ -106,9 +106,10 @@ lazy_static::lazy_static! {
 /// toasts, and the Slack webhook are all suppressed, and the sidebar's
 /// per-pane flash never starts. Session-only, like the per-pane mute in
 /// `MUTED_PANES` — a config write would need a reload round-trip, and the
-/// switch exists to silence the next hour, not the next launch.
+/// switch exists to silence the next hour, not the next launch. Starts
+/// blocked (user request, 2026-11-04); the dock button turns it off.
 pub static NOTIFICATIONS_BLOCKED: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+    std::sync::atomic::AtomicBool::new(true);
 
 /// True while the global notification block is active.
 pub fn notifications_blocked() -> bool {
@@ -118,9 +119,9 @@ pub fn notifications_blocked() -> bool {
 /// Session-only opacity override, toggled from the sidebar dock: when set,
 /// every pane paints fully opaque whatever `window_background_opacity` says.
 /// Like the notification block it is not written to the config, so a restart
-/// returns to the configured translucency (user request, 2026-10-02).
+/// returns to the default, which is now opaque (user request, 2026-11-04).
 pub static OPAQUE_OVERRIDE: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+    std::sync::atomic::AtomicBool::new(true);
 
 /// The background opacity to paint with: `configured` unless the dock's
 /// opacity toggle has forced the panes opaque.
