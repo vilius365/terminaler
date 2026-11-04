@@ -2799,6 +2799,29 @@ impl TabInner {
         }
         self.set_zoomed(false);
 
+        // Already in the focus shape: trade places with the main pane. The
+        // others stay where they are, so only the pair moves.
+        if self.focus_main_fraction().is_some() {
+            let main_id = match self.pane.as_ref() {
+                Some(Tree::Node { left, .. }) => match **left {
+                    Tree::Leaf(ref p) => Some(p.pane_id()),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(main_id) = main_id {
+                if main_id == pane_id {
+                    return true;
+                }
+                if self.swap_panes(main_id, pane_id) {
+                    // The new main pane is the first leaf in preorder.
+                    self.active = 0;
+                    self.focus_arranged = true;
+                    return true;
+                }
+            }
+        }
+
         let panes: Vec<Arc<dyn Pane>> = self
             .iter_panes_ignoring_zoom()
             .into_iter()
@@ -3994,6 +4017,16 @@ mod test {
         // An unknown pane leaves the layout alone.
         assert!(!tab.focus_layout(99, 0.6));
         assert_eq!(tab.iter_panes()[0].pane.pane_id(), 2);
+
+        // Focusing another pane while already in the focus shape trades
+        // places with the main pane; the rest of the stack stays put.
+        assert!(tab.focus_layout(3, 0.6));
+        let after = tab.iter_panes();
+        let ids: Vec<PaneId> = after.iter().map(|p| p.pane.pane_id()).collect();
+        assert_eq!(ids, vec![3, 1, 2], "3 is main, 2 took 3's old seat, 1 did not move");
+        assert!(after[0].is_active);
+        assert_eq!((after[1].top, after[1].height), (stack[0].top, stack[0].height));
+        assert_eq!((after[2].top, after[2].height), (stack[1].top, stack[1].height));
     }
 
     #[test]

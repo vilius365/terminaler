@@ -294,8 +294,9 @@ impl PaneAnimations {
             // the tab and not a tab switch.
             //
             // The same panes before and after is a rearrangement (swap,
-            // rotate, focus layout, dock): those panes are lifted, glided to
-            // the middle of the pane area and dropped into their new places.
+            // rotate, focus layout, dock). A swapped pair is lifted, glided
+            // to the middle of the pane area and dropped into the other's
+            // place.
             let rearranged = snaps.len() == self.last_rects.len()
                 && snaps.iter().all(|(id, _)| self.last_rects.contains_key(id));
             let centre = {
@@ -305,15 +306,34 @@ impl PaneAnimations {
                 let bottom = snaps.iter().map(|(_, s)| s.rect.y + s.rect.h).fold(f32::MIN, f32::max);
                 ((left + right) / 2.0, (top + bottom) / 2.0)
             };
+            // Only a true swap is animated: two panes that exchanged exactly
+            // each other's rects. Any other reshuffle (a focus layout, a
+            // rotate) snaps, so panes that merely shifted do not move.
+            let same = |a: &PxRect, b: &PxRect| !rects_differ(a, b);
+            let last = self.last_rects.clone();
+            let swapped = |id: PaneId, snap: &PaneSnap| -> bool {
+                let Some(prev) = last.get(&id) else {
+                    return false;
+                };
+                rects_differ(&prev.rect, &snap.rect)
+                    && snaps.iter().any(|(other, o)| {
+                        *other != id
+                            && last
+                                .get(other)
+                                .map_or(false, |op| same(&op.rect, &snap.rect) && same(&prev.rect, &o.rect))
+                    })
+            };
             for (id, snap) in snaps {
                 match self.last_rects.get(id) {
                     Some(prev) => {
                         if rects_differ(&prev.rect, &snap.rect) {
-                            let from = [prev.rect.x, prev.rect.y, prev.rect.x + prev.rect.w, prev.rect.y + prev.rect.h];
-                            let to = [snap.rect.x, snap.rect.y, snap.rect.x + snap.rect.w, snap.rect.y + snap.rect.h];
-                            let moved_edges = (0..4).filter(|&i| (from[i] - to[i]).abs() >= 1.0).count();
-                            let lift = (rearranged && moved_edges > 1).then_some(centre);
-                            self.start_bounded(*id, prev.rect, snap.rect, snap.bounds, lift, now, duration);
+                            if rearranged {
+                                if swapped(*id, snap) {
+                                    self.start_bounded(*id, prev.rect, snap.rect, snap.bounds, Some(centre), now, duration);
+                                }
+                                continue;
+                            }
+                            self.start_bounded(*id, prev.rect, snap.rect, snap.bounds, None, now, duration);
                         }
                     }
                     None => {
@@ -567,6 +587,32 @@ mod test {
     }
 
     #[test]
+    fn a_reshuffle_that_is_not_a_swap_snaps() {
+        let t0 = Instant::now();
+        let mut a = PaneAnimations::default();
+        // Focus layout shape: 1 is the main pane, 2 and 3 are stacked beside it.
+        let before = [(1, snap(0.0, 100.0)), (2, snap(100.0, 50.0)), (3, snap(150.0, 50.0))];
+        a.observe_frame(&before, ENV, CELL, t0, MS(150));
+        // Pane 3 becomes main and the rest shift: no pair traded places.
+        let after = [(1, snap(100.0, 50.0)), (2, snap(150.0, 50.0)), (3, snap(0.0, 100.0))];
+        a.observe_frame(&after, ENV, CELL, t0 + MS(16), MS(150));
+        assert!(!a.has_tweens());
+    }
+
+    #[test]
+    fn a_swap_among_unmoved_panes_animates_only_the_pair() {
+        let t0 = Instant::now();
+        let mut a = PaneAnimations::default();
+        let before = [(1, snap(0.0, 100.0)), (2, snap(100.0, 50.0)), (3, snap(150.0, 50.0))];
+        a.observe_frame(&before, ENV, CELL, t0, MS(150));
+        let after = [(1, snap(150.0, 50.0)), (2, snap(100.0, 50.0)), (3, snap(0.0, 100.0))];
+        a.observe_frame(&after, ENV, CELL, t0 + MS(16), MS(150));
+        assert!(a.current(1, t0 + MS(100), MS(150)).is_some());
+        assert!(a.current(3, t0 + MS(100), MS(150)).is_some());
+        assert!(a.current(2, t0 + MS(100), MS(150)).is_none(), "the bystander stays put");
+    }
+
+    #[test]
     fn env_change_suppresses_everything() {
         let t0 = Instant::now();
         let mut a = PaneAnimations::default();
@@ -611,8 +657,9 @@ mod test {
         let t0 = Instant::now();
         let mut a = PaneAnimations::default();
         a.observe_frame(&[(1, snap(0.0, 100.0)), (2, snap(100.0, 100.0))], ENV, CELL, t0, MS(150));
-        // Pane 1 moves to the right and gets narrower: two edges change.
-        let after = [(1, snap(150.0, 50.0)), (2, snap(0.0, 150.0))];
+        // Pane 1 moves to the right and gets narrower: two edges change. A
+        // third pane appears, so this is not a pure rearrangement.
+        let after = [(1, snap(150.0, 50.0)), (2, snap(0.0, 150.0)), (3, snap(60.0, 10.0))];
         a.observe_frame(&after, ENV, CELL, t0 + MS(16), MS(150));
         let tr = at(&a, 1, &after[0].1, t0 + MS(16)).unwrap();
         assert_eq!(tr.clip, None, "no clip, or half the pane would be undrawn");
