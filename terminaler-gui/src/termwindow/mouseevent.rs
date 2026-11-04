@@ -322,11 +322,7 @@ impl super::TermWindow {
         // Header pill (focus, close): the only pane buttons besides the grip.
         if matches!(event.kind, WMEK::Press(MousePress::Left)) {
             if let Some((pane_id, btn)) = self.toast_button_at(&event) {
-                if btn == "fit" {
-                    self.close_armed = None;
-                    self.toggle_pane_font_fit(pane_id);
-                    self.hovered_pane_id = None;
-                } else if btn == "close" {
+                if btn == "close" {
                     if self.close_is_armed(pane_id) {
                         self.close_armed = None;
                         Mux::get().remove_pane(pane_id);

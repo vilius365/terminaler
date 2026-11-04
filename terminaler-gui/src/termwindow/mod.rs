@@ -5350,22 +5350,6 @@ impl TermWindow {
         }
     }
 
-    /// The fit button: switch automatic fitting on for the pane (and fit it
-    /// now), or off again, returning the pane to the window's font size.
-    pub fn toggle_pane_font_fit(&mut self, pane_id: PaneId) {
-        if self.pane_state(pane_id).font_auto {
-            self.set_pane_font_auto(pane_id, false);
-            self.set_pane_font_scale(pane_id, 1.0);
-            self.resize_pane_for_font_scale(pane_id);
-            self.shape_generation += 1;
-            self.shape_cache.borrow_mut().clear();
-            self.invalidate_tab_sidebar();
-        } else {
-            self.set_pane_font_auto(pane_id, true);
-            self.fit_pane_font_size(pane_id);
-        }
-    }
-
     /// Keep every pane's terminal grid and, for panes that keep themselves
     /// fitted, its font size in step with the pane's box, each pane on its own.
     /// A changed box is handled once it has held still for a moment, so
