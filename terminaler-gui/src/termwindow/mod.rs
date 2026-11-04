@@ -5274,9 +5274,14 @@ impl TermWindow {
                 }
                 // Every pane fits its font to its size unless it was sized by
                 // hand (a recorded scale) or fitting is off in the config.
-                fresh.font_auto = PANE_FONT_AUTO.lock().contains(&pane_id)
-                    || (self.config.pane_font_auto
-                        && recorded_pane_font_scale(pane_id).is_none());
+                let mut autos = PANE_FONT_AUTO.lock();
+                if self.config.pane_font_auto
+                    && recorded_pane_font_scale(pane_id).is_none()
+                {
+                    // Recorded so the session file saves the pane as fitted.
+                    autos.insert(pane_id);
+                }
+                fresh.font_auto = autos.contains(&pane_id);
                 fresh
             })
         })
