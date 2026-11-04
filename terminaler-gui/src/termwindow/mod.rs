@@ -5366,44 +5366,63 @@ impl TermWindow {
         }
     }
 
-    /// Refit every pane that keeps itself fitted, each to its own size. A
-    /// changed box is refitted once it has held still for a moment, so
-    /// dragging a divider does not rebuild fonts on every pixel.
+    /// Keep every pane's terminal grid and, for panes that keep themselves
+    /// fitted, its font size in step with the pane's box, each pane on its own.
+    /// A changed box is handled once it has held still for a moment, so
+    /// dragging a divider does not rebuild fonts on every pixel. A pane seen
+    /// for the first time (after a restore, say) is handled at once.
     pub fn refit_auto_panes(&mut self, panes: &[PositionedPane]) {
         let now = Instant::now();
         let mut refit = vec![];
+        let mut resync = vec![];
         let mut pending = false;
         for pos in panes {
             let pane_id = pos.pane.pane_id();
-            if !self.pane_state(pane_id).font_auto {
+            let (auto, scaled) = {
+                let state = self.pane_state(pane_id);
+                (state.font_auto, (state.font_scale - 1.0).abs() > 0.001)
+            };
+            if !auto && !scaled {
                 continue;
             }
             let (_, _, w, h) = self.pane_content_rect(pos);
             let area = (w as i32, h as i32);
             let mut state = self.pane_state(pane_id);
-            if state.auto_area == Some(area) {
-                if let Some(changed) = state.auto_changed {
-                    if now.duration_since(changed) >= Duration::from_millis(150) {
+            let act = if state.auto_area == Some(area) {
+                match state.auto_changed {
+                    Some(changed) if now.duration_since(changed) >= Duration::from_millis(150) => {
                         state.auto_changed = None;
-                        refit.push(pane_id);
-                    } else {
-                        pending = true;
+                        true
                     }
+                    Some(_) => {
+                        pending = true;
+                        false
+                    }
+                    None => false,
                 }
+            } else if state.auto_area.is_none() {
+                state.auto_area = Some(area);
+                state.auto_changed = None;
+                true
             } else {
-                let first = state.auto_area.is_none();
                 state.auto_area = Some(area);
                 state.auto_changed = Some(now);
-                if first {
-                    state.auto_changed = None;
+                pending = true;
+                false
+            };
+            if act {
+                if auto {
                     refit.push(pane_id);
                 } else {
-                    pending = true;
+                    resync.push(pane_id);
                 }
             }
         }
         for pane_id in refit {
             self.fit_pane_font_size(pane_id);
+        }
+        for pane_id in resync {
+            self.resize_pane_for_font_scale(pane_id);
         }
         if pending {
             self.update_next_frame_time(Some(now + Duration::from_millis(60)));
