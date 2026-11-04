@@ -104,6 +104,24 @@ lazy_static::lazy_static! {
 /// Each pane's own font scale, by pane id. The window's per-pane state holds
 /// the live value; this copy is what the session autosave reads and what a
 /// restore seeds before the window exists.
+/// Columns a fitted pane should show for a pane `logical_width` pixels wide
+/// (96 dpi pixels): the wider the pane, the more columns, but slowly, so the
+/// text grows with the pane without becoming huge or tiny.
+pub fn fit_columns_for_width(logical_width: f64) -> u16 {
+    const TABLE: [(f64, u16); 5] = [
+        (700.0, 80),
+        (1000.0, 90),
+        (1400.0, 100),
+        (1800.0, 110),
+        (f64::MAX, 120),
+    ];
+    TABLE
+        .iter()
+        .find(|(upto, _)| logical_width < *upto)
+        .map(|(_, cols)| *cols)
+        .unwrap_or(120)
+}
+
 pub static PANE_FONT_SCALES: std::sync::LazyLock<parking_lot::Mutex<std::collections::HashMap<PaneId, f64>>> =
     std::sync::LazyLock::new(Default::default);
 
@@ -5444,7 +5462,6 @@ impl TermWindow {
     /// shows `pane_fit_columns` columns and `pane_fit_rows` rows. Returns the
     /// new scale, or None when the pane is not in the active tab.
     pub fn fit_pane_font_size(&mut self, pane_id: PaneId) -> Option<f64> {
-        let wanted_cols = self.config.pane_fit_columns.max(10) as usize;
         let wanted_rows = self.config.pane_fit_rows.max(5) as usize;
         let mux = Mux::get();
         let tab = mux.get_active_tab_for_window(self.mux_window_id)?;
@@ -5456,6 +5473,12 @@ impl TermWindow {
         drop(tab);
         drop(mux);
         let (area_w, area_h) = (area_w as usize, area_h as usize);
+        // The columns the pane should show depend on its width in
+        // resolution-independent pixels: a wide pane shows more columns, but
+        // not proportionally more, so its text still grows with it.
+        let logical_width = area_w as f64 * 96.0 / self.fonts.get_dpi().max(1) as f64;
+        let wanted_cols =
+            (fit_columns_for_width(logical_width) as usize).max(self.config.pane_fit_columns.max(10) as usize);
 
         // Whether the pane shows at least the wanted columns AND rows at
         // `scale`, from the same scaled metrics it is laid out and painted with.

@@ -674,7 +674,8 @@ pub struct Config {
     #[dynamic(default = "default_true")]
     pub pane_font_auto: bool,
 
-    /// Columns an automatically fitted pane font keeps visible.
+    /// The fewest columns an automatically fitted pane font keeps visible. A
+    /// wider pane shows more (80 up to 120, by its width).
     #[dynamic(default = "default_pane_fit_columns")]
     pub pane_fit_columns: u16,
 
