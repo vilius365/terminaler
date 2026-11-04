@@ -108,15 +108,15 @@ pub fn fit_columns_for_width(logical_width: f64) -> u16 {
     const TABLE: [(f64, u16); 5] = [
         (700.0, 80),
         (1000.0, 90),
-        (1400.0, 100),
-        (1800.0, 110),
-        (f64::MAX, 120),
+        (1400.0, 115),
+        (2000.0, 140),
+        (f64::MAX, 160),
     ];
     TABLE
         .iter()
         .find(|(upto, _)| logical_width < *upto)
         .map(|(_, cols)| *cols)
-        .unwrap_or(120)
+        .unwrap_or(160)
 }
 
 /// Each pane's own font scale, by pane id. The window's per-pane state holds
