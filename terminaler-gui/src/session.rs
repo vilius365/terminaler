@@ -256,7 +256,7 @@ async fn restore_subtree(
                 SplitDirectionState::Horizontal => SplitDirection::Horizontal,
                 SplitDirectionState::Vertical => SplitDirection::Vertical,
             };
-            let size_pct = ((*ratio) * 100.0).round() as u8;
+            let size_pct = second_percent(*ratio);
 
             // Get cwd for the second child's first leaf
             let second_cwd = first_leaf_cwd(second);
@@ -288,6 +288,26 @@ async fn restore_subtree(
 
             Ok(())
         }
+    }
+}
+
+/// Percent of a split the new (second) pane gets, given the saved size ratio
+/// of the first child. `SplitRequest` sizes the NEW pane when it goes second,
+/// so passing the first child's share would mirror every lopsided layout.
+fn second_percent(first_ratio: f64) -> u8 {
+    (((1.0 - first_ratio) * 100.0).round() as i64).clamp(1, 99) as u8
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn second_pane_gets_the_rest_of_the_split() {
+        assert_eq!(second_percent(0.5), 50);
+        assert_eq!(second_percent(0.693), 31);
+        assert_eq!(second_percent(0.0), 99);
+        assert_eq!(second_percent(1.0), 1);
     }
 }
 
