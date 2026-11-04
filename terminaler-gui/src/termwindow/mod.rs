@@ -101,9 +101,6 @@ lazy_static::lazy_static! {
     pub static ref MUTED_PANES: Mutex<HashSet<PaneId>> = Mutex::new(HashSet::new());
 }
 
-/// Each pane's own font scale, by pane id. The window's per-pane state holds
-/// the live value; this copy is what the session autosave reads and what a
-/// restore seeds before the window exists.
 /// Columns a fitted pane should show for a pane `logical_width` pixels wide
 /// (96 dpi pixels): the wider the pane, the more columns, but slowly, so the
 /// text grows with the pane without becoming huge or tiny.
@@ -122,6 +119,9 @@ pub fn fit_columns_for_width(logical_width: f64) -> u16 {
         .unwrap_or(120)
 }
 
+/// Each pane's own font scale, by pane id. The window's per-pane state holds
+/// the live value; this copy is what the session autosave reads and what a
+/// restore seeds before the window exists.
 pub static PANE_FONT_SCALES: std::sync::LazyLock<parking_lot::Mutex<std::collections::HashMap<PaneId, f64>>> =
     std::sync::LazyLock::new(Default::default);
 
