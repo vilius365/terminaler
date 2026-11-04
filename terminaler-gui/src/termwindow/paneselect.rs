@@ -192,11 +192,8 @@ impl PaneSelector {
                 PaneSelectMode::GroupWithActive | PaneSelectMode::StackWithActive => {
                     if let Some(pos) = panes.iter().find(|p| p.index == pane_index) {
                         let target = pos.pane.pane_id();
-                        let done = if self.mode == PaneSelectMode::GroupWithActive {
-                            tab.group_with(target)
-                        } else {
-                            tab.stack_join_with(target)
-                        };
+                        // Stack-with groups too: nothing is hidden any more.
+                        let done = tab.group_with(target);
                         if done {
                             term_window.invalidate_tab_sidebar();
                             if let Some(window) = term_window.window.as_ref() {

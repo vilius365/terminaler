@@ -4779,7 +4779,9 @@ impl TermWindow {
                 };
                 let changed = match assignment {
                     PaneGroup(_) => tab.group_panes(*direction),
-                    PaneStackJoin(_) => tab.stack_join(*direction),
+                    // Stacking no longer hides anything: panes stay side by side
+                    // and are marked as one set, like a group.
+                    PaneStackJoin(_) => tab.group_panes(*direction),
                     _ => tab.stack_cycle(*direction),
                 };
                 log::info!("{:?}: {}", assignment, if changed { "applied" } else { "refused (no neighbour, already grouped/stacked, or zoomed)" });
@@ -4798,7 +4800,7 @@ impl TermWindow {
                 };
                 let changed = match assignment {
                     PaneGroupWith(id) => tab.group_with(*id),
-                    PaneStackWith(id) => tab.stack_join_with(*id),
+                    PaneStackWith(id) => tab.group_with(*id),
                     PaneSwapWith(id) => match tab.get_active_pane() {
                         Some(active) => tab.swap_panes(active.pane_id(), *id),
                         None => false,

@@ -720,13 +720,14 @@ impl crate::TermWindow {
                 .context("agent identity ring")?;
         }
 
-        // "Already open" flash: two quick pulses over whatever ring is there.
+        // "Already open" flash: three bold pulses, a wash over the pane and a
+        // thick ring, over whatever ring is already there.
         let flash_started = match *self.pane_flash.borrow() {
             Some((id, started)) if id == pane_id => Some(started),
             _ => None,
         };
         if let Some(started) = flash_started {
-            const FLASH_MS: f32 = 700.0;
+            const FLASH_MS: f32 = 1200.0;
             let elapsed = started.elapsed().as_secs_f32() * 1000.0;
             if elapsed >= FLASH_MS {
                 let mut flash = self.pane_flash.borrow_mut();
@@ -734,10 +735,13 @@ impl crate::TermWindow {
                     *flash = None;
                 }
             } else {
-                // Two sine pulses across FLASH_MS, each from 0 up to 1 and back.
-                let pulse = (elapsed / FLASH_MS * 2.0 * std::f32::consts::PI * 2.0 - std::f32::consts::FRAC_PI_2).sin() * 0.5 + 0.5;
-                let color = LinearRgba::with_components(1.0, 0.85, 0.2, 0.25 + 0.75 * pulse);
-                self.draw_border_ring(layers, 2, background_rect, 4.0, color)
+                let phase = elapsed / FLASH_MS * 3.0 * std::f32::consts::PI * 2.0;
+                let pulse = (phase - std::f32::consts::FRAC_PI_2).sin() * 0.5 + 0.5;
+                let wash = LinearRgba::with_components(1.0, 0.8, 0.1, 0.30 * pulse);
+                self.filled_rectangle(layers, 2, background_rect, wash)
+                    .context("flash wash")?;
+                let color = LinearRgba::with_components(1.0, 0.8, 0.1, 0.55 + 0.45 * pulse);
+                self.draw_border_ring(layers, 2, background_rect, 10.0, color)
                     .context("flash ring")?;
                 let frame = std::time::Duration::from_millis(1000 / self.config.max_fps.clamp(1, 240));
                 self.update_next_frame_time(Some(Instant::now() + frame));
