@@ -5388,33 +5388,35 @@ impl TermWindow {
             let (_, _, w, h) = self.pane_content_rect(pos);
             let area = (w as i32, h as i32);
             let mut state = self.pane_state(pane_id);
-            let act = if state.auto_area == Some(area) {
-                match state.auto_changed {
-                    Some(changed) if now.duration_since(changed) >= Duration::from_millis(150) => {
+            if state.auto_area == Some(area) {
+                // Box unchanged: a fitted pane whose box has now held still
+                // gets its font refitted.
+                if let Some(changed) = state.auto_changed {
+                    if now.duration_since(changed) >= Duration::from_millis(150) {
                         state.auto_changed = None;
-                        true
-                    }
-                    Some(_) => {
+                        refit.push(pane_id);
+                    } else {
                         pending = true;
-                        false
                     }
-                    None => false,
                 }
             } else if state.auto_area.is_none() {
                 state.auto_area = Some(area);
                 state.auto_changed = None;
-                true
-            } else {
-                state.auto_area = Some(area);
-                state.auto_changed = Some(now);
-                pending = true;
-                false
-            };
-            if act {
                 if auto {
                     refit.push(pane_id);
                 } else {
                     resync.push(pane_id);
+                }
+            } else {
+                // Box changed (a divider is being dragged, say): fill the new
+                // box at once with the current font so the content never lags
+                // behind the border; a fitted pane picks its new font size once
+                // the box stops changing.
+                state.auto_area = Some(area);
+                resync.push(pane_id);
+                if auto {
+                    state.auto_changed = Some(now);
+                    pending = true;
                 }
             }
         }
