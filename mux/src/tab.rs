@@ -310,6 +310,7 @@ fn convert_tree_to_session_layout(
         Tree::Empty => PaneLayoutNode::Pane {
             cwd: None,
             command: None,
+            argv: None,
             hidden: false,
             is_active: false,
             group: None,
@@ -334,9 +335,21 @@ fn convert_tree_to_session_layout(
                 ),
                 None => (None, None),
             };
+            // Only an ssh is replayed: it is how tmux sessions on other boxes
+            // are attached, and re-running it is safe. Anything else (a shell,
+            // an editor) restores as a plain shell in its directory.
+            let argv = pane
+                .get_foreground_process_info(CachePolicy::AllowStale)
+                .map(|info| info.argv)
+                .filter(|argv| {
+                    argv.first()
+                        .and_then(|exe| exe.rsplit('/').next())
+                        .map_or(false, |name| name == "ssh")
+                });
             PaneLayoutNode::Pane {
                 cwd,
                 command: None,
+                argv,
                 hidden: hidden.contains(&pane.pane_id()),
                 is_active,
                 group: match unit {
@@ -1514,6 +1527,7 @@ impl TabInner {
             None => PaneLayoutNode::Pane {
                 cwd: None,
                 command: None,
+                argv: None,
                 hidden: false,
                 is_active: false,
                 group: None,

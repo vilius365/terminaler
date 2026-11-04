@@ -54,6 +54,10 @@ pub enum PaneLayoutNode {
         /// The command that was running (for display/restart).
         #[serde(default)]
         command: Option<String>,
+        /// The argv of an `ssh` the pane was running (a tmux attach, say), so a
+        /// restore reconnects instead of opening a plain shell.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        argv: Option<Vec<String>>,
         /// Whether this pane was hidden.
         #[serde(default)]
         hidden: bool,
@@ -207,6 +211,7 @@ mod tests {
                         layout: PaneLayoutNode::Pane {
                             cwd: Some(PathBuf::from("/home/user")),
                             command: Some("bash".into()),
+                            argv: None,
                             hidden: false,
                             is_active: true,
                             group: None,
@@ -222,6 +227,7 @@ mod tests {
                             first: Box::new(PaneLayoutNode::Pane {
                                 cwd: Some(PathBuf::from("/home/user/project")),
                                 command: None,
+                                argv: None,
                                 hidden: false,
                                 is_active: true,
                                 group: None,
@@ -231,6 +237,7 @@ mod tests {
                             second: Box::new(PaneLayoutNode::Pane {
                                 cwd: Some(PathBuf::from("/home/user/project")),
                                 command: None,
+                                argv: None,
                                 hidden: false,
                                 is_active: false,
                                 group: None,
@@ -275,6 +282,31 @@ mod tests {
             } => {
                 assert_eq!((None, None, None), (group, stack, stack_pos));
             }
+            other => panic!("expected a pane, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn ssh_argv_round_trips_and_old_files_have_none() {
+        let argv = vec!["ssh".to_string(), "-t".to_string(), "devbox".to_string(), "--".to_string(), "tmux -u attach-session -t 'x'".to_string()];
+        let node = PaneLayoutNode::Pane {
+            cwd: None,
+            command: None,
+            argv: Some(argv.clone()),
+            hidden: false,
+            is_active: true,
+            group: None,
+            stack: None,
+            stack_pos: None,
+        };
+        let json = serde_json::to_string(&node).unwrap();
+        match serde_json::from_str::<PaneLayoutNode>(&json).unwrap() {
+            PaneLayoutNode::Pane { argv: got, .. } => assert_eq!(got, Some(argv)),
+            other => panic!("expected a pane, got {:?}", other),
+        }
+        let old = r#"{"type":"pane","cwd":null,"hidden":false,"is_active":true}"#;
+        match serde_json::from_str::<PaneLayoutNode>(old).unwrap() {
+            PaneLayoutNode::Pane { argv, .. } => assert_eq!(argv, None),
             other => panic!("expected a pane, got {:?}", other),
         }
     }

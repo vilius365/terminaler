@@ -1940,8 +1940,8 @@ fn default_tab_max_width() -> usize {
 fn default_tab_sidebar_width() -> u16 {
     // The compact tile rail's reference width; tiles anchor to both edges and
     // the rail font scales from this (see terminaler-gui tab_sidebar.rs).
-    // 1.5x the original 180 (user request, 2026-11-04).
-    270
+    // 1.5x the original 180, then a little more (user request, 2026-11-04).
+    300
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

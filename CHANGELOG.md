@@ -3,12 +3,13 @@
 ## 2026-11-04
 
 ### Changed
-- **The sidebar is 1.5x wider.** `tab_sidebar_width` now defaults to 270 (was 180); the width is read when a window opens.
+- **The sidebar is 1.5x wider.** `tab_sidebar_width` now defaults to 300 (was 180); the width is read when a window opens.
 - **Swapped panes lift, glide to the middle and fall into place.** When two panes trade places (drop menu "Swap places", pick-a-pane swap, or focusing a pane while the focus layout is on), both are lifted, glide to the centre of the pane area and drop into each other's seat (675 ms, `pane_lift_ms`). A lifted pane is drawn above the others with a soft drop shadow that deepens as it rises and fades as it lands. Nothing else is animated as a move: a layout change that is not a swap snaps, so panes that merely shift stay still. Focusing a pane in a focus layout now swaps it with the main pane instead of rebuilding the stack, so the other panes keep their places. Splits, closes and resizes keep their short reveal (`pane_animation_ms`, now 225). The new `pane_animation_easing` setting (default `"EaseOut"`; also `Linear`, `Ease`, `EaseIn`, `EaseInOut`, `{ "CubicBezier": [...] }`) picks the curve for those. Both durations reload live.
 - **Stacking no longer hides panes.** `PaneStackJoin`, `PaneStackWith` and the drop menu's "Stack with this pane" group the panes instead; every pane stays visible. Panes of one group share a border colour, and a pane in a group or stack shows a small ◫ or ⧉ icon in its sidebar entry. The "groups" sidebar section and its group, stack and ungroup rows are gone.
 - **Notifications start blocked and panes start opaque.** The dock buttons still switch them off for the session.
 
 ### Fixed
+- **Restarting reopens the panes you had, not an empty shell.** The session file was written only on a clean quit, and a close wrote an empty one over it, so a kill or restart left nothing to restore. The GUI now saves every 5 seconds while it runs, never saves an empty session, and keeps the file after a restore. Panes that were running `ssh` (tmux attaches to other boxes) reconnect with the same command; other panes reopen as a shell in their directory. With a saved session there is no extra default terminal.
 - **EaseIn and EaseInOut jumped at the first frame.** The easing code used a curve's four control numbers as a one-dimensional sum, so those curves started 42% along. Pane animations now solve the cubic Bézier properly. The visual bell still uses the old evaluation.
 
 ### Added

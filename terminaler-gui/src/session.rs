@@ -47,12 +47,60 @@ pub fn capture_session() -> SessionState {
     }
 }
 
-/// Save the current session state to disk.
+/// The last session text written, so an unchanged layout is not rewritten.
+static LAST_SAVED: parking_lot::Mutex<String> = parking_lot::Mutex::new(String::new());
+
+/// Save the current session state to disk. An empty mux is never saved: by
+/// the time the last window has closed there is nothing to capture, and
+/// writing that would erase the layout worth restoring.
 pub fn save_current_session() {
     let state = capture_session();
+    if state.windows.is_empty() {
+        return;
+    }
+    let text = match serde_json::to_string(&state) {
+        Ok(text) => text,
+        Err(e) => {
+            log::error!("Failed to encode session: {:#}", e);
+            return;
+        }
+    };
+    {
+        let mut last = LAST_SAVED.lock();
+        if *last == text {
+            return;
+        }
+        *last = text;
+    }
     if let Err(e) = mux::session_state::save_session(&state) {
         log::error!("Failed to save session: {:#}", e);
     }
+}
+
+/// Save the session every few seconds while the GUI runs, so a kill, a
+/// crash or a restart from outside still leaves the latest layout behind.
+pub fn start_autosave() {
+    static STARTED: std::sync::Once = std::sync::Once::new();
+    STARTED.call_once(start_autosave_thread);
+}
+
+fn start_autosave_thread() {
+    std::thread::Builder::new()
+        .name("session-autosave".into())
+        .spawn(|| loop {
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            promise::spawn::spawn_into_main_thread(async {
+                save_current_session();
+            })
+            .detach();
+        })
+        .ok();
+}
+
+fn command_for(argv: Option<Vec<String>>) -> Option<portable_pty::CommandBuilder> {
+    argv.filter(|a| !a.is_empty()).map(|a| {
+        portable_pty::CommandBuilder::from_argv(a.into_iter().map(std::ffi::OsString::from).collect())
+    })
 }
 
 /// Try to load the previous session state from disk.
@@ -88,7 +136,9 @@ pub async fn restore_session(
 
             if tab_idx == 0 {
                 // First tab: spawn into the window that was just created
-                let tab = domain.spawn(size, None, first_cwd, window_id).await?;
+                let tab = domain
+                    .spawn(size, command_for(first_leaf_argv(&tab_state.layout)), first_cwd, window_id)
+                    .await?;
                 let root_pane_id = tab
                     .get_active_pane()
                     .map(|p| p.pane_id())
@@ -125,7 +175,9 @@ pub async fn restore_session(
                 tab.restore_groups(&tab_state.layout);
             } else {
                 // Additional tabs: spawn a new tab in the same window
-                let tab = domain.spawn(size, None, first_cwd, window_id).await?;
+                let tab = domain
+                    .spawn(size, command_for(first_leaf_argv(&tab_state.layout)), first_cwd, window_id)
+                    .await?;
                 let root_pane_id = tab
                     .get_active_pane()
                     .map(|p| p.pane_id())
@@ -174,11 +226,6 @@ pub async fn restore_session(
         mux.set_active_workspace(active_workspace);
     }
 
-    // Delete session file after successful restore
-    if let Err(e) = mux::session_state::delete_session() {
-        log::warn!("Failed to delete session file: {:#}", e);
-    }
-
     Ok(())
 }
 
@@ -218,7 +265,7 @@ async fn restore_subtree(
             let new_pane = domain
                 .split_pane(
                     SplitSource::Spawn {
-                        command: None,
+                        command: command_for(first_leaf_argv(second)),
                         command_dir: second_cwd,
                     },
                     tab_id,
@@ -241,6 +288,14 @@ async fn restore_subtree(
 
             Ok(())
         }
+    }
+}
+
+/// The ssh argv of the first (leftmost/topmost) leaf, if it was running one.
+fn first_leaf_argv(node: &PaneLayoutNode) -> Option<Vec<String>> {
+    match node {
+        PaneLayoutNode::Pane { argv, .. } => argv.clone(),
+        PaneLayoutNode::Split { first, .. } => first_leaf_argv(first),
     }
 }
 

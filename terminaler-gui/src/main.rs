@@ -197,6 +197,7 @@ async fn spawn_tab_in_domain_if_mux_is_empty(
 
     // Try to restore a previous session (only when no explicit command was given)
     if cmd.is_none() && !is_connecting {
+        crate::session::start_autosave();
         if let Some(session) = crate::session::load_previous_session() {
             if !session.windows.is_empty() {
                 log::info!(
