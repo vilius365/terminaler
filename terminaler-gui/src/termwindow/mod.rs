@@ -5387,7 +5387,20 @@ impl TermWindow {
             }
             let (_, _, w, h) = self.pane_content_rect(pos);
             let area = (w as i32, h as i32);
+            // The grid the pane should have in this box at its own font size.
+            // The mux resizes panes itself (a swap, a drag, a layout change)
+            // with the window's cell size, which undoes a scaled pane's grid
+            // without the box changing, so compare against the real grid.
+            let scale = self.pane_font_scale(pane_id);
+            let (_, scaled_metrics) = self.get_or_create_scaled_config(scale);
+            let want_cols = (w as usize / scaled_metrics.cell_size.width.max(1) as usize).max(1);
+            let want_rows = (h as usize / scaled_metrics.cell_size.height.max(1) as usize).max(1);
+            let dims = pos.pane.get_dimensions();
+            let grid_off = scaled && (dims.cols != want_cols || dims.viewport_rows != want_rows);
             let mut state = self.pane_state(pane_id);
+            if grid_off && state.auto_area == Some(area) && !resync.contains(&pane_id) {
+                resync.push(pane_id);
+            }
             if state.auto_area == Some(area) {
                 // Box unchanged: a fitted pane whose box has now held still
                 // gets its font refitted.
