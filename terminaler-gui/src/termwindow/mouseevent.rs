@@ -270,7 +270,17 @@ impl super::TermWindow {
                 }
 
                 if let Some((item, start_event)) = self.dragging.take() {
-                    self.drag_ui_item(item, start_event, x, y, event, context);
+                    // x and y above are in the cells of the pane under the
+                    // pointer, which are a different size when that pane has its
+                    // own font scale. Split positions are in the window's own
+                    // cells, so convert the pointer with those; otherwise the
+                    // divider ran far ahead of or behind the pointer.
+                    let base = self.render_metrics.cell_size;
+                    let base_x = ((event.coords.x as f32 - left_pixel_x).max(0.) / base.width as f32)
+                        .round()
+                        .trunc() as usize;
+                    let base_y = ((event.coords.y as f32 - top_pixel_y).max(0.) as isize / base.height) as i64;
+                    self.drag_ui_item(item, start_event, base_x, base_y, event, context);
                     return;
                 }
 
@@ -314,7 +324,7 @@ impl super::TermWindow {
             if let Some((pane_id, btn)) = self.toast_button_at(&event) {
                 if btn == "fit" {
                     self.close_armed = None;
-                    self.fit_pane_font_size(pane_id);
+                    self.toggle_pane_font_fit(pane_id);
                     self.hovered_pane_id = None;
                 } else if btn == "close" {
                     if self.close_is_armed(pane_id) {
@@ -379,6 +389,7 @@ impl super::TermWindow {
                 let factor = if amount > 0 { 1.1 } else { 1.0 / 1.1 };
                 let current = self.pane_font_scale(pane_id);
                 let new_scale = (current * factor).clamp(0.5, 3.0);
+                self.set_pane_font_auto(pane_id, false);
                 self.set_pane_font_scale(pane_id, new_scale);
                 self.resize_pane_for_font_scale(pane_id);
                 self.shape_generation += 1;

@@ -107,6 +107,11 @@ lazy_static::lazy_static! {
 pub static PANE_FONT_SCALES: std::sync::LazyLock<parking_lot::Mutex<std::collections::HashMap<PaneId, f64>>> =
     std::sync::LazyLock::new(Default::default);
 
+/// Panes that keep their font fitted to their size, by pane id (the session
+/// autosave reads it; a restore seeds it).
+pub static PANE_FONT_AUTO: std::sync::LazyLock<parking_lot::Mutex<std::collections::HashSet<PaneId>>> =
+    std::sync::LazyLock::new(Default::default);
+
 /// The saved font scale for `pane_id`, 1.0 when it has none.
 pub fn recorded_pane_font_scale(pane_id: PaneId) -> Option<f64> {
     PANE_FONT_SCALES.lock().get(&pane_id).copied()
@@ -563,6 +568,12 @@ pub struct PaneState {
     pub mouse_terminal_coords: Option<(ClickPosition, StableRowIndex)>,
     /// Per-pane font scale factor (1.0 = default, >1.0 = larger, <1.0 = smaller)
     pub font_scale: f64,
+    /// Keep the font fitted to the pane as its size changes.
+    pub font_auto: bool,
+    /// The pane box (width, height in px) the font was last fitted to, and
+    /// when the box last changed, to refit once a resize settles.
+    pub auto_area: Option<(i32, i32)>,
+    pub auto_changed: Option<Instant>,
 }
 
 impl Default for PaneState {
@@ -577,6 +588,9 @@ impl Default for PaneState {
             notifications_muted: false,
             mouse_terminal_coords: None,
             font_scale: 1.0,
+            font_auto: false,
+            auto_area: None,
+            auto_changed: None,
         }
     }
 }
@@ -740,6 +754,10 @@ pub struct TermWindow {
     /// Cached FontConfiguration + RenderMetrics for each unique per-pane font scale.
     /// Key = (font_scale * 100.0).round() as u32 to avoid float hashing.
     scaled_font_configs: HashMap<u32, (Rc<FontConfiguration>, RenderMetrics)>,
+    /// The window font's (dpi, scale in thousandths) the cached scaled configs
+    /// were built for. The window's dpi changes after startup (HiDPI), and
+    /// configs built before that were half size for good.
+    scaled_font_basis: (usize, u64),
 
     window_background: Vec<LoadedBackgroundLayer>,
 
@@ -1199,6 +1217,7 @@ impl TermWindow {
             allow_images: AllowImage::Yes,
             semantic_zones: HashMap::new(),
             scaled_font_configs: HashMap::new(),
+            scaled_font_basis: (0, 0),
             ui_items: vec![],
             dragging: None,
             tab_drag: None,
@@ -4434,6 +4453,7 @@ impl TermWindow {
                 let pane_id = pane.pane_id();
                 let current = self.pane_font_scale(pane_id);
                 let new_scale = (current / 1.1).max(0.5);
+                self.set_pane_font_auto(pane_id, false);
                 self.set_pane_font_scale(pane_id, new_scale);
                 self.resize_pane_for_font_scale(pane_id);
                 self.shape_generation += 1;
@@ -4447,6 +4467,7 @@ impl TermWindow {
                 let pane_id = pane.pane_id();
                 let current = self.pane_font_scale(pane_id);
                 let new_scale = (current * 1.1).min(3.0);
+                self.set_pane_font_auto(pane_id, false);
                 self.set_pane_font_scale(pane_id, new_scale);
                 self.resize_pane_for_font_scale(pane_id);
                 self.shape_generation += 1;
@@ -4458,6 +4479,7 @@ impl TermWindow {
             }
             FitPaneFontSize => {
                 let pane_id = pane.pane_id();
+                self.set_pane_font_auto(pane_id, true);
                 if self.fit_pane_font_size(pane_id).is_some() {
                     if let Some(w) = window.as_ref() {
                         w.invalidate();
@@ -4467,6 +4489,7 @@ impl TermWindow {
             ResetFontSize => {
                 let pane_id = pane.pane_id();
                 let had_scale = (self.pane_font_scale(pane_id) - 1.0).abs() > 0.001;
+                self.set_pane_font_auto(pane_id, false);
                 self.set_pane_font_scale(pane_id, 1.0);
                 if had_scale {
                     self.resize_pane_for_font_scale(pane_id);
@@ -5246,6 +5269,7 @@ impl TermWindow {
                 if let Some(scale) = recorded_pane_font_scale(pane_id) {
                     fresh.font_scale = scale;
                 }
+                fresh.font_auto = PANE_FONT_AUTO.lock().contains(&pane_id);
                 fresh
             })
         })
@@ -5260,6 +5284,14 @@ impl TermWindow {
         scale: f64,
     ) -> (Rc<FontConfiguration>, RenderMetrics) {
         let key = Self::font_scale_key(scale);
+        let basis = (
+            self.fonts.get_dpi(),
+            (self.fonts.get_font_scale() * 1000.0).round() as u64,
+        );
+        if self.scaled_font_basis != basis {
+            self.scaled_font_configs.clear();
+            self.scaled_font_basis = basis;
+        }
         if let Some(entry) = self.scaled_font_configs.get(&key) {
             return entry.clone();
         }
@@ -5302,9 +5334,85 @@ impl TermWindow {
         }
     }
 
-    /// Size `pane_id`'s font to the largest scale that still shows
-    /// `pane_fit_columns` columns and `pane_fit_rows` rows. Returns the new scale, or None when the
-    /// pane is not in the active tab.
+    /// Turn a pane's automatic font fitting on or off.
+    pub fn set_pane_font_auto(&mut self, pane_id: PaneId, auto: bool) {
+        {
+            let mut state = self.pane_state(pane_id);
+            state.font_auto = auto;
+            state.auto_area = None;
+            state.auto_changed = None;
+        }
+        let mut recorded = PANE_FONT_AUTO.lock();
+        if auto {
+            recorded.insert(pane_id);
+        } else {
+            recorded.remove(&pane_id);
+        }
+    }
+
+    /// The fit button: switch automatic fitting on for the pane (and fit it
+    /// now), or off again, returning the pane to the window's font size.
+    pub fn toggle_pane_font_fit(&mut self, pane_id: PaneId) {
+        if self.pane_state(pane_id).font_auto {
+            self.set_pane_font_auto(pane_id, false);
+            self.set_pane_font_scale(pane_id, 1.0);
+            self.resize_pane_for_font_scale(pane_id);
+            self.shape_generation += 1;
+            self.shape_cache.borrow_mut().clear();
+            self.invalidate_tab_sidebar();
+        } else {
+            self.set_pane_font_auto(pane_id, true);
+            self.fit_pane_font_size(pane_id);
+        }
+    }
+
+    /// Refit every pane that keeps itself fitted, each to its own size. A
+    /// changed box is refitted once it has held still for a moment, so
+    /// dragging a divider does not rebuild fonts on every pixel.
+    pub fn refit_auto_panes(&mut self, panes: &[PositionedPane]) {
+        let now = Instant::now();
+        let mut refit = vec![];
+        let mut pending = false;
+        for pos in panes {
+            let pane_id = pos.pane.pane_id();
+            if !self.pane_state(pane_id).font_auto {
+                continue;
+            }
+            let (_, _, w, h) = self.pane_content_rect(pos);
+            let area = (w as i32, h as i32);
+            let mut state = self.pane_state(pane_id);
+            if state.auto_area == Some(area) {
+                if let Some(changed) = state.auto_changed {
+                    if now.duration_since(changed) >= Duration::from_millis(150) {
+                        state.auto_changed = None;
+                        refit.push(pane_id);
+                    } else {
+                        pending = true;
+                    }
+                }
+            } else {
+                let first = state.auto_area.is_none();
+                state.auto_area = Some(area);
+                state.auto_changed = Some(now);
+                if first {
+                    state.auto_changed = None;
+                    refit.push(pane_id);
+                } else {
+                    pending = true;
+                }
+            }
+        }
+        for pane_id in refit {
+            self.fit_pane_font_size(pane_id);
+        }
+        if pending {
+            self.update_next_frame_time(Some(now + Duration::from_millis(60)));
+        }
+    }
+
+    /// Size `pane_id`'s font to the largest scale (in 5% steps) that still
+    /// shows `pane_fit_columns` columns and `pane_fit_rows` rows. Returns the
+    /// new scale, or None when the pane is not in the active tab.
     pub fn fit_pane_font_size(&mut self, pane_id: PaneId) -> Option<f64> {
         let wanted_cols = self.config.pane_fit_columns.max(10) as usize;
         let wanted_rows = self.config.pane_fit_rows.max(5) as usize;
@@ -5326,34 +5434,26 @@ impl TermWindow {
             area_w / (metrics.cell_size.width.max(1) as usize) >= wanted_cols
                 && area_h / (metrics.cell_size.height.max(1) as usize) >= wanted_rows
         };
-        // A scale of exactly 1.0 paints with the window's base metrics, which
-        // can differ from the scaled ones, so the search stays off it.
-        let step = |scale: f64, delta: f64| -> f64 {
-            let next = ((scale + delta) * 100.0).round() / 100.0;
-            if (next - 1.0).abs() < 0.005 { next + delta.signum() * 0.01 } else { next }
-        };
 
-        // Start from the scale that would just fit each direction, take the
-        // smaller, then settle it against the real whole-pixel cell sizes.
-        let (_, unit) = self.get_or_create_scaled_config(1.01);
-        let by_width = area_w as f64 / (wanted_cols as f64 * unit.cell_size.width.max(1) as f64 / 1.01);
-        let by_height = area_h as f64 / (wanted_rows as f64 * unit.cell_size.height.max(1) as f64 / 1.01);
-        let mut scale = step((by_width.min(by_height).clamp(0.5, 3.0) * 100.0).floor() / 100.0, 0.0);
-        for _ in 0..40 {
-            let up = step(scale, 0.01);
-            if up <= 3.0 && fits(self, up) {
-                scale = up;
-            } else {
+        // The scale that would just fit each direction (the pane's size over
+        // the wanted grid's size at the window font), the smaller of the two,
+        // then the largest 5% step at or below it that really fits. A scale of
+        // exactly 1.0 paints with the window's own metrics, so the steps skip it.
+        let base = self.render_metrics.cell_size;
+        let by_width = area_w as f64 / (wanted_cols as f64 * base.width.max(1) as f64);
+        let by_height = area_h as f64 / (wanted_rows as f64 * base.height.max(1) as f64);
+        let top_step = ((by_width.min(by_height) / 0.05).floor() as i64 + 2).clamp(10, 60);
+        let mut scale = 0.5;
+        for k in (10..=top_step).rev() {
+            if k == 20 {
+                continue;
+            }
+            let candidate = k as f64 * 0.05;
+            if fits(self, candidate) {
+                scale = candidate;
                 break;
             }
         }
-        for _ in 0..40 {
-            if scale <= 0.5 || fits(self, scale) {
-                break;
-            }
-            scale = step(scale, -0.01).max(0.5);
-        }
-        let scale = scale.clamp(0.5, 3.0);
         self.set_pane_font_scale(pane_id, scale);
         self.resize_pane_for_font_scale(pane_id);
         self.shape_generation += 1;

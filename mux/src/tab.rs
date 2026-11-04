@@ -312,6 +312,7 @@ fn convert_tree_to_session_layout(
             command: None,
             argv: None,
             font_scale: None,
+            font_auto: false,
             hidden: false,
             is_active: false,
             group: None,
@@ -352,6 +353,7 @@ fn convert_tree_to_session_layout(
                 command: None,
                 argv,
                 font_scale: None,
+                font_auto: false,
                 hidden: hidden.contains(&pane.pane_id()),
                 is_active,
                 group: match unit {
@@ -1531,6 +1533,7 @@ impl TabInner {
                 command: None,
                 argv: None,
                 font_scale: None,
+                font_auto: false,
                 hidden: false,
                 is_active: false,
                 group: None,

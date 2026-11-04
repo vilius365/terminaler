@@ -3,7 +3,7 @@
 ## 2026-11-04
 
 ### Added
-- **A "fit" button in the pane header sizes the font to the pane.** It sits left of the focus and close buttons and sets that pane's font to the largest size that still shows `pane_fit_columns` columns and `pane_fit_rows` rows (defaults 100 and 30, limits 0.5x to 3x), so it fits both across and down. The pane's terminal grid is sized from the box the pane is painted in, so text fills it without a blank band at the right or bottom. The same action is `"FitPaneFontSize"` in the command palette. Each pane's font scale is now saved with the session and restored.
+- **A "fit" button in the pane header sizes each pane's own font to the pane.** It sits left of the focus and close buttons. Click it and that pane keeps its font fitted: the bigger the pane, the larger the text, in 5% steps, so it always shows at least `pane_fit_columns` columns and `pane_fit_rows` rows (defaults 80 and 24, limits 0.5x to 3x). Every pane fits on its own, and a pane refits after a resize or a divider drag settles. Click the button again to go back to the window's font size; ctrl+scroll or the font size actions also switch fitting off for that pane. The same action is `"FitPaneFontSize"` in the command palette. Each pane's font scale and fit setting are saved with the session.
 
 ### Changed
 - **The sidebar is 1.5x wider.** `tab_sidebar_width` now defaults to 300 (was 180); the width is read when a window opens.
@@ -12,6 +12,8 @@
 - **Notifications start blocked and panes start opaque.** The dock buttons still switch them off for the session.
 
 ### Fixed
+- **A pane's own font was half the size of the window's on a HiDPI screen.** The per-pane font was built at the dpi the window had at startup and never rebuilt when the window's dpi settled, and a scaled pane's terminal grid was sized from a stale pixel size, so text was tiny with blank bands at the right and bottom. Scaled fonts are now built from the window font's dpi and scale and rebuilt when either changes, and the grid is sized from the pane's painted box.
+- **Dragging a divider next to a pane with its own font size moved the divider far from the pointer.** The pointer was converted to cells using that pane's font; it now uses the window's cells, like the divider positions.
 - **Restarting reopens the panes you had, not an empty shell.** The session file was written only on a clean quit, and a close wrote an empty one over it, so a kill or restart left nothing to restore. The GUI now saves every 5 seconds while it runs, never saves an empty session, and keeps the file after a restore. Panes that were running `ssh` (tmux attaches to other boxes) reconnect with the same command; other panes reopen as a shell in their directory. With a saved session there is no extra default terminal. Splits are rebuilt at the grid size they were saved at, and a new pane gets the second child's share of a split, so lopsided layouts come back as they were.
 - **EaseIn and EaseInOut jumped at the first frame.** The easing code used a curve's four control numbers as a one-dimensional sum, so those curves started 42% along. Pane animations now solve the cubic Bézier properly. The visual bell still uses the old evaluation.
 

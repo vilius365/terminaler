@@ -66,6 +66,9 @@ pub enum PaneLayoutNode {
         /// The pane's own font scale when it differs from 1.0.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         font_scale: Option<f64>,
+        /// Whether the pane keeps its font fitted to its size as it changes.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        font_auto: bool,
         /// Whether this pane was hidden.
         #[serde(default)]
         hidden: bool,
@@ -125,28 +128,31 @@ pub fn layout_leaves(layout: &PaneLayoutNode) -> Vec<LeafUnitInfo> {
     }
 }
 
-/// The saved font scale of every leaf of `layout`, in leaf order.
-pub fn layout_font_scales(layout: &PaneLayoutNode) -> Vec<Option<f64>> {
+/// The saved font settings of every leaf of `layout`, in leaf order: the
+/// pane's own font scale and whether it keeps itself fitted.
+pub fn layout_font_settings(layout: &PaneLayoutNode) -> Vec<(Option<f64>, bool)> {
     match layout {
-        PaneLayoutNode::Pane { font_scale, .. } => vec![*font_scale],
+        PaneLayoutNode::Pane { font_scale, font_auto, .. } => vec![(*font_scale, *font_auto)],
         PaneLayoutNode::Split { first, second, .. } => {
-            let mut scales = layout_font_scales(first);
-            scales.extend(layout_font_scales(second));
-            scales
+            let mut settings = layout_font_settings(first);
+            settings.extend(layout_font_settings(second));
+            settings
         }
     }
 }
 
-/// Set the font scale of every leaf of `layout`, in leaf order. Extra scales
-/// or leaves are ignored.
-pub fn set_layout_font_scales(layout: &mut PaneLayoutNode, scales: &mut impl Iterator<Item = Option<f64>>) {
+/// Set the font settings of every leaf of `layout`, in leaf order. Extra
+/// settings or leaves are ignored.
+pub fn set_layout_font_settings(layout: &mut PaneLayoutNode, settings: &mut impl Iterator<Item = (Option<f64>, bool)>) {
     match layout {
-        PaneLayoutNode::Pane { font_scale, .. } => {
-            *font_scale = scales.next().flatten();
+        PaneLayoutNode::Pane { font_scale, font_auto, .. } => {
+            let (scale, auto) = settings.next().unwrap_or((None, false));
+            *font_scale = scale;
+            *font_auto = auto;
         }
         PaneLayoutNode::Split { first, second, .. } => {
-            set_layout_font_scales(first, scales);
-            set_layout_font_scales(second, scales);
+            set_layout_font_settings(first, settings);
+            set_layout_font_settings(second, settings);
         }
     }
 }
@@ -247,6 +253,7 @@ mod tests {
                             command: Some("bash".into()),
                             argv: None,
                             font_scale: None,
+                            font_auto: false,
                             hidden: false,
                             is_active: true,
                             group: None,
@@ -264,6 +271,7 @@ mod tests {
                                 command: None,
                                 argv: None,
                                 font_scale: None,
+                                font_auto: false,
                                 hidden: false,
                                 is_active: true,
                                 group: None,
@@ -275,6 +283,7 @@ mod tests {
                                 command: None,
                                 argv: None,
                                 font_scale: None,
+                                font_auto: false,
                                 hidden: false,
                                 is_active: false,
                                 group: None,
@@ -332,6 +341,7 @@ mod tests {
             command: None,
             argv: Some(argv.clone()),
             font_scale: None,
+            font_auto: false,
             hidden: false,
             is_active: true,
             group: None,
@@ -357,6 +367,7 @@ mod tests {
             command: None,
             argv: None,
             font_scale: scale,
+            font_auto: false,
             hidden: false,
             is_active: false,
             group: None,
@@ -369,9 +380,9 @@ mod tests {
             first: Box::new(leaf(None)),
             second: Box::new(leaf(None)),
         };
-        set_layout_font_scales(&mut layout, &mut vec![Some(0.8), None].into_iter());
+        set_layout_font_settings(&mut layout, &mut vec![(Some(0.8), true), (None, false)].into_iter());
         let json = serde_json::to_string(&layout).unwrap();
         let back: PaneLayoutNode = serde_json::from_str(&json).unwrap();
-        assert_eq!(layout_font_scales(&back), vec![Some(0.8), None]);
+        assert_eq!(layout_font_settings(&back), vec![(Some(0.8), true), (None, false)]);
     }
 }

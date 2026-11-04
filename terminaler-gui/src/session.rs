@@ -29,13 +29,19 @@ pub fn capture_session() -> SessionState {
             let title = tab.get_title();
             let mut layout = tab.session_layout_tree();
             // Each pane's own font scale lives in the window, not the mux.
-            let scales: Vec<Option<f64>> = tab
+            let settings: Vec<(Option<f64>, bool)> = tab
                 .iter_panes_ignoring_zoom()
                 .iter()
-                .map(|p| crate::termwindow::recorded_pane_font_scale(p.pane.pane_id()))
+                .map(|p| {
+                    let id = p.pane.pane_id();
+                    (
+                        crate::termwindow::recorded_pane_font_scale(id),
+                        crate::termwindow::PANE_FONT_AUTO.lock().contains(&id),
+                    )
+                })
                 .collect();
-            if scales.len() == mux::session_state::layout_font_scales(&layout).len() {
-                mux::session_state::set_layout_font_scales(&mut layout, &mut scales.into_iter());
+            if settings.len() == mux::session_state::layout_font_settings(&layout).len() {
+                mux::session_state::set_layout_font_settings(&mut layout, &mut settings.into_iter());
             }
             tabs.push(TabState { title, layout });
         }
@@ -311,15 +317,19 @@ async fn restore_subtree(
 /// Give the restored panes of `tab` their saved font scales. The window reads
 /// them when it first sees each pane and resizes the pane to match.
 fn seed_font_scales(tab: &Arc<mux::tab::Tab>, layout: &PaneLayoutNode) {
-    let saved = mux::session_state::layout_font_scales(layout);
+    let saved = mux::session_state::layout_font_settings(layout);
     let panes = tab.iter_panes_ignoring_zoom();
     if saved.len() != panes.len() {
         return;
     }
     let mut hints = crate::termwindow::PANE_FONT_SCALES.lock();
-    for (pane, scale) in panes.iter().zip(saved) {
+    let mut autos = crate::termwindow::PANE_FONT_AUTO.lock();
+    for (pane, (scale, auto)) in panes.iter().zip(saved) {
         if let Some(scale) = scale {
             hints.insert(pane.pane.pane_id(), scale);
+        }
+        if auto {
+            autos.insert(pane.pane.pane_id());
         }
     }
 }
