@@ -3,7 +3,7 @@
 ## 2026-11-04
 
 ### Added
-- **Automatic per-pane font fitting.** The command palette entry "Fit the font size to the pane" (`"FitPaneFontSize"`) keeps that pane's font fitted to its size: the bigger the pane, the larger the text, in 5% steps, so it always shows at least `pane_fit_columns` columns and `pane_fit_rows` rows (defaults 80 and 24, limits 0.5x to 3x). Every pane fits on its own, and a pane refits after a resize or a divider drag settles. Ctrl+scroll or the font size actions switch fitting off again for that pane. Each pane's font scale and fit setting are saved with the session. There is no header button for it: ctrl+scroll already sizes a pane's font.
+- **Automatic per-pane font fitting, on by default.** Every pane fits its own font to its size: the bigger the pane, the larger the text, in 5% steps, so it always shows at least `pane_fit_columns` columns and `pane_fit_rows` rows (defaults 80 and 24, limits 0.5x to 3x). A pane refits after a resize or a divider drag settles. Ctrl+scroll or the font size actions size one pane by hand and switch fitting off for it; "Reset font size" switches it back on. Set `pane_font_auto` to `false` to size fonts by hand only. Each pane's font scale and fit setting are saved with the session.
 
 ### Changed
 - **The sidebar is 1.5x wider.** `tab_sidebar_width` now defaults to 300 (was 180); the width is read when a window opens.

@@ -666,11 +666,19 @@ pub struct Config {
     #[dynamic(default = "default_pane_animation_ms")]
     pub pane_animation_ms: u32,
 
-    /// Columns the pane header's "fit" button sizes a pane's font to show.
+    /// Fit every pane's font to its size automatically: the bigger the pane,
+    /// the larger the text, always showing at least `pane_fit_columns` columns
+    /// and `pane_fit_rows` rows. Ctrl+scroll (or the font size actions) sizes
+    /// one pane by hand and switches fitting off for it; "Reset font size"
+    /// switches it back on. Set to false to size fonts by hand only.
+    #[dynamic(default = "default_true")]
+    pub pane_font_auto: bool,
+
+    /// Columns an automatically fitted pane font keeps visible.
     #[dynamic(default = "default_pane_fit_columns")]
     pub pane_fit_columns: u16,
 
-    /// Rows the pane header's "fit" button also keeps visible, so a fitted
+    /// Rows an automatically fitted pane font also keeps visible, so a fitted
     /// font fits the pane vertically as well as horizontally.
     #[dynamic(default = "default_pane_fit_rows")]
     pub pane_fit_rows: u16,

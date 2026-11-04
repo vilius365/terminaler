@@ -4489,9 +4489,12 @@ impl TermWindow {
             ResetFontSize => {
                 let pane_id = pane.pane_id();
                 let had_scale = (self.pane_font_scale(pane_id) - 1.0).abs() > 0.001;
-                self.set_pane_font_auto(pane_id, false);
+                let auto = self.config.pane_font_auto;
+                self.set_pane_font_auto(pane_id, auto);
                 self.set_pane_font_scale(pane_id, 1.0);
-                if had_scale {
+                if auto {
+                    self.fit_pane_font_size(pane_id);
+                } else if had_scale {
                     self.resize_pane_for_font_scale(pane_id);
                     self.shape_generation += 1;
                     self.shape_cache.borrow_mut().clear();
@@ -5269,7 +5272,11 @@ impl TermWindow {
                 if let Some(scale) = recorded_pane_font_scale(pane_id) {
                     fresh.font_scale = scale;
                 }
-                fresh.font_auto = PANE_FONT_AUTO.lock().contains(&pane_id);
+                // Every pane fits its font to its size unless it was sized by
+                // hand (a recorded scale) or fitting is off in the config.
+                fresh.font_auto = PANE_FONT_AUTO.lock().contains(&pane_id)
+                    || (self.config.pane_font_auto
+                        && recorded_pane_font_scale(pane_id).is_none());
                 fresh
             })
         })
