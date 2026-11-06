@@ -163,6 +163,10 @@ pub struct LocalPane {
     #[cfg(unix)]
     leader: Arc<Mutex<Option<CachedLeaderInfo>>>,
     command_description: String,
+    /// Per-pane override of `configuration().exit_behavior`. Fixed at
+    /// construction because `read_from_pane_pty` reads `exit_behavior()`
+    /// once, when its thread starts.
+    exit_behavior_override: Option<ExitBehavior>,
 }
 
 #[async_trait(?Send)]
@@ -261,7 +265,7 @@ impl Pane for LocalPane {
         if is_failed_spawn {
             Some(ExitBehavior::CloseOnCleanExit)
         } else {
-            None
+            self.exit_behavior_override
         }
     }
 
@@ -1035,7 +1039,15 @@ impl LocalPane {
             #[cfg(unix)]
             leader: Arc::new(Mutex::new(None)),
             command_description,
+            exit_behavior_override: None,
         }
+    }
+
+    /// Override the configured exit behavior for this pane. Call before the
+    /// pane is added to the mux.
+    pub fn with_exit_behavior(mut self, exit_behavior: Option<ExitBehavior>) -> Self {
+        self.exit_behavior_override = exit_behavior;
+        self
     }
 
     #[cfg(unix)]

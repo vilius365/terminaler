@@ -563,6 +563,14 @@ impl portable_pty::ChildKiller for FailedProcessSpawn {
     }
 }
 
+/// Environment marker a caller sets on a `CommandBuilder` to ask
+/// `LocalDomain` to keep the pane open when its process fails
+/// (`ExitBehavior::CloseOnCleanExit`). Session restore uses it so a pane whose
+/// saved command no longer works (a `tmux attach` to a session that is gone)
+/// shows its error instead of closing, and the last such pane closing does not
+/// quit the GUI. `LocalDomain` strips the marker before spawning the child.
+pub const HOLD_ON_FAILURE_ENV: &str = "TERMINALER_HOLD_ON_FAILURE";
+
 #[async_trait(?Send)]
 impl Domain for LocalDomain {
     async fn spawn_pane(
@@ -572,10 +580,16 @@ impl Domain for LocalDomain {
         command_dir: Option<String>,
     ) -> anyhow::Result<Arc<dyn Pane>> {
         let pane_id = alloc_pane_id();
-        let cmd = self
+        let mut cmd = self
             .build_command(command, command_dir, pane_id)
             .await
             .context("build_command")?;
+        let exit_behavior = if cmd.get_env(HOLD_ON_FAILURE_ENV).is_some() {
+            cmd.env_remove(HOLD_ON_FAILURE_ENV);
+            Some(config::ExitBehavior::CloseOnCleanExit)
+        } else {
+            None
+        };
         let pair = self
             .pty_system
             .lock()
@@ -608,15 +622,18 @@ impl Domain for LocalDomain {
         }
 
         let pane: Arc<dyn Pane> = match child_result {
-            Ok(child) => Arc::new(LocalPane::new(
-                pane_id,
-                terminal,
-                child,
-                pair.master,
-                Box::new(writer),
-                self.id,
-                command_description,
-            )),
+            Ok(child) => Arc::new(
+                LocalPane::new(
+                    pane_id,
+                    terminal,
+                    child,
+                    pair.master,
+                    Box::new(writer),
+                    self.id,
+                    command_description,
+                )
+                .with_exit_behavior(exit_behavior),
+            ),
             Err(err) => {
                 // Show the error to the user in the new pane
                 write!(writer, "{err:#}").ok();

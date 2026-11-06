@@ -117,9 +117,16 @@ fn start_autosave_thread() {
         .ok();
 }
 
+/// The command for a restored pane, marked so the pane stays open if the
+/// command fails: a saved `tmux attach` whose session is gone must not close
+/// every pane and quit the GUI on launch.
 fn command_for(argv: Option<Vec<String>>) -> Option<portable_pty::CommandBuilder> {
     argv.filter(|a| !a.is_empty()).map(|a| {
-        portable_pty::CommandBuilder::from_argv(a.into_iter().map(std::ffi::OsString::from).collect())
+        let mut cmd = portable_pty::CommandBuilder::from_argv(
+            a.into_iter().map(std::ffi::OsString::from).collect(),
+        );
+        cmd.env(mux::domain::HOLD_ON_FAILURE_ENV, "1");
+        cmd
     })
 }
 
@@ -359,6 +366,14 @@ fn second_percent(first_ratio: f64) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn restored_commands_ask_to_stay_open_when_they_fail() {
+        let cmd = command_for(Some(vec!["ssh".into(), "devbox".into()])).unwrap();
+        assert!(cmd.get_env(mux::domain::HOLD_ON_FAILURE_ENV).is_some());
+        assert!(command_for(None).is_none());
+        assert!(command_for(Some(vec![])).is_none());
+    }
 
     #[test]
     fn restore_uses_the_saved_grid_and_keeps_the_cell_size() {

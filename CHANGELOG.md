@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-11-06
+
+### Fixed
+- **Terminaler no longer quits on launch when a restored tmux session is gone.** A restored pane runs its saved command again, such as `ssh devbox -- tmux attach -t <session>`. When that session had been closed, the command failed, the pane closed, and once every pane had closed the window closed and the app exited before you could see why. A restored pane whose command fails now stays open and shows the error, such as `can't find session`. Close it when you have read it. A clean exit, such as detaching from tmux, still closes the pane. Held panes are saved with the session until you close them.
+
 ## 2026-11-04
 
 ### Added
