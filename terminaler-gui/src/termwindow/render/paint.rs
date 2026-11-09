@@ -113,7 +113,9 @@ impl crate::TermWindow {
         }
         log::debug!("paint_impl before call_draw elapsed={:?}", start.elapsed());
 
+        let seg = Instant::now();
         self.call_draw(frame).ok();
+        self.log_frame_segment("draw", seg);
         self.last_frame_duration = start.elapsed();
         if self.last_frame_duration > Duration::from_millis(500) {
             log::error!(
@@ -189,6 +191,18 @@ impl crate::TermWindow {
         }
     }
 
+    /// With `log_animation_frames`, log one part of a frame that took longer
+    /// than 3 ms, to find what makes a slow frame slow.
+    fn log_frame_segment(&self, what: &str, since: Instant) {
+        if !self.config.log_animation_frames {
+            return;
+        }
+        let ms = since.elapsed().as_secs_f64() * 1000.0;
+        if ms >= 3.0 {
+            log::info!(target: "anim_frames", "  segment {what}: {ms:.2}ms");
+        }
+    }
+
     fn log_animation_frame(&self, start: Instant, animating: bool) {
         let mut last = self.last_anim_frame.borrow_mut();
         if !self.config.log_animation_frames {
@@ -234,8 +248,12 @@ impl crate::TermWindow {
         // Clear out UI item positions; we'll rebuild these as we render
         self.ui_items.clear();
 
+        let seg = Instant::now();
         let panes = self.get_panes_to_render();
+        self.log_frame_segment("get_panes", seg);
+        let seg = Instant::now();
         self.refit_auto_panes(&panes);
+        self.log_frame_segment("refit", seg);
         let focused = self.focused.is_some();
         let window_is_transparent =
             !self.window_background.is_empty() || crate::termwindow::effective_window_opacity(self.config.window_background_opacity) != 1.0;
@@ -432,12 +450,16 @@ impl crate::TermWindow {
                 self.paint_lift_shadow(lifted_layers, &rect, height, cell_size)
                     .context("lift shadow")?;
                 let mark = lifted_layers.mark();
+                let seg = Instant::now();
                 self.paint_pane(&pos, lifted_layers).context("paint_pane")?;
+                self.log_frame_segment(&format!("pane {}", pos.pane.pane_id()), seg);
                 lifted_layers.transform_since(mark, tr.dx, tr.dy, tr.clip);
                 continue;
             }
             let mark = layers.mark();
+            let seg = Instant::now();
             self.paint_pane(&pos, &mut layers).context("paint_pane")?;
+            self.log_frame_segment(&format!("pane {}", pos.pane.pane_id()), seg);
             if let Some(tr) = transform {
                 layers.transform_since(mark, tr.dx, tr.dy, tr.clip);
             }
@@ -497,19 +519,27 @@ impl crate::TermWindow {
         // Aggregate Claude-agent waiting count for the tab-bar badge. Runs
         // regardless of sidebar visibility (the badge lives on the tab bar),
         // and is throttled internally to once per second.
+        let seg = Instant::now();
         self.update_agents_waiting();
+        self.log_frame_segment("agents_waiting", seg);
 
         if self.show_tab_sidebar {
+            let seg = Instant::now();
             self.paint_tab_sidebar(&mut layers)
                 .context("paint_tab_sidebar")?;
+            self.log_frame_segment("sidebar", seg);
         }
 
         if self.show_tab_bar {
+            let seg = Instant::now();
             self.paint_tab_bar(&mut layers).context("paint_tab_bar")?;
+            self.log_frame_segment("tab_bar", seg);
         }
 
+        let seg = Instant::now();
         self.paint_brief_bar(&mut layers)
             .context("paint_brief_bar")?;
+        self.log_frame_segment("brief_bar", seg);
 
         self.paint_window_borders(&mut layers)
             .context("paint_window_borders")?;
