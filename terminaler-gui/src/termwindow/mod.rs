@@ -5541,6 +5541,13 @@ impl TermWindow {
         let mut refit = vec![];
         let mut resync = vec![];
         let mut pending = false;
+        // While a divider is held, pauses in the drag must not refit fonts:
+        // every refit resizes the neighbours' text mid-drag. Keep the current
+        // fonts until the button is released, then refit once.
+        let split_drag = matches!(
+            &self.dragging,
+            Some((item, _)) if matches!(item.item_type, UIItemType::Split(_))
+        );
         for pos in panes {
             let pane_id = pos.pane.pane_id();
             let (auto, scaled) = {
@@ -5570,7 +5577,9 @@ impl TermWindow {
                 // Box unchanged: a fitted pane whose box has now held still
                 // gets its font refitted.
                 if let Some(changed) = state.auto_changed {
-                    if now.duration_since(changed) >= Duration::from_millis(150) {
+                    if split_drag {
+                        pending = true;
+                    } else if now.duration_since(changed) >= Duration::from_millis(150) {
                         state.auto_changed = None;
                         refit.push(pane_id);
                     } else {
@@ -5598,7 +5607,7 @@ impl TermWindow {
                     .map_or(true, |at| now.duration_since(at) >= Duration::from_millis(150));
                 state.auto_area = Some(area);
                 state.auto_area_at = Some(now);
-                if auto && settled {
+                if auto && settled && !split_drag {
                     state.auto_changed = None;
                     refit.push(pane_id);
                 } else {
