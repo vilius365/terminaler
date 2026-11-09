@@ -461,15 +461,41 @@ impl crate::TermWindow {
                     .context("lift shadow")?;
                 let mark = lifted_layers.mark();
                 let seg = Instant::now();
+                self.pane_line_stats.set((0, 0, Duration::ZERO));
                 self.paint_pane(&pos, lifted_layers).context("paint_pane")?;
-                self.log_frame_segment(&format!("pane {}", pos.pane.pane_id()), seg);
+                {
+                    let (hits, misses, miss_time) = self.pane_line_stats.get();
+                    self.log_frame_segment(
+                        &format!(
+                            "pane {} (lines: {} cached, {} rebuilt in {:.2}ms)",
+                            pos.pane.pane_id(),
+                            hits,
+                            misses,
+                            miss_time.as_secs_f64() * 1000.0
+                        ),
+                        seg,
+                    );
+                }
                 lifted_layers.transform_since(mark, tr.dx, tr.dy, tr.clip);
                 continue;
             }
             let mark = layers.mark();
             let seg = Instant::now();
+                self.pane_line_stats.set((0, 0, Duration::ZERO));
             self.paint_pane(&pos, &mut layers).context("paint_pane")?;
-            self.log_frame_segment(&format!("pane {}", pos.pane.pane_id()), seg);
+            {
+                    let (hits, misses, miss_time) = self.pane_line_stats.get();
+                    self.log_frame_segment(
+                        &format!(
+                            "pane {} (lines: {} cached, {} rebuilt in {:.2}ms)",
+                            pos.pane.pane_id(),
+                            hits,
+                            misses,
+                            miss_time.as_secs_f64() * 1000.0
+                        ),
+                        seg,
+                    );
+                }
             if let Some(tr) = transform {
                 layers.transform_since(mark, tr.dx, tr.dy, tr.clip);
             }

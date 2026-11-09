@@ -1213,6 +1213,8 @@ impl crate::TermWindow {
                             false
                         };
                         if !expired && !hover_changed {
+                            let (h, m, t) = self.term_window.pane_line_stats.get();
+                            self.term_window.pane_line_stats.set((h + 1, m, t));
                             cached_quad
                                 .layers
                                 .apply_to(self.layers)
@@ -1222,6 +1224,7 @@ impl crate::TermWindow {
                         }
                     }
 
+                    let miss_start = Instant::now();
                     let mut buf = HeapQuadAllocator::default();
                     let next_due = self.term_window.has_animation.borrow_mut().take();
 
@@ -1305,6 +1308,10 @@ impl crate::TermWindow {
                         .line_quad_cache
                         .borrow_mut()
                         .put(quad_key, quad_value);
+                    let (h, m, t) = self.term_window.pane_line_stats.get();
+                    self.term_window
+                        .pane_line_stats
+                        .set((h, m + 1, t + miss_start.elapsed()));
 
                     Ok(())
                 }
