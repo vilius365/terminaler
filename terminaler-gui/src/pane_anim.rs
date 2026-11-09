@@ -460,6 +460,21 @@ impl PaneAnimations {
         Some((raw * std::f32::consts::PI).sin().max(0.0))
     }
 
+    /// Push every running animation's clock back by `by`, so a frame that
+    /// took longer than one display refresh does not make the next frame
+    /// jump ahead: the motion carries on from where it was last shown.
+    pub fn delay(&mut self, by: Duration) {
+        for tween in self.tweens.values_mut() {
+            tween.start += by;
+        }
+        for ghost in &mut self.ghosts {
+            ghost.start += by;
+        }
+        for start in self.fades.values_mut() {
+            *start += by;
+        }
+    }
+
     pub fn has_tweens(&self) -> bool {
         !self.tweens.is_empty()
     }
@@ -499,6 +514,22 @@ mod test {
         let a = progress(t0, t0 + MS(40), MS(150));
         let b = progress(t0, t0 + MS(80), MS(150));
         assert!(0.0 < a && a < b && b < 1.0);
+    }
+
+    #[test]
+    fn delay_holds_progress_across_a_slow_frame() {
+        let t0 = Instant::now();
+        let mut a = PaneAnimations::default();
+        a.add_ghost(r(0.0), [0.0; 4], t0);
+        let key = FadeKey::SplitHover(0);
+        a.fade(key, true, t0, MS(200));
+        let before = a.ghosts(t0 + MS(50), MS(200))[0].2;
+        // A 100 ms stall right after: delaying by it shows the same frame.
+        a.delay(MS(100));
+        let after = a.ghosts(t0 + MS(150), MS(200))[0].2;
+        assert!((before - after).abs() < 1e-6);
+        let (fade, _) = a.fade(key, true, t0 + MS(150), MS(200));
+        assert!((fade - progress(t0, t0 + MS(50), MS(200))).abs() < 1e-6);
     }
 
     #[test]

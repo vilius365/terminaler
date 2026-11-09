@@ -592,6 +592,8 @@ pub struct PaneState {
     /// when the box last changed, to refit once a resize settles.
     pub auto_area: Option<(i32, i32)>,
     pub auto_changed: Option<Instant>,
+    /// When the pane's box last changed size.
+    pub auto_area_at: Option<Instant>,
 }
 
 impl Default for PaneState {
@@ -609,6 +611,7 @@ impl Default for PaneState {
             font_auto: false,
             auto_area: None,
             auto_changed: None,
+            auto_area_at: None,
         }
     }
 }
@@ -5438,15 +5441,27 @@ impl TermWindow {
                     resync.push(pane_id);
                 }
             } else {
-                // Box changed (a divider is being dragged, say): fill the new
-                // box at once with the current font so the content never lags
-                // behind the border; a fitted pane picks its new font size once
-                // the box stops changing.
+                // Box changed. A one-off change (split, close, swap) after the
+                // box has held still refits at once, so the font is right on
+                // the first frame of the pane animation instead of jumping
+                // mid-slide. A change that follows another closely (a divider
+                // or window edge being dragged) fills the new box with the
+                // current font so the content never lags behind the border,
+                // and picks its new font size once the box stops changing.
+                let settled = state
+                    .auto_area_at
+                    .map_or(true, |at| now.duration_since(at) >= Duration::from_millis(150));
                 state.auto_area = Some(area);
-                resync.push(pane_id);
-                if auto {
-                    state.auto_changed = Some(now);
-                    pending = true;
+                state.auto_area_at = Some(now);
+                if auto && settled {
+                    state.auto_changed = None;
+                    refit.push(pane_id);
+                } else {
+                    resync.push(pane_id);
+                    if auto {
+                        state.auto_changed = Some(now);
+                        pending = true;
+                    }
                 }
             }
         }

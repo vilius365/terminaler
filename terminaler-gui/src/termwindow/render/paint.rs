@@ -138,6 +138,13 @@ impl crate::TermWindow {
         let frame_interval = Duration::from_secs_f64(1.0 / self.config.max_fps.clamp(1, 240) as f64);
         let animating = next_due.map_or(false, |due| due <= Instant::now() + frame_interval);
         self.log_animation_frame(start, animating);
+        if animating {
+            // A frame slower than one refresh must not eat animation time,
+            // or the next frame jumps ahead by the stall.
+            if let Some(overrun) = self.last_frame_duration.checked_sub(frame_interval) {
+                self.pane_anims.borrow_mut().delay(overrun);
+            }
+        }
 
         if self.focused.is_some() && animating && self.config.animation_vsync {
             if let Some(window) = self.window.as_ref() {
