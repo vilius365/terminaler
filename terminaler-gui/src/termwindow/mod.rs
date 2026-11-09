@@ -827,6 +827,8 @@ pub struct TermWindow {
     pub pane_line_stats: std::cell::Cell<(usize, usize, Duration)>,
     /// Time spent inside the current pane's line callback.
     pub pane_callback_time: std::cell::Cell<Duration>,
+    /// Cached-line cost breakdown: key building, lookup, quad copy, quads.
+    pub pane_hit_stats: std::cell::Cell<(Duration, Duration, Duration, usize)>,
 
     last_status_call: Instant,
     cursor_blink_state: RefCell<ColorEase>,
@@ -1225,6 +1227,7 @@ impl TermWindow {
             next_line_state_id: 0,
             pane_line_stats: std::cell::Cell::new((0, 0, Duration::ZERO)),
             pane_callback_time: std::cell::Cell::new(Duration::ZERO),
+            pane_hit_stats: std::cell::Cell::new((Duration::ZERO, Duration::ZERO, Duration::ZERO, 0)),
             line_quad_cache: RefCell::new(LfuCache::new(
                 "line_quad_cache.hit.rate",
                 "line_quad_cache.miss.rate",

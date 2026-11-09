@@ -322,6 +322,10 @@ impl std::fmt::Debug for HeapQuadAllocator {
 }
 
 impl HeapQuadAllocator {
+    pub fn quad_count(&self) -> usize {
+        self.layer0.len() + self.layer1.len() + self.layer2.len()
+    }
+
     pub fn apply_to(&self, other: &mut TripleLayerQuadAllocator) -> anyhow::Result<()> {
         let start = std::time::Instant::now();
         for (layer_num, quads) in [(0, &self.layer0), (1, &self.layer1), (2, &self.layer2)] {

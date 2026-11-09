@@ -1103,6 +1103,8 @@ impl crate::TermWindow {
             }
 
             self.pane_callback_time.set(Duration::ZERO);
+            self.pane_hit_stats
+                .set((Duration::ZERO, Duration::ZERO, Duration::ZERO, 0));
             let mut render = LineRender {
                 term_window: self,
                 selrange,
@@ -1136,6 +1138,7 @@ impl crate::TermWindow {
                     line_idx: usize,
                     line: &&mut Line,
                 ) -> anyhow::Result<()> {
+                    let key_start = Instant::now();
                     let stable_row = stable_top + line_idx as StableRowIndex;
                     let selrange = self
                         .selrange
@@ -1205,9 +1208,12 @@ impl crate::TermWindow {
                         reverse_video: self.dims.reverse_video,
                     };
 
+                    let key_time = key_start.elapsed();
+                    let lookup_start = Instant::now();
                     if let Some(cached_quad) =
                         self.term_window.line_quad_cache.borrow_mut().get(&quad_key)
                     {
+                        let lookup_time = lookup_start.elapsed();
                         let expired = cached_quad
                             .expires
                             .map(|i| Instant::now() >= i)
@@ -1223,10 +1229,18 @@ impl crate::TermWindow {
                         if !expired && !hover_changed {
                             let (h, m, t) = self.term_window.pane_line_stats.get();
                             self.term_window.pane_line_stats.set((h + 1, m, t));
+                            let apply_start = Instant::now();
                             cached_quad
                                 .layers
                                 .apply_to(self.layers)
                                 .context("cached_quad.layers.apply_to")?;
+                            let (k, l, a, q) = self.term_window.pane_hit_stats.get();
+                            self.term_window.pane_hit_stats.set((
+                                k + key_time,
+                                l + lookup_time,
+                                a + apply_start.elapsed(),
+                                q + cached_quad.layers.quad_count(),
+                            ));
                             self.term_window.update_next_frame_time(cached_quad.expires);
                             return Ok(());
                         }
@@ -1344,10 +1358,15 @@ impl crate::TermWindow {
             render_error = render.error.take();
             drop(render);
             let inside = self.pane_callback_time.get();
+            let (k, l, a, q) = self.pane_hit_stats.get();
             self.log_frame_segment(
                 &format!(
-                    "    with_lines_mut (inside the line callback {:.2}ms)",
-                    inside.as_secs_f64() * 1000.0
+                    "    with_lines_mut (callback {:.2}ms; cached lines: key {:.2}ms, lookup {:.2}ms, copy {:.2}ms for {} quads)",
+                    inside.as_secs_f64() * 1000.0,
+                    k.as_secs_f64() * 1000.0,
+                    l.as_secs_f64() * 1000.0,
+                    a.as_secs_f64() * 1000.0,
+                    q
                 ),
                 part,
             );
