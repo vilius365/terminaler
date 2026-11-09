@@ -298,6 +298,45 @@ fn pane_tree(
     }
 }
 
+/// Whether a pane's foreground command is re-run when the session is
+/// restored. Only commands that attach to something that outlives the GUI,
+/// and are safe to run again, qualify: an ssh (how tmux sessions on other
+/// boxes are attached) and a local `tmux attach-session`. Anything else (a
+/// shell, an editor, a tmux command that creates sessions) restores as a
+/// plain shell in its directory.
+pub(crate) fn replayable_argv(argv: &[String]) -> bool {
+    let Some(name) = argv.first().and_then(|exe| exe.rsplit('/').next()) else {
+        return false;
+    };
+    match name {
+        "ssh" => true,
+        "tmux" => {
+            // A command sequence could run anything after the attach.
+            if argv.iter().any(|a| a == ";" || a.ends_with(';')) {
+                return false;
+            }
+            // The subcommand is the first argument after tmux's own flags;
+            // these flags take a value.
+            let mut args = argv[1..].iter();
+            while let Some(arg) = args.next() {
+                if let Some(flags) = arg.strip_prefix('-') {
+                    if flags.is_empty() || flags == "-" {
+                        return false;
+                    }
+                    if flags.ends_with(['L', 'S', 'f', 'c', 'T']) && flags.len() == 1 {
+                        args.next();
+                    }
+                    continue;
+                }
+                // tmux accepts any unique prefix of a command name.
+                return !arg.is_empty() && "attach-session".starts_with(arg.as_str());
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
 /// Convert a bintree into a PaneLayoutNode for session persistence.
 /// Captures actual split directions and size ratios from the tree.
 fn convert_tree_to_session_layout(
@@ -337,17 +376,10 @@ fn convert_tree_to_session_layout(
                 ),
                 None => (None, None),
             };
-            // Only an ssh is replayed: it is how tmux sessions on other boxes
-            // are attached, and re-running it is safe. Anything else (a shell,
-            // an editor) restores as a plain shell in its directory.
             let argv = pane
                 .get_foreground_process_info(CachePolicy::AllowStale)
                 .map(|info| info.argv)
-                .filter(|argv| {
-                    argv.first()
-                        .and_then(|exe| exe.rsplit('/').next())
-                        .map_or(false, |name| name == "ssh")
-                });
+                .filter(|argv| replayable_argv(argv));
             PaneLayoutNode::Pane {
                 cwd,
                 command: None,
@@ -3826,6 +3858,28 @@ impl Into<String> for SerdeUrl {
 mod test {
     use super::*;
     use crate::renderable::*;
+
+    #[test]
+    fn replayable_argv_covers_ssh_and_tmux_attach_only() {
+        let v = |args: &[&str]| args.iter().map(|a| a.to_string()).collect::<Vec<_>>();
+        assert!(replayable_argv(&v(&["ssh", "-t", "devbox", "--", "tmux attach"])));
+        assert!(replayable_argv(&v(&["/usr/bin/ssh", "devbox"])));
+        // The homepc pane that came back as a plain shell on 2026-11-09.
+        assert!(replayable_argv(&v(&["tmux", "-u", "attach-session", "-t", "=epic-home-infra"])));
+        assert!(replayable_argv(&v(&["/usr/bin/tmux", "-L", "work", "attach", "-t", "x"])));
+        assert!(replayable_argv(&v(&["tmux", "a", "-t", "x"])));
+        // tmux commands that create or change things are not replayed.
+        assert!(!replayable_argv(&v(&["tmux"])));
+        assert!(!replayable_argv(&v(&["tmux", ""])));
+        assert!(!replayable_argv(&v(&["tmux", "new-session", "-s", "x"])));
+        assert!(!replayable_argv(&v(&["tmux", "new", "-A", "-s", "x"])));
+        assert!(!replayable_argv(&v(&["tmux", "-L", "attach", "kill-server"])), "-L takes a value");
+        assert!(!replayable_argv(&v(&["tmux", "attach", ";", "kill-server"])));
+        assert!(!replayable_argv(&v(&["tmux", "attach-session", "-t", "x;"])));
+        assert!(!replayable_argv(&v(&["zsh"])));
+        assert!(!replayable_argv(&v(&["vim", "attach"])));
+        assert!(!replayable_argv(&[]));
+    }
     use parking_lot::{MappedMutexGuard, Mutex};
     use rangeset::RangeSet;
     use std::ops::Range;
