@@ -415,11 +415,11 @@ impl<'a> TripleLayerQuadAllocator<'a> {
         }
     }
 
-    /// Shift everything allocated since `mark` by (dx, dy) pixels and
-    /// clip it to `clip` (left, top, right, bottom) when given.
-    pub fn transform_since(&mut self, mark: Option<[usize; 3]>, dx: f32, dy: f32, clip: Option<[f32; 4]>) {
+    /// Map everything allocated since `mark` by `tr` (scale and shift, in
+    /// pixels) and clip it to `tr.clip` when given.
+    pub fn transform_since(&mut self, mark: Option<[usize; 3]>, tr: &crate::pane_anim::Transform) {
         if let (Self::Gpu(b), Some(mark)) = (self, mark) {
-            b.transform_since(mark, dx, dy, clip);
+            b.transform_since(mark, tr);
         }
     }
 }

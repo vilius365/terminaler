@@ -331,11 +331,13 @@ impl<'a> MappedQuads<'a> {
         *self.next
     }
 
-    /// Shift every quad allocated since `mark` by (dx, dy) pixels, then clip
-    /// each to `clip` (left, top, right, bottom), cutting the texture
-    /// coordinates in proportion. Skipped when the buffer overflowed: slots
-    /// were then reused and the pass is repainted with a bigger buffer.
-    pub fn transform_since(&mut self, mark: usize, dx: f32, dy: f32, clip: Option<[f32; 4]>) {
+    /// Map every quad allocated since `mark` by `tr` (scale, then shift, in
+    /// pixels), then clip each to `tr.clip` (left, top, right, bottom),
+    /// cutting the texture coordinates in proportion. Skipped when the buffer
+    /// overflowed: slots were then reused and the pass is repainted with a
+    /// bigger buffer.
+    pub fn transform_since(&mut self, mark: usize, tr: &crate::pane_anim::Transform) {
+        let (dx, dy, sx, sy, clip) = (tr.dx, tr.dy, tr.sx, tr.sy, tr.clip);
         let end = *self.next;
         if end > self.capacity || mark >= end {
             return;
@@ -343,8 +345,8 @@ impl<'a> MappedQuads<'a> {
         let range = mark * VERTICES_PER_CELL..end * VERTICES_PER_CELL;
         for quad in self.mapping.slice_mut(range).chunks_exact_mut(VERTICES_PER_CELL) {
             for v in quad.iter_mut() {
-                v.position[0] += dx;
-                v.position[1] += dy;
+                v.position[0] = v.position[0] * sx + dx;
+                v.position[1] = v.position[1] * sy + dy;
             }
             if let Some(c) = clip {
                 clip_quad(quad, c);
@@ -629,9 +631,9 @@ impl BorrowedLayers {
         ]
     }
 
-    pub fn transform_since(&mut self, mark: [usize; 3], dx: f32, dy: f32, clip: Option<[f32; 4]>) {
+    pub fn transform_since(&mut self, mark: [usize; 3], tr: &crate::pane_anim::Transform) {
         for (layer, m) in self.layers.iter_mut().zip(mark) {
-            layer.transform_since(m, dx, dy, clip);
+            layer.transform_since(m, tr);
         }
     }
 }

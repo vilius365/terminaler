@@ -51,13 +51,30 @@ pub struct PaneSnap {
     pub bg: [f32; 4],
 }
 
-/// What to do to one pane's quads this frame.
+/// What to do to one pane's quads this frame: every vertex maps to
+/// `(x * sx + dx, y * sy + dy)`, then is clipped to `clip`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Transform {
     pub dx: f32,
     pub dy: f32,
+    /// Scale; 1.0 except for a lifted pane, whose drawing (laid out at its
+    /// final size) is shrunk or stretched to the size it shows right now.
+    pub sx: f32,
+    pub sy: f32,
     /// Left, top, right, bottom; None when only translating.
     pub clip: Option<[f32; 4]>,
+}
+
+impl Transform {
+    /// Where `rect` lands under this transform.
+    pub fn map(&self, rect: &PxRect) -> PxRect {
+        PxRect {
+            x: rect.x * self.sx + self.dx,
+            y: rect.y * self.sy + self.dy,
+            w: rect.w * self.sx,
+            h: rect.h * self.sy,
+        }
+    }
 }
 
 /// A pane that left the mux tree; its last rect fades out.
@@ -420,10 +437,25 @@ impl PaneAnimations {
         // pane is being relocated; a clip would leave part of it undrawn
         // until the tween ends, so slide it instead.
         let moved_edges = (0..4).filter(|&i| (from[i] - to[i]).abs() >= 1.0).count();
+        if tween.lift.is_some() && final_rect.w >= 1.0 && final_rect.h >= 1.0 {
+            // A lifted pane grows or shrinks on its way: scale its final
+            // drawing into the rect it shows now, so a small pane swapped
+            // into the main slot grows gradually instead of arriving big.
+            let (sx, sy) = (cur.w / final_rect.w, cur.h / final_rect.h);
+            return Some(Transform {
+                dx: cur.x - final_rect.x * sx,
+                dy: cur.y - final_rect.y * sy,
+                sx,
+                sy,
+                clip: None,
+            });
+        }
         if tween.lift.is_some() || !rects_resized(&tween.from, &tween.to) || moved_edges > 1 {
             return Some(Transform {
                 dx: cur.x - final_rect.x,
                 dy: cur.y - final_rect.y,
+                sx: 1.0,
+                sy: 1.0,
                 clip: None,
             });
         }
@@ -443,6 +475,8 @@ impl PaneAnimations {
         Some(Transform {
             dx: 0.0,
             dy: 0.0,
+            sx: 1.0,
+            sy: 1.0,
             clip: Some(clip),
         })
     }
@@ -659,6 +693,32 @@ mod test {
         assert!(a.current(1, t0 + MS(100), MS(150)).is_some());
         assert!(a.current(3, t0 + MS(100), MS(150)).is_some());
         assert!(a.current(2, t0 + MS(100), MS(150)).is_none(), "the bystander stays put");
+    }
+
+    #[test]
+    fn a_swapped_small_pane_grows_and_the_main_pane_shrinks() {
+        let t0 = Instant::now();
+        let mut a = PaneAnimations::default();
+        // Focus layout: 1 is the main pane, 2 and 3 are stacked beside it.
+        let before = [(1, snap(0.0, 100.0)), (2, snap(100.0, 50.0)), (3, snap(150.0, 50.0))];
+        a.observe_frame(&before, ENV, CELL, t0, MS(150));
+        let after = [(1, snap(150.0, 50.0)), (2, snap(100.0, 50.0)), (3, snap(0.0, 100.0))];
+        let start = t0 + MS(16);
+        a.observe_frame(&after, ENV, CELL, start, MS(150));
+        let shown = |id: PaneId, s: &PaneSnap, t: Instant| at(&a, id, s, t).unwrap().map(&s.rect);
+        let close = |p: PxRect, q: PxRect| (p.x - q.x).abs() < 0.5 && (p.w - q.w).abs() < 0.5;
+        // First frame: each is drawn exactly where and as big as it was.
+        assert!(close(shown(3, &after[2].1, start), before[2].1.rect), "{:?}", shown(3, &after[2].1, start));
+        assert!(close(shown(1, &after[0].1, start), before[0].1.rect), "{:?}", shown(1, &after[0].1, start));
+        // Midway: the incoming pane is between the two sizes.
+        let mid = shown(3, &after[2].1, start + lift_duration().mul_f32(0.5));
+        assert!(mid.w > 55.0 && mid.w < 95.0, "growing: {}", mid.w);
+        let mid = shown(1, &after[0].1, start + lift_duration().mul_f32(0.5));
+        assert!(mid.w > 55.0 && mid.w < 95.0, "shrinking: {}", mid.w);
+        // Last frame: both are at their final rects.
+        let end = start + lift_duration().mul_f32(0.999);
+        assert!(close(shown(3, &after[2].1, end), after[2].1.rect));
+        assert!(close(shown(1, &after[0].1, end), after[0].1.rect));
     }
 
     #[test]

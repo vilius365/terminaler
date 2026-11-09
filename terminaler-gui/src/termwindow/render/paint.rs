@@ -458,12 +458,7 @@ impl crate::TermWindow {
                 // A lifted pane is painted on the layer above the others,
                 // with a shadow that deepens as it rises.
                 let lifted_layers = lifted.as_mut().context("lift layer")?;
-                let rect = crate::pane_anim::PxRect {
-                    x: snap.rect.x + tr.dx,
-                    y: snap.rect.y + tr.dy,
-                    w: snap.rect.w,
-                    h: snap.rect.h,
-                };
+                let rect = tr.map(&snap.rect);
                 self.paint_lift_shadow(lifted_layers, &rect, height, cell_size)
                     .context("lift shadow")?;
                 let mark = lifted_layers.mark();
@@ -483,7 +478,7 @@ impl crate::TermWindow {
                         seg,
                     );
                 }
-                lifted_layers.transform_since(mark, tr.dx, tr.dy, tr.clip);
+                lifted_layers.transform_since(mark, &tr);
                 continue;
             }
             let mark = layers.mark();
@@ -504,7 +499,7 @@ impl crate::TermWindow {
                     );
                 }
             if let Some(tr) = transform {
-                layers.transform_since(mark, tr.dx, tr.dy, tr.clip);
+                layers.transform_since(mark, &tr);
             }
         }
         drop(lifted);
