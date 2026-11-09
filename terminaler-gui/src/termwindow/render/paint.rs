@@ -154,6 +154,9 @@ impl crate::TermWindow {
         let frame_interval = Duration::from_secs_f64(1.0 / self.config.max_fps.clamp(1, 240) as f64);
         let animating = next_due.map_or(false, |due| due <= Instant::now() + frame_interval);
         self.log_animation_frame(start, animating);
+        if !animating {
+            self.prewarm_scaled_font_step();
+        }
         if animating {
             // A frame slower than one refresh must not eat animation time,
             // or the next frame jumps ahead by the stall.

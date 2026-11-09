@@ -798,6 +798,11 @@ pub struct TermWindow {
     scaled_font_basis: (usize, u64),
     /// Scaled configs that have adopted the fallback fonts already found.
     scaled_font_seeded: HashSet<u32>,
+    /// Scale keys still to build ahead of use, and the font basis they were
+    /// queued for (see prewarm_scaled_font_step).
+    scaled_prewarm: Vec<u32>,
+    scaled_prewarm_basis: (usize, u64),
+    scaled_prewarm_started: Option<Instant>,
 
     window_background: Vec<LoadedBackgroundLayer>,
 
@@ -1287,6 +1292,9 @@ impl TermWindow {
             scaled_font_configs: HashMap::new(),
             scaled_font_basis: (0, 0),
             scaled_font_seeded: HashSet::new(),
+            scaled_prewarm: vec![],
+            scaled_prewarm_basis: (0, 0),
+            scaled_prewarm_started: None,
             ui_items: vec![],
             dragging: None,
             split_drag_offset: None,
@@ -5478,21 +5486,33 @@ impl TermWindow {
         let entry = self.get_or_create_scaled_config(scale);
         let key = Self::font_scale_key(scale);
         if self.scaled_font_seeded.insert(key) {
-            let start = Instant::now();
-            let mut sources = vec![Rc::clone(&self.fonts)];
-            sources.extend(
-                self.scaled_font_configs
-                    .iter()
-                    .filter(|(k, _)| **k != key)
-                    .map(|(_, (fonts, _))| Rc::clone(fonts)),
-            );
-            let mut added = false;
-            for source in &sources {
-                match entry.0.adopt_fallbacks_from(source) {
-                    Ok(a) => added |= a,
-                    Err(err) => log::warn!("scaled font {:.2}: adopting fallbacks: {:#}", scale, err),
-                }
+            // Cheap (tens of µs) when a prewarm already adopted everything.
+            self.adopt_scaled_fallbacks(scale, &entry.0);
+        }
+        entry
+    }
+
+    /// Give `fonts` every fallback font the window font and the other scaled
+    /// configs have found. Loading an added face costs 5-11 ms; finding
+    /// nothing new costs microseconds.
+    fn adopt_scaled_fallbacks(&self, scale: f64, fonts: &Rc<FontConfiguration>) -> bool {
+        let start = Instant::now();
+        let key = Self::font_scale_key(scale);
+        let mut sources = vec![Rc::clone(&self.fonts)];
+        sources.extend(
+            self.scaled_font_configs
+                .iter()
+                .filter(|(k, _)| **k != key)
+                .map(|(_, (fonts, _))| Rc::clone(fonts)),
+        );
+        let mut added = false;
+        for source in &sources {
+            match fonts.adopt_fallbacks_from(source) {
+                Ok(a) => added |= a,
+                Err(err) => log::warn!("scaled font {:.2}: adopting fallbacks: {:#}", scale, err),
             }
+        }
+        if added || self.config.log_animation_frames {
             log::info!(
                 "scaled font {:.2}: adopted fallbacks from {} configs in {:?} (added: {})",
                 scale,
@@ -5501,7 +5521,53 @@ impl TermWindow {
                 added
             );
         }
-        entry
+        added
+    }
+
+    /// Build one pane font scale ahead of use, when the window is idle. A
+    /// font fit probes several scales and a new scale's first paint loads
+    /// fallback faces: on a divider release that took ~30 ms of a ~105 ms
+    /// frame. Building every 1% step from 0.50 to 1.50 here, one per idle
+    /// frame, leaves only glyph shaping and rasterising for the release.
+    /// Re-queued when the window font's dpi or scale changes (a move to
+    /// another monitor), which empties the scaled config cache.
+    pub fn prewarm_scaled_font_step(&mut self) {
+        if self.dragging.is_some() {
+            return;
+        }
+        let basis = (
+            self.fonts.get_dpi(),
+            (self.fonts.get_font_scale() * 1000.0).round() as u64,
+        );
+        if self.scaled_prewarm_basis != basis {
+            self.scaled_prewarm_basis = basis;
+            self.scaled_prewarm = (50..=150u32).rev().filter(|k| *k != 100).collect();
+            self.scaled_prewarm_started = Some(Instant::now());
+        }
+        let started = Instant::now();
+        while let Some(key) = self.scaled_prewarm.pop() {
+            if self.scaled_font_basis == basis && self.scaled_font_configs.contains_key(&key) {
+                continue;
+            }
+            let scale = key as f64 / 100.0;
+            let (fonts, _) = self.get_or_create_scaled_config(scale);
+            self.adopt_scaled_fallbacks(scale, &fonts);
+            // Stop after ~4 ms so each idle frame stays short.
+            if started.elapsed() >= Duration::from_millis(4) {
+                break;
+            }
+        }
+        if self.scaled_prewarm.is_empty() {
+            if let Some(since) = self.scaled_prewarm_started.take() {
+                log::info!(
+                    "prewarmed pane font scales 0.50-1.50 in {:?} ({} configs)",
+                    since.elapsed(),
+                    self.scaled_font_configs.len()
+                );
+            }
+        } else {
+            self.update_next_frame_time(Some(Instant::now() + Duration::from_millis(20)));
+        }
     }
 
     /// Set a pane's own font scale and remember it for the session file.
