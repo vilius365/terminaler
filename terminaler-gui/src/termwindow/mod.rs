@@ -723,6 +723,9 @@ pub struct TermWindow {
     tab_bar: TabBarState,
     fancy_tab_bar: Option<box_model::ComputedElement>,
     tab_sidebar: Option<box_model::ComputedElement>,
+    /// The cached sidebar shows old data but is still drawable; it is rebuilt
+    /// once no pane animation is running (see `mark_tab_sidebar_stale`).
+    tab_sidebar_stale: bool,
     /// Brief bar elements keyed by the fingerprint of everything they paint.
     brief_bar_cache: Option<(String, Vec<box_model::ComputedElement>)>,
     tab_sidebar_info: HashMap<TabId, SidebarTabInfo>,
@@ -1170,6 +1173,7 @@ impl TermWindow {
             tab_bar: TabBarState::default(),
             fancy_tab_bar: None,
             tab_sidebar: None,
+            tab_sidebar_stale: false,
             brief_bar_cache: None,
             tab_sidebar_info: HashMap::new(),
             sidebar_flyout: None,
@@ -2412,7 +2416,7 @@ impl TermWindow {
         if new_tab_bar != self.tab_bar {
             self.tab_bar = new_tab_bar;
             self.invalidate_fancy_tab_bar();
-            self.invalidate_tab_sidebar();
+            self.mark_tab_sidebar_stale();
             self.invalidate_modal();
             if let Some(window) = self.window.as_ref() {
                 window.invalidate();
@@ -5620,7 +5624,7 @@ impl TermWindow {
         // No shape cache reset: the shape caches are keyed by the font
         // metrics (CellMetricKey includes the descender), so only this pane
         // reshapes. Clearing them made every pane reshape on every fit.
-        self.invalidate_tab_sidebar();
+        self.mark_tab_sidebar_stale();
         log::info!(
             "fit: pane {} area {}x{}px, scale {:.2} for {}x{} cells",
             pane_id,

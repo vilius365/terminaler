@@ -193,6 +193,23 @@ impl crate::TermWindow {
             );
         }
         self.tab_sidebar.take();
+        self.tab_sidebar_stale = false;
+    }
+
+    /// The sidebar's data changed, but its cached element is still valid to
+    /// draw (no glyph atlas or font change). Rebuilding it costs 8-15 ms, so
+    /// while panes are animating the old one keeps being drawn and it is
+    /// rebuilt once the motion ends; otherwise on the next paint.
+    #[track_caller]
+    pub fn mark_tab_sidebar_stale(&mut self) {
+        if self.config.log_animation_frames && self.tab_sidebar.is_some() && !self.tab_sidebar_stale {
+            log::info!(
+                target: "anim_frames",
+                "  sidebar marked stale by {}",
+                std::panic::Location::caller()
+            );
+        }
+        self.tab_sidebar_stale = true;
     }
 
     /// Count Claude agent panes in `waiting_input` across all windows,
@@ -280,7 +297,7 @@ impl crate::TermWindow {
     pub fn apply_sidebar_info(&mut self, new_info: HashMap<TabId, SidebarTabInfo>) {
         self.sidebar_info_in_flight = false;
         if self.sidebar_info_changed(&new_info) {
-            self.invalidate_tab_sidebar();
+            self.mark_tab_sidebar_stale();
             if let Some(window) = self.window.as_ref() {
                 window.invalidate();
             }
@@ -1253,6 +1270,17 @@ impl crate::TermWindow {
         }
 
         self.log_frame_segment("sidebar.fingerprint", seg);
+
+        if self.tab_sidebar_stale {
+            if self.pane_anims.borrow().is_active() {
+                // Keep drawing the old sidebar until the motion ends, and
+                // make sure a frame comes then to rebuild it.
+                self.update_next_frame_time(Some(Instant::now() + Duration::from_millis(16)));
+            } else {
+                self.tab_sidebar_stale = false;
+                self.tab_sidebar.take();
+            }
+        }
 
         if self.tab_sidebar.is_none() {
             let seg = Instant::now();
