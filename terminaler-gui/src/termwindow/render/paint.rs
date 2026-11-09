@@ -5,6 +5,8 @@ use anyhow::Context;
 use smol::Timer;
 use std::time::{Duration, Instant};
 use terminaler_font::ClearShapeCache;
+use crate::quad::{HeapQuadAllocator, TripleLayerQuadAllocator};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AllowImage {
@@ -70,6 +72,9 @@ impl crate::TermWindow {
                             size,
                             if pass == 0 { "clearing it" } else { "growing it" }
                         );
+                        // Held pictures point into the old atlas.
+                        self.pane_holds.clear();
+                        self.pane_hold_quads.clear();
                         let result = if pass == 0 {
                             // Let's try clearing out the atlas and trying again
                             // self.clear_texture_atlas()
@@ -125,6 +130,23 @@ impl crate::TermWindow {
                 }
             }
         }
+        if let Some((index, delta)) = self.pending_split_resize.take() {
+            let now = Instant::now();
+            if let Some(captured) = self.pane_hold_capture.take() {
+                for (id, (quads, rect)) in captured {
+                    self.pane_holds.start(id, rect, now);
+                    self.pane_hold_quads.insert(id, quads);
+                }
+            }
+            if let Some(tab) = mux::Mux::get().get_active_tab_for_window(self.mux_window_id) {
+                log::info!("split drag applied: move split {} by {} cells", index, delta);
+                tab.resize_split_by(index, delta);
+            }
+            if let Some(window) = self.window.as_ref() {
+                window.invalidate();
+            }
+        }
+        self.pane_hold_capture = None;
         log::debug!("paint_impl before call_draw elapsed={:?}", start.elapsed());
 
         let seg = Instant::now();
@@ -430,7 +452,94 @@ impl crate::TermWindow {
             None
         };
         let mut lifted = lifted_layer.as_ref().map(|l| l.quad_allocator());
+
+        // Pane holds (pane_hold.rs): capture every pane's picture on the
+        // frame before a released divider move is applied, and draw held
+        // pictures until their panes have redrawn.
+        let capturing = self.pending_split_resize.is_some();
+        self.pane_hold_capture = capturing.then(HashMap::new);
+        {
+            let env = [
+                self.dimensions.pixel_width as f32,
+                self.dimensions.pixel_height as f32,
+                cell_size.0,
+                cell_size.1,
+                self.sidebar_x_offset(),
+            ];
+            if self.pane_hold_env != Some(env) {
+                self.pane_holds.clear();
+                self.pane_hold_quads.clear();
+                self.pane_hold_env = Some(env);
+            }
+            let max = Duration::from_millis(self.config.pane_resize_hold_ms);
+            for (id, why, held) in self.pane_holds.release_due(frame_now, max) {
+                self.pane_hold_quads.remove(&id);
+                if self.config.log_animation_frames {
+                    log::info!(
+                        target: "anim_frames",
+                        "  pane {} hold released after {:.0}ms ({:?})",
+                        id,
+                        held.as_secs_f64() * 1000.0,
+                        why
+                    );
+                }
+            }
+            for id in self.pane_holds.panes() {
+                if !snaps.iter().any(|(sid, _)| *sid == id) {
+                    self.pane_holds.remove(id);
+                    self.pane_hold_quads.remove(&id);
+                }
+            }
+        }
+
         for (pos, (_, snap)) in panes.into_iter().zip(snaps.iter()) {
+            let id = pos.pane.pane_id();
+            if capturing {
+                if pos.is_active {
+                    self.update_text_cursor(&pos);
+                }
+                let mut quads = HeapQuadAllocator::default();
+                self.paint_pane(&pos, &mut TripleLayerQuadAllocator::Heap(&mut quads))
+                    .context("paint_pane for hold")?;
+                quads.apply_to(&mut layers).context("apply held pane")?;
+                if let Some(capture) = self.pane_hold_capture.as_mut() {
+                    capture.insert(id, (quads, snap.rect));
+                }
+                continue;
+            }
+            if let Some(from) = self.pane_holds.rect(id) {
+                let moved = (from.x - snap.rect.x).abs() >= 1.0
+                    || (from.y - snap.rect.y).abs() >= 1.0
+                    || (from.w - snap.rect.w).abs() >= 1.0
+                    || (from.h - snap.rect.h).abs() >= 1.0;
+                if !moved {
+                    // The release did not touch this pane.
+                    self.pane_holds.remove(id);
+                    self.pane_hold_quads.remove(&id);
+                } else if let Some(quads) = self.pane_hold_quads.get(&id) {
+                    // Follow a running reveal tween, so the picture grows
+                    // into its new place with the animation.
+                    let target = anim_duration
+                        .and_then(|d| self.pane_anims.borrow().current(id, frame_now, d))
+                        .unwrap_or(snap.rect);
+                    let bg = snap.bg;
+                    self.filled_rectangle(
+                        &mut layers,
+                        0,
+                        euclid::rect(target.x, target.y, target.w, target.h),
+                        window::color::LinearRgba(bg[0], bg[1], bg[2], bg[3]),
+                    )
+                    .context("held pane background")?;
+                    let mark = layers.mark();
+                    quads.apply_to(&mut layers).context("apply held pane")?;
+                    let tr = crate::pane_hold::fit_into(&from, &target).to_vertex_space(
+                        self.dimensions.pixel_width as f32 / 2.0,
+                        self.dimensions.pixel_height as f32 / 2.0,
+                    );
+                    layers.transform_since(mark, &tr);
+                    continue;
+                }
+            }
             if pos.is_active {
                 self.update_text_cursor(&pos);
                 if focused {
@@ -505,7 +614,8 @@ impl crate::TermWindow {
 
         let sliding = match anim_duration {
             Some(duration) => {
-                let more = self.pane_anims.borrow_mut().prune(frame_now, duration);
+                let more = self.pane_anims.borrow_mut().prune(frame_now, duration)
+                    || !self.pane_holds.is_empty();
                 if more {
                     let frame = std::time::Duration::from_millis(
                         1000 / self.config.max_fps.clamp(1, 240),
@@ -514,7 +624,16 @@ impl crate::TermWindow {
                 }
                 self.pane_anims.borrow().has_tweens()
             }
-            None => false,
+            None => {
+                // A held pane still needs frames to notice its release.
+                if !self.pane_holds.is_empty() {
+                    let frame = std::time::Duration::from_millis(
+                        1000 / self.config.max_fps.clamp(1, 240),
+                    );
+                    self.update_next_frame_time(Some(frame_now + frame));
+                }
+                false
+            }
         };
 
         // Splits are drawn at final positions; hide them while panes slide.

@@ -614,6 +614,7 @@ impl super::TermWindow {
                         pixel_height: area_h,
                         dpi: self.dimensions.dpi as u32,
                     }).ok();
+                    self.pane_holds.note_resize(pane_id, std::time::Instant::now());
                     break;
                 }
             }

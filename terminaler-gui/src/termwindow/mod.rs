@@ -885,6 +885,13 @@ pub struct TermWindow {
     pub current_event: Option<Value>,
     has_animation: RefCell<Option<Instant>>,
     pane_anims: RefCell<crate::pane_anim::PaneAnimations>,
+    /// A released divider move, applied after the next frame has captured
+    /// every pane's picture (see pane_hold).
+    pub(crate) pending_split_resize: Option<(usize, isize)>,
+    pub(crate) pane_holds: crate::pane_hold::PaneHolds,
+    pub(crate) pane_hold_quads: HashMap<PaneId, crate::quad::HeapQuadAllocator>,
+    pub(crate) pane_hold_capture: Option<HashMap<PaneId, (crate::quad::HeapQuadAllocator, crate::pane_anim::PxRect)>>,
+    pub(crate) pane_hold_env: Option<[f32; 5]>,
     /// Pane whose border flashes to say "this one is already open", and when
     /// the flash began.
     pane_flash: RefCell<Option<(PaneId, Instant)>>,
@@ -1292,6 +1299,11 @@ impl TermWindow {
             current_event: None,
             has_animation: RefCell::new(None),
             pane_anims: RefCell::new(Default::default()),
+            pending_split_resize: None,
+            pane_holds: Default::default(),
+            pane_hold_quads: HashMap::new(),
+            pane_hold_capture: None,
+            pane_hold_env: None,
             pane_flash: RefCell::new(None),
             scheduled_animation: RefCell::new(None),
             last_anim_frame: RefCell::new(None),
@@ -1847,6 +1859,7 @@ impl TermWindow {
                 }
                 MuxNotification::PaneOutput(pane_id) => {
                     self.pane_last_output.insert(pane_id, Instant::now());
+                    self.pane_holds.note_output(pane_id, Instant::now());
                     self.claude_idle_notified.remove(&pane_id);
                     self.mux_pane_output_event(pane_id);
                 }

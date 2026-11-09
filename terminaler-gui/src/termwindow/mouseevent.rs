@@ -547,6 +547,18 @@ impl super::TermWindow {
         if delta == 0 {
             return;
         }
+        if self.config.pane_resize_hold_ms > 0 {
+            // Paint one more frame first, keeping each pane's picture, so
+            // panes can show it while their programs redraw (pane_hold).
+            log::info!("split drag released: move split {} by {} cells (after capture)", split.index, delta);
+            self.pending_split_resize = Some((split.index, delta));
+            self.pane_holds.clear();
+            self.pane_hold_quads.clear();
+            if let Some(window) = self.window.as_ref() {
+                window.invalidate();
+            }
+            return;
+        }
         if let Some(tab) = Mux::get().get_active_tab_for_window(self.mux_window_id) {
             log::info!("split drag released: move split {} by {} cells", split.index, delta);
             tab.resize_split_by(split.index, delta);

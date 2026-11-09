@@ -707,6 +707,13 @@ pub struct Config {
     #[dynamic(default = "default_pane_lift_ms")]
     pub pane_lift_ms: u32,
 
+    /// Longest time in milliseconds a pane keeps its old picture after a
+    /// divider release, while the program in it (tmux, Claude Code) redraws
+    /// for the new size. The hold ends earlier once that redraw is over.
+    /// 0 shows the pane's content straight away, partial redraws included.
+    #[dynamic(default = "default_pane_resize_hold_ms")]
+    pub pane_resize_hold_ms: u64,
+
     /// Easing curve of pane animations: Linear, Ease, EaseIn, EaseInOut,
     /// EaseOut or a CubicBezier. EaseOut (the default) starts fast and settles gently.
     #[dynamic(default = "default_pane_animation_easing")]
@@ -1909,6 +1916,10 @@ fn default_pane_fit_columns() -> u16 {
 
 fn default_pane_lift_ms() -> u32 {
     675
+}
+
+fn default_pane_resize_hold_ms() -> u64 {
+    400
 }
 
 fn default_pane_animation_easing() -> crate::bell::EasingFunction {
