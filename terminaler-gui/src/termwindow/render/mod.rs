@@ -971,6 +971,10 @@ impl crate::TermWindow {
         });
 
         let shape_hash = line.compute_shape_hash();
+        {
+            let (t, n) = self.pane_hash_stats.get();
+            self.pane_hash_stats.set((t, n + 1));
+        }
 
         let state = Arc::new(CachedLineState {
             id,

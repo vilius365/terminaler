@@ -1105,6 +1105,7 @@ impl crate::TermWindow {
             self.pane_callback_time.set(Duration::ZERO);
             self.pane_hit_stats
                 .set((Duration::ZERO, Duration::ZERO, Duration::ZERO, 0));
+            self.pane_hash_stats.set((Duration::ZERO, 0));
             let mut render = LineRender {
                 term_window: self,
                 selrange,
@@ -1186,7 +1187,12 @@ impl crate::TermWindow {
                         (None, None, false)
                     };
 
+                    let hash_start = Instant::now();
                     let shape_hash = self.term_window.shape_hash_for_line(line);
+                    {
+                        let (t, n) = self.term_window.pane_hash_stats.get();
+                        self.term_window.pane_hash_stats.set((t + hash_start.elapsed(), n));
+                    }
 
                     let quad_key = LineQuadCacheKey {
                         pane_id: self.pane_id,
@@ -1359,10 +1365,13 @@ impl crate::TermWindow {
             drop(render);
             let inside = self.pane_callback_time.get();
             let (k, l, a, q) = self.pane_hit_stats.get();
+            let (ht, hn) = self.pane_hash_stats.get();
             self.log_frame_segment(
                 &format!(
-                    "    with_lines_mut (callback {:.2}ms; cached lines: key {:.2}ms, lookup {:.2}ms, copy {:.2}ms for {} quads)",
+                    "    with_lines_mut (callback {:.2}ms; line hash {:.2}ms, {} recomputed; cached lines: key {:.2}ms, lookup {:.2}ms, copy {:.2}ms for {} quads)",
                     inside.as_secs_f64() * 1000.0,
+                    ht.as_secs_f64() * 1000.0,
+                    hn,
                     k.as_secs_f64() * 1000.0,
                     l.as_secs_f64() * 1000.0,
                     a.as_secs_f64() * 1000.0,
