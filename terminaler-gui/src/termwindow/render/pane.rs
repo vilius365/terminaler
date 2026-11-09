@@ -18,7 +18,8 @@ use mux::tab::PositionedPane;
 use std::rc::Rc;
 use terminaler_font::FontConfiguration;
 use ordered_float::NotNan;
-use std::time::Instant;
+use std::time::{Duration, Instant};
+
 use terminaler_dynamic::Value;
 use terminaler_term::color::{ColorAttribute, ColorPalette};
 use terminaler_term::{Line, StableRowIndex};
@@ -1101,6 +1102,7 @@ impl crate::TermWindow {
                 error: Option<anyhow::Error>,
             }
 
+            self.pane_callback_time.set(Duration::ZERO);
             let mut render = LineRender {
                 term_window: self,
                 selrange,
@@ -1325,12 +1327,15 @@ impl crate::TermWindow {
 
             impl<'a, 'b> WithPaneLines for LineRender<'a, 'b> {
                 fn with_lines_mut(&mut self, stable_top: StableRowIndex, lines: &mut [&mut Line]) {
+                    let started = Instant::now();
                     for (line_idx, line) in lines.iter().enumerate() {
                         if let Err(err) = self.render_line(stable_top, line_idx, line) {
                             self.error.replace(err);
-                            return;
+                            break;
                         }
                     }
+                    let cell = &self.term_window.pane_callback_time;
+                    cell.set(cell.get() + started.elapsed());
                 }
             }
 
@@ -1338,7 +1343,14 @@ impl crate::TermWindow {
             pos.pane.with_lines_mut(stable_range.clone(), &mut render);
             render_error = render.error.take();
             drop(render);
-            self.log_frame_segment("    with_lines_mut", part);
+            let inside = self.pane_callback_time.get();
+            self.log_frame_segment(
+                &format!(
+                    "    with_lines_mut (inside the line callback {:.2}ms)",
+                    inside.as_secs_f64() * 1000.0
+                ),
+                part,
+            );
         }
 
         // Restore original fonts/metrics if we swapped for per-pane scaling
