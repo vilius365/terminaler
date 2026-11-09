@@ -130,6 +130,18 @@ pub static PANE_FONT_SCALES: std::sync::LazyLock<parking_lot::Mutex<std::collect
 pub static PANE_FONT_AUTO: std::sync::LazyLock<parking_lot::Mutex<std::collections::HashSet<PaneId>>> =
     std::sync::LazyLock::new(Default::default);
 
+/// Each window's last pixel size and whether it was maximized, by mux window,
+/// for the session file (the autosave thread reads it).
+pub static WINDOW_GEOMETRY: std::sync::LazyLock<
+    parking_lot::Mutex<HashMap<MuxWindowId, (u32, u32, bool)>>,
+> = std::sync::LazyLock::new(Default::default);
+
+/// Pixel size and maximized state a restored mux window should open with;
+/// taken by `TermWindow::new_window`.
+pub static RESTORED_GEOMETRY: std::sync::LazyLock<
+    parking_lot::Mutex<HashMap<MuxWindowId, (u32, u32, bool)>>,
+> = std::sync::LazyLock::new(Default::default);
+
 /// The saved font scale for `pane_id`, 1.0 when it has none.
 pub fn recorded_pane_font_scale(pane_id: PaneId) -> Option<f64> {
     PANE_FONT_SCALES.lock().get(&pane_id).copied()
@@ -1284,9 +1296,17 @@ impl TermWindow {
             origin = position.origin;
         }
 
+        // A restored window opens at the size it was saved at. The size
+        // derived from the saved grid leaves out the sidebar, so the window
+        // shrank by about its width on every restart.
+        let restored = RESTORED_GEOMETRY.lock().remove(&mux_window_id);
+        let (open_width, open_height) = match restored {
+            Some((w, h, _)) if w > 0 && h > 0 => (w as f32, h as f32),
+            _ => (dimensions.pixel_width as f32, dimensions.pixel_height as f32),
+        };
         let geometry = RequestedWindowGeometry {
-            width: Dimension::Pixels(dimensions.pixel_width as f32),
-            height: Dimension::Pixels(dimensions.pixel_height as f32),
+            width: Dimension::Pixels(open_width),
+            height: Dimension::Pixels(open_height),
             x,
             y,
             origin,
@@ -1308,6 +1328,9 @@ impl TermWindow {
         )
         .await?;
         tw.borrow_mut().window.replace(window.clone());
+        if matches!(restored, Some((_, _, true))) {
+            window.maximize();
+        }
 
         Self::apply_icon(&window)?;
 

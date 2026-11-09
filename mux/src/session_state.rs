@@ -36,6 +36,11 @@ pub struct WindowState {
     /// default size, a few rows per pane round to nonsense.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub terminal_size: Option<(usize, usize)>,
+    /// The window was maximized. A restore opens it at `size`, then
+    /// maximizes it; without this a restored window lost its maximized
+    /// state and came back a little smaller on every restart.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub maximized: bool,
 }
 
 /// State of a single tab.
@@ -298,6 +303,7 @@ mod tests {
                 position: Some((100, 200)),
                 size: Some((1920, 1080)),
                 terminal_size: None,
+                maximized: true,
             }],
             active_workspace: Some("default".into()),
         };
@@ -305,6 +311,16 @@ mod tests {
         let parsed: SessionState = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.windows.len(), 1);
         assert_eq!(parsed.windows[0].tabs.len(), 2);
+        assert_eq!(parsed.windows[0].size, Some((1920, 1080)));
+        assert!(parsed.windows[0].maximized);
+    }
+
+    #[test]
+    fn old_window_json_without_maximized_loads_unmaximized() {
+        let json = r#"{"title":"t","tabs":[],"active_tab_index":0}"#;
+        let window: WindowState = serde_json::from_str(json).unwrap();
+        assert!(!window.maximized);
+        assert_eq!(window.size, None);
     }
 
     #[test]

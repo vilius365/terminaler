@@ -48,6 +48,14 @@ impl super::TermWindow {
         }
         let last_state = self.window_state;
         self.window_state = window_state;
+        super::WINDOW_GEOMETRY.lock().insert(
+            self.mux_window_id,
+            (
+                dimensions.pixel_width as u32,
+                dimensions.pixel_height as u32,
+                window_state.contains(WindowState::MAXIMIZED),
+            ),
+        );
         self.quad_generation += 1;
         if last_state != self.window_state {
             self.load_os_parameters();

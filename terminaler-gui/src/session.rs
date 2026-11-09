@@ -50,14 +50,16 @@ pub fn capture_session() -> SessionState {
             .get_active()
             .map(|tab| tab.get_size())
             .map(|size| (size.cols, size.rows));
+        let geometry = crate::termwindow::WINDOW_GEOMETRY.lock().get(&window_id).copied();
         windows.push(WindowState {
             title: mux_window.get_title().to_string(),
             workspace: Some(mux_window.get_workspace().to_string()),
             tabs,
             active_tab_index: active_tab_idx,
             position: None,
-            size: None,
+            size: geometry.map(|(w, h, _)| (w, h)),
             terminal_size,
+            maximized: geometry.map_or(false, |(_, _, maximized)| maximized),
         });
     }
 
@@ -156,6 +158,11 @@ pub async fn restore_session(
             .clone()
             .or_else(|| session.active_workspace.clone());
         let window_id = *mux.new_empty_window(workspace, None);
+        if let Some((w, h)) = win_state.size {
+            crate::termwindow::RESTORED_GEOMETRY
+                .lock()
+                .insert(window_id, (w, h, win_state.maximized));
+        }
 
         for (tab_idx, tab_state) in win_state.tabs.iter().enumerate() {
             // Spawn the first pane from the leftmost/topmost leaf
