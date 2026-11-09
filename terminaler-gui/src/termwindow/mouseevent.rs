@@ -2401,14 +2401,13 @@ impl super::TermWindow {
             config::TabSidebarPosition::Left => (start_width as f32 + delta).max(0.) as u16,
             config::TabSidebarPosition::Right => (start_width as f32 - delta).max(0.) as u16,
         };
-        // Clamp between 100 and 600 pixels — the responsive tiles stay
-        // legible down to ~100 (font floors at 8pt).
+        // Clamp between 100 and 600 pixels — labels shrink to fit their
+        // tile down to 7pt, and only then truncate.
         let new_width = new_width.max(100).min(600);
         if new_width != self.tab_sidebar_width {
             self.tab_sidebar_width = new_width;
-            // invalidate_tab_sidebar is enough for live font rescale: the
-            // rebuild asks for sidebar_font_at(rail_font_size()), which only
-            // reloads when the derived size actually changed.
+            // invalidate_tab_sidebar is enough for a live refit: the rebuild
+            // fits each label to the new tile width from cached fonts.
             self.invalidate_tab_sidebar();
             self.invalidate_fancy_tab_bar();
             if let Some(window) = self.window.as_ref().map(|w| w.clone()) {

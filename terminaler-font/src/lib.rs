@@ -475,10 +475,11 @@ struct FontConfigInner {
     pane_select_font: RefCell<Option<Rc<LoadedFont>>>,
     char_select_font: RefCell<Option<Rc<LoadedFont>>>,
     command_palette_font: RefCell<Option<Rc<LoadedFont>>>,
-    /// Sidebar rail font, cached with the point size it was loaded at. The
-    /// size is GUI layout policy (it derives from the rail width); this crate
-    /// only loads fonts at the size it is asked for.
-    sidebar_font: RefCell<Option<(f64, Rc<LoadedFont>)>>,
+    /// Sidebar rail fonts, keyed by point size in tenths. Several sizes are
+    /// live at once (the rail base, labels shrunk to fit their tile, the top
+    /// bar), so a single slot would reload a font on every call. The size is
+    /// GUI layout policy; this crate only loads fonts at the size asked for.
+    sidebar_font: RefCell<HashMap<u32, Rc<LoadedFont>>>,
     /// Size the next Entity::Sidebar load uses; set by sidebar_font_at.
     sidebar_font_size: RefCell<f64>,
     fallback_channel: RefCell<Option<Sender<FallbackResolveInfo>>>,
@@ -502,7 +503,7 @@ impl FontConfigInner {
             pane_select_font: RefCell::new(None),
             char_select_font: RefCell::new(None),
             command_palette_font: RefCell::new(None),
-            sidebar_font: RefCell::new(None),
+            sidebar_font: RefCell::new(HashMap::new()),
             sidebar_font_size: RefCell::new(9.6),
             font_scale: RefCell::new(1.0),
             dpi: RefCell::new(dpi),
@@ -522,7 +523,7 @@ impl FontConfigInner {
         self.pane_select_font.borrow_mut().take();
         self.char_select_font.borrow_mut().take();
         self.command_palette_font.borrow_mut().take();
-        self.sidebar_font.borrow_mut().take();
+        self.sidebar_font.borrow_mut().clear();
         self.metrics.borrow_mut().take();
         *self.font_dirs.borrow_mut() = Arc::new(FontDatabase::with_font_dirs(config)?);
         Ok(())
@@ -683,20 +684,19 @@ impl FontConfigInner {
     }
 
     fn sidebar_font_at(&self, myself: &Rc<Self>, size: f64) -> anyhow::Result<Rc<LoadedFont>> {
-        {
-            let cached = self.sidebar_font.borrow();
-            if let Some((cached_size, entry)) = cached.as_ref() {
-                // Reload only when the derived size actually moved — drag
-                // motion mostly changes the raw width without changing the
-                // clamped size, and a same-size reload is pure waste.
-                if (cached_size - size).abs() < 0.05 {
-                    return Ok(Rc::clone(entry));
-                }
-            }
+        let key = (size * 10.).round().max(1.) as u32;
+        if let Some(entry) = self.sidebar_font.borrow().get(&key) {
+            return Ok(Rc::clone(entry));
         }
-        *self.sidebar_font_size.borrow_mut() = size;
+        *self.sidebar_font_size.borrow_mut() = key as f64 / 10.;
         let loaded = self.make_entity_font_impl(myself, Entity::Sidebar)?;
-        self.sidebar_font.borrow_mut().replace((size, Rc::clone(&loaded)));
+        let mut cache = self.sidebar_font.borrow_mut();
+        // Callers quantize, so this stays small; the bound only guards
+        // against a caller that does not.
+        if cache.len() >= 32 {
+            cache.clear();
+        }
+        cache.insert(key, Rc::clone(&loaded));
         Ok(loaded)
     }
 
@@ -1000,7 +1000,7 @@ impl FontConfigInner {
         // The sidebar font cache is keyed on point size alone while DPI is
         // baked into the LoadedFont — without this, a monitor/scale change
         // left the rail rendering stale-DPI glyphs until a config reload.
-        self.sidebar_font.borrow_mut().take();
+        self.sidebar_font.borrow_mut().clear();
 
         (prior_font, prior_dpi)
     }

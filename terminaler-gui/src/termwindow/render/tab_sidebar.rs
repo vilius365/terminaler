@@ -148,12 +148,23 @@ fn status_border(
 }
 
 impl crate::TermWindow {
-    /// Rail font size: the user's terminal size scaled by the rail width.
-    /// Growth caps at 1.15x the 180px reference — past that point a wider
-    /// rail fits MORE text into the tiles, not bigger letters (user feedback).
+    /// Rail font size: the user's terminal size, NOT the rail width. It used
+    /// to scale with the width, which shrank the top bar and the flyout (both
+    /// share this size) whenever the rail was narrowed, and still truncated
+    /// labels at fixed character counts. Narrow rails now shrink only the
+    /// labels that do not fit (LabelFitter); the 0.92 factor is the old
+    /// 0.8 x 1.15 cap, so a wide rail looks as before.
     pub(crate) fn rail_font_size(&self) -> f64 {
-        let factor = (self.tab_sidebar_width as f64 / 180.0).min(1.15);
-        (self.config.font_size * 0.8 * factor).clamp(8.0, 16.0)
+        (self.config.font_size * 0.92).clamp(8.0, 16.0)
+    }
+
+    /// Fits rail labels to their tile, from the rail base font.
+    fn label_fitter(&self, base: &Rc<LoadedFont>) -> LabelFitter {
+        LabelFitter {
+            fonts: Rc::clone(&self.fonts),
+            base: Rc::clone(base),
+            base_size: self.rail_font_size(),
+        }
     }
 
     /// Layout context for computing/probing sidebar elements.
@@ -378,9 +389,10 @@ impl crate::TermWindow {
         let window_height = self.dimensions.pixel_height as f32;
         let probe_ctx = self.sidebar_layout_ctx(metrics, sidebar_width, window_height, 10);
         let label_metrics = RenderMetrics::with_font_metrics(&title_font.metrics());
+        let fitter = self.label_fitter(&title_font);
         let label_h = label_metrics.cell_size.height as f32;
         let tile_px = {
-            let mut probe = TileArgs::new(font, title_font, metrics, &label_metrics, theme, sidebar_width);
+            let mut probe = TileArgs::new(font, title_font, metrics, &fitter, theme, sidebar_width);
             probe.icon = "\u{21c4}".to_string();
             probe.label = "probe".to_string();
             self.compute_element(&probe_ctx, &build_tile(probe))
@@ -665,7 +677,7 @@ impl crate::TermWindow {
                 };
 
                 let dimf = if stale || session.attached { 0.55 } else { 1.0 };
-                let mut tile = TileArgs::new(font, title_font, metrics, &label_metrics, theme, sidebar_width);
+                let mut tile = TileArgs::new(font, title_font, metrics, &fitter, theme, sidebar_width);
                 tile.icon = icon.to_string();
                 tile.icon_color = icon_color.mul_alpha(dimf);
                 tile.icon_label = agent_line.map(|(t, c)| (t, c.mul_alpha(dimf)));
@@ -757,7 +769,7 @@ impl crate::TermWindow {
             .get_active_tab_for_window(self.mux_window_id)
             .map(|t| t.tab_id());
 
-        let label_metrics = RenderMetrics::with_font_metrics(&title_font.metrics());
+        let fitter = self.label_fitter(&title_font);
 
         let mut tab_elements = vec![];
 
@@ -853,7 +865,7 @@ impl crate::TermWindow {
                 _ => base_bg,
             };
 
-            let mut tile = TileArgs::new(&font, &title_font, &metrics, &label_metrics, &theme, sidebar_width);
+            let mut tile = TileArgs::new(&font, &title_font, &metrics, &fitter, &theme, sidebar_width);
             tile.icon = icon.to_string();
             tile.icon_color = icon_color;
             tile.label = label;
@@ -910,7 +922,7 @@ impl crate::TermWindow {
                         })
                         .unwrap_or_else(|| pane_title.clone());
 
-                    let mut sub = TileArgs::new(&font, &title_font, &metrics, &label_metrics, &theme, sidebar_width);
+                    let mut sub = TileArgs::new(&font, &title_font, &metrics, &fitter, &theme, sidebar_width);
                     sub.half = true;
                     if pane_claude.is_some() {
                         sub.icon = "\u{2733}".to_string();
@@ -2221,9 +2233,8 @@ struct TileArgs<'a> {
     font: &'a Rc<LoadedFont>,
     label_font: &'a Rc<LoadedFont>,
     metrics: &'a RenderMetrics,
-    /// Metrics of label_font, computed once per rebuild by the caller (they
-    /// were being recomputed per tile).
-    label_metrics: &'a RenderMetrics,
+    /// Sizes each label to the room its tile has.
+    fit: &'a LabelFitter,
     theme: &'a SidebarTheme,
     sidebar_width: f32,
     icon: String,
@@ -2253,7 +2264,7 @@ impl<'a> TileArgs<'a> {
         font: &'a Rc<LoadedFont>,
         label_font: &'a Rc<LoadedFont>,
         metrics: &'a RenderMetrics,
-        label_metrics: &'a RenderMetrics,
+        fit: &'a LabelFitter,
         theme: &'a SidebarTheme,
         sidebar_width: f32,
     ) -> Self {
@@ -2261,7 +2272,7 @@ impl<'a> TileArgs<'a> {
             font,
             label_font,
             metrics,
-            label_metrics,
+            fit,
             theme,
             sidebar_width,
             icon: String::new(),
@@ -2300,19 +2311,26 @@ fn build_tile(a: TileArgs) -> Element {
 
     let mut lines: Vec<Element> = vec![];
 
+    // Room left for the inline text after the "<icon> " mono cells and the
+    // trailing hint (with its leading space), less 2px so the box model's
+    // clip at the content edge never eats the last glyph.
+    let hint_w = a
+        .right_hint
+        .as_ref()
+        .map_or(0., |(t, _)| a.fit.width(&format!(" {}", t)));
+    let inline_avail = inner_w - 2. * cell_w - hint_w - 2.;
+
     if a.half {
         let mut segs = vec![inline_mono(
             a.font,
             format!("{} ", a.icon),
             a.icon_color,
         )];
+        let fitted = a.fit.fit(&a.label, inline_avail);
         segs.push(
-            Element::new(
-                a.label_font,
-                ElementContent::Text(truncate_str(&a.label, 20)),
-            )
-            .display(DisplayType::Inline)
-            .colors(text_only(a.label_color)),
+            Element::new(&fitted.font, ElementContent::Text(fitted.text))
+                .display(DisplayType::Inline)
+                .colors(text_only(a.label_color)),
         );
         if let Some((t, c)) = &a.right_hint {
             segs.push(
@@ -2329,13 +2347,11 @@ fn build_tile(a: TileArgs) -> Element {
     } else if let Some((itext, icolor)) = &a.icon_label {
         // Left-aligned icon line: icon + inline identity + trailing hint.
         let mut segs = vec![inline_mono(a.font, format!("{} ", a.icon), a.icon_color)];
+        let fitted = a.fit.fit(itext, inline_avail);
         segs.push(
-            Element::new(
-                a.label_font,
-                ElementContent::Text(truncate_str(itext, 18)),
-            )
-            .display(DisplayType::Inline)
-            .colors(text_only(*icolor)),
+            Element::new(&fitted.font, ElementContent::Text(fitted.text))
+                .display(DisplayType::Inline)
+                .colors(text_only(*icolor)),
         );
         if let Some((rt, rc)) = &a.right_hint {
             segs.push(
@@ -2380,23 +2396,21 @@ fn build_tile(a: TileArgs) -> Element {
     // duplicated in both branches): the centered project label, then the
     // context strip.
     if !a.half {
-        // The label font is proportional, so `{:^}` centering is approximate —
-        // close enough, and exact centering would need pixel measurement the
-        // box model does not expose.
-        let lcell = a.label_metrics.cell_size.width as f32;
-        let label_cols = if lcell > 0. {
-            ((inner_w / (lcell * AVG_ADVANCE_FRAC)) as usize).clamp(6, 28)
+        // Centered by measured width: leading spaces at the label's own size.
+        // Line height comes from the layout metrics, not the label font, so a
+        // shrunk label keeps the tile the same height as its neighbours.
+        let avail = inner_w - 2.;
+        let fitted = a.fit.fit(&a.label, avail);
+        let space_w = a.fit.width(" ") * fitted.scale;
+        let lead = if space_w > 0. {
+            (((avail - fitted.width) / 2.).max(0.) / space_w) as usize
         } else {
-            12
+            0
         };
         lines.push(
             Element::new(
-                a.label_font,
-                ElementContent::Text(format!(
-                    "{:^w$}",
-                    truncate_str(&a.label, label_cols),
-                    w = label_cols
-                )),
+                &fitted.font,
+                ElementContent::Text(format!("{}{}", " ".repeat(lead), fitted.text)),
             )
             .display(DisplayType::Block)
             .line_height(Some(1.0))
@@ -2760,6 +2774,137 @@ fn flyout_chip(
             bg: LinearRgba::with_components(1., 1., 1., 0.16).into(),
             text: theme.text_primary.into(),
         }))
+}
+
+/// Smallest point size a rail label shrinks to; below it the label is
+/// truncated with an ellipsis instead.
+const LABEL_MIN_PT: f64 = 7.0;
+/// Head-room on the fitted width: hinting makes advances only roughly
+/// linear in the point size.
+const LABEL_FIT_SLACK: f32 = 0.96;
+
+thread_local! {
+    /// Shaped advances per (label, base size in tenths). Labels repeat on
+    /// every rebuild, so each one is shaped once.
+    static LABEL_ADVANCES: std::cell::RefCell<HashMap<(String, u32), Rc<Vec<(usize, f32)>>>> =
+        std::cell::RefCell::new(HashMap::new());
+}
+
+/// A label sized for the room it has: the rail base font when it fits,
+/// else a smaller size, else the floor size truncated with an ellipsis.
+pub(crate) struct FittedLabel {
+    pub font: Rc<LoadedFont>,
+    pub text: String,
+    /// Rendered width in pixels at `font`, measured (scaled) not estimated.
+    pub width: f32,
+    /// font size / base size, for scaling other base-size measurements.
+    pub scale: f32,
+}
+
+/// Fits rail labels to their tile by measuring them with the shaper. The
+/// rail used to cut labels at fixed character counts (18/20/28), so text
+/// was hidden at any rail width; this shows the whole label whenever it can
+/// be read at LABEL_MIN_PT or larger.
+pub(crate) struct LabelFitter {
+    fonts: Rc<terminaler_font::FontConfiguration>,
+    base: Rc<LoadedFont>,
+    base_size: f64,
+}
+
+impl LabelFitter {
+    /// (byte offset of each glyph's cluster, pen x after that glyph), at the
+    /// base size.
+    fn advances(&self, text: &str) -> Rc<Vec<(usize, f32)>> {
+        let key = (text.to_string(), (self.base_size * 10.).round() as u32);
+        if let Some(hit) = LABEL_ADVANCES.with(|c| c.borrow().get(&key).cloned()) {
+            return hit;
+        }
+        let infos = self
+            .base
+            .blocking_shape(
+                text,
+                None,
+                termwiz::surface::bidi_stub::Direction::LeftToRight,
+                None,
+                None,
+            )
+            .unwrap_or_else(|err| {
+                log::debug!("sidebar label shaping failed for {:?}: {:#}", text, err);
+                vec![]
+            });
+        let mut x = 0f32;
+        let adv: Vec<(usize, f32)> = infos
+            .iter()
+            .map(|i| {
+                x += i.x_advance.get() as f32;
+                (i.cluster as usize, x)
+            })
+            .collect();
+        let adv = Rc::new(adv);
+        LABEL_ADVANCES.with(|c| {
+            let mut c = c.borrow_mut();
+            if c.len() >= 512 {
+                c.clear();
+            }
+            c.insert(key, Rc::clone(&adv));
+        });
+        adv
+    }
+
+    /// Width of `text` at the base size, in pixels.
+    pub fn width(&self, text: &str) -> f32 {
+        self.advances(text).last().map_or(0., |a| a.1)
+    }
+
+    pub fn fit(&self, text: &str, avail: f32) -> FittedLabel {
+        let w = self.width(text);
+        if w <= avail || avail <= 0. {
+            return FittedLabel {
+                font: Rc::clone(&self.base),
+                text: text.to_string(),
+                width: w,
+                scale: 1.,
+            };
+        }
+        let want = self.base_size * (avail * LABEL_FIT_SLACK / w) as f64;
+        // Half-point steps: a dragged rail then reuses a handful of cached
+        // fonts instead of loading one per pixel.
+        let size = ((want * 2.).floor() / 2.).max(LABEL_MIN_PT).min(self.base_size);
+        let font = self
+            .fonts
+            .sidebar_font_at(size)
+            .unwrap_or_else(|_| Rc::clone(&self.base));
+        let scale = (size / self.base_size) as f32;
+        if want >= LABEL_MIN_PT {
+            return FittedLabel {
+                font,
+                text: text.to_string(),
+                width: w * scale,
+                scale,
+            };
+        }
+        // Even the floor size is too wide: keep the longest prefix that fits
+        // beside an ellipsis.
+        let budget = avail * LABEL_FIT_SLACK - self.width("\u{2026}") * scale;
+        let adv = self.advances(text);
+        let mut end = 0usize;
+        let mut kept_w = 0f32;
+        for (i, (_, x)) in adv.iter().enumerate() {
+            if x * scale > budget {
+                break;
+            }
+            end = adv.get(i + 1).map_or(text.len(), |n| n.0);
+            kept_w = x * scale;
+        }
+        let end = end.min(text.len());
+        let kept = text.get(..end).unwrap_or("").trim_end();
+        FittedLabel {
+            font,
+            text: format!("{}\u{2026}", kept),
+            width: kept_w + self.width("\u{2026}") * scale,
+            scale,
+        }
+    }
 }
 
 fn truncate_str(s: &str, max_chars: usize) -> String {
