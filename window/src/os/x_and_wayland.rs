@@ -314,6 +314,14 @@ impl WindowOps for Window {
         }
     }
 
+    fn paces_repaints_to_display(&self) -> bool {
+        match self {
+            Self::X11(x) => x.paces_repaints_to_display(),
+            #[cfg(feature = "wayland")]
+            Self::Wayland(w) => w.paces_repaints_to_display(),
+        }
+    }
+
     fn set_resize_increments(&self, incr: ResizeIncrement) {
         match self {
             Self::X11(x11) => x11.set_resize_increments(incr),

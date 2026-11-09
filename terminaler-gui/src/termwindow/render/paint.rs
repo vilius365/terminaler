@@ -133,8 +133,32 @@ impl crate::TermWindow {
         // If self.has_animation is some, then the last render detected
         // image attachments with multiple frames, so we also need to
         // invalidate the viewport when the next frame is due
+        let next_due = *self.has_animation.borrow();
+        // A frame is due within one display frame: an animation is running.
+        let frame_interval = Duration::from_secs_f64(1.0 / self.config.max_fps.clamp(1, 240) as f64);
+        let animating = next_due.map_or(false, |due| due <= Instant::now() + frame_interval);
+        self.log_animation_frame(start, animating);
+
+        if self.focused.is_some() && animating && self.config.animation_vsync {
+            if let Some(window) = self.window.as_ref() {
+                if window.paces_repaints_to_display() {
+                    // The frame callback requested by this paint is still
+                    // pending, so the invalidate is held until the compositor
+                    // wants the next frame: one paint per display refresh.
+                    // Deferred so it never runs inside this paint.
+                    self.scheduled_animation.borrow_mut().take();
+                    let window = window.clone();
+                    promise::spawn::spawn(async move {
+                        window.invalidate();
+                    })
+                    .detach();
+                    return;
+                }
+            }
+        }
+
         if self.focused.is_some() {
-            if let Some(next_due) = *self.has_animation.borrow() {
+            if let Some(next_due) = next_due {
                 let prior = self.scheduled_animation.borrow_mut().take();
                 match prior {
                     Some(prior) if prior <= next_due => {
@@ -156,6 +180,25 @@ impl crate::TermWindow {
                 }
             }
         }
+    }
+
+    fn log_animation_frame(&self, start: Instant, animating: bool) {
+        let mut last = self.last_anim_frame.borrow_mut();
+        if !self.config.log_animation_frames {
+            *last = None;
+            return;
+        }
+        let gap = last.map(|prev| start.duration_since(prev).as_secs_f64() * 1000.0);
+        if animating || gap.is_some() {
+            log::info!(
+                target: "anim_frames",
+                "paint={:.2}ms gap={} vsync={}",
+                self.last_frame_duration.as_secs_f64() * 1000.0,
+                gap.map_or("-".to_string(), |g| format!("{g:.2}ms")),
+                self.config.animation_vsync,
+            );
+        }
+        *last = if animating { Some(start) } else { None };
     }
 
     pub fn paint_modal(&mut self) -> anyhow::Result<()> {

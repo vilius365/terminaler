@@ -277,6 +277,14 @@ pub trait WindowOps {
     /// be repainted shortly
     fn invalidate(&self);
 
+    /// True when an `invalidate()` made while a frame is pending is held
+    /// until the compositor asks for the next frame (Wayland frame
+    /// callbacks). Animations can then request a repaint every frame and be
+    /// paced by the display's refresh rate instead of a wall-clock timer.
+    fn paces_repaints_to_display(&self) -> bool {
+        false
+    }
+
     /// Change the titlebar text for the window
     fn set_title(&self, title: &str);
 

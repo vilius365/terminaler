@@ -666,6 +666,18 @@ pub struct Config {
     #[dynamic(default = "default_pane_animation_ms")]
     pub pane_animation_ms: u32,
 
+    /// Pace animation frames by the display's refresh (Wayland frame
+    /// callbacks) instead of a `max_fps` timer. A timer drifts against
+    /// vsync and drops frames, most visibly on high-refresh monitors.
+    /// Ignored on X11, which keeps the timer.
+    #[dynamic(default = "default_true")]
+    pub animation_vsync: bool,
+
+    /// Log paint time and frame gap for every animation frame at info
+    /// level (target `anim_frames`). For diagnosing jerky animations.
+    #[dynamic(default)]
+    pub log_animation_frames: bool,
+
     /// Fit every pane's font to its size automatically: the bigger the pane,
     /// the larger the text, always showing at least `pane_fit_columns` columns
     /// and `pane_fit_rows` rows. Ctrl+scroll (or the font size actions) sizes
@@ -1874,7 +1886,7 @@ fn default_mux_env_remove() -> Vec<String> {
 }
 
 fn default_anim_fps() -> u8 {
-    10
+    60
 }
 
 fn default_pane_animation_ms() -> u32 {

@@ -455,6 +455,10 @@ impl WindowOps for WaylandWindow {
         });
     }
 
+    fn paces_repaints_to_display(&self) -> bool {
+        true
+    }
+
     fn set_text_cursor_position(&self, cursor: Rect) {
         WaylandConnection::with_window_inner(self.0, move |inner| {
             inner.set_text_cursor_position(cursor);

@@ -841,6 +841,8 @@ pub struct TermWindow {
     /// if we run out of texture space
     allow_images: AllowImage,
     scheduled_animation: RefCell<Option<Instant>>,
+    /// Start of the previous animation frame, for `log_animation_frames`.
+    last_anim_frame: RefCell<Option<Instant>>,
 
     created: Instant,
 
@@ -1232,6 +1234,7 @@ impl TermWindow {
             pane_anims: RefCell::new(Default::default()),
             pane_flash: RefCell::new(None),
             scheduled_animation: RefCell::new(None),
+            last_anim_frame: RefCell::new(None),
             allow_images: AllowImage::Yes,
             semantic_zones: HashMap::new(),
             scaled_font_configs: HashMap::new(),
