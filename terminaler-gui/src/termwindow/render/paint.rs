@@ -502,16 +502,22 @@ impl crate::TermWindow {
                 self.paint_pane(&pos, &mut TripleLayerQuadAllocator::Heap(&mut quads))
                     .context("paint_pane for hold")?;
                 quads.apply_to(&mut layers).context("apply held pane")?;
+                let bg = self.pane_background_rect(&pos)?;
+                let bg = crate::pane_anim::PxRect { x: bg.min_x(), y: bg.min_y(), w: bg.width(), h: bg.height() };
                 if let Some(capture) = self.pane_hold_capture.as_mut() {
-                    capture.insert(id, (quads, snap.rect));
+                    capture.insert(id, (quads, bg));
                 }
                 continue;
             }
             if let Some(from) = self.pane_holds.rect(id) {
-                let moved = (from.x - snap.rect.x).abs() >= 1.0
-                    || (from.y - snap.rect.y).abs() >= 1.0
-                    || (from.w - snap.rect.w).abs() >= 1.0
-                    || (from.h - snap.rect.h).abs() >= 1.0;
+                // Holds are kept in background rects: the cells plus the
+                // divider gutters and window margins the pane also paints.
+                let bg = self.pane_background_rect(&pos)?;
+                let bg = crate::pane_anim::PxRect { x: bg.min_x(), y: bg.min_y(), w: bg.width(), h: bg.height() };
+                let moved = (from.x - bg.x).abs() >= 1.0
+                    || (from.y - bg.y).abs() >= 1.0
+                    || (from.w - bg.w).abs() >= 1.0
+                    || (from.h - bg.h).abs() >= 1.0;
                 if !moved {
                     // The release did not touch this pane.
                     self.pane_holds.remove(id);
@@ -519,9 +525,22 @@ impl crate::TermWindow {
                 } else if let Some(quads) = self.pane_hold_quads.get(&id) {
                     // Follow a running reveal tween, so the picture grows
                     // into its new place with the animation.
-                    let target = anim_duration
+                    // The tween runs on the content rect; widen it by the
+                    // same margins the final background has around it.
+                    let content = anim_duration
                         .and_then(|d| self.pane_anims.borrow().current(id, frame_now, d))
                         .unwrap_or(snap.rect);
+                    let (ml, mt) = (snap.rect.x - bg.x, snap.rect.y - bg.y);
+                    let (mr, mb) = (
+                        bg.x + bg.w - (snap.rect.x + snap.rect.w),
+                        bg.y + bg.h - (snap.rect.y + snap.rect.h),
+                    );
+                    let target = crate::pane_anim::PxRect {
+                        x: content.x - ml,
+                        y: content.y - mt,
+                        w: content.w + ml + mr,
+                        h: content.h + mt + mb,
+                    };
                     let bg = snap.bg;
                     self.filled_rectangle(
                         &mut layers,

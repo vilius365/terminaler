@@ -602,6 +602,67 @@ impl crate::TermWindow {
         tab.iter_panes().first().map_or(true, |main| main.pane.pane_id() != pane_id)
     }
 
+    /// The rect a pane's background fills: its cells plus half a cell into
+    /// each divider gap, and out to the window edge on the outside. Painting
+    /// and the resize hold both use it, so they cover the same pixels.
+    pub(crate) fn pane_background_rect(&self, pos: &PositionedPane) -> anyhow::Result<::window::RectF> {
+        let (padding_left, padding_top) = self.padding_left_top();
+        let tab_bar_height = if self.show_tab_bar {
+            self.tab_bar_pixel_height().context("tab_bar_pixel_height")?
+        } else {
+            0.
+        };
+        let top_bar_height = if self.config.tab_bar_at_bottom { 0.0 } else { tab_bar_height };
+        let border = self.get_os_border();
+        let top_pixel_y = top_bar_height + padding_top + border.top.get() as f32;
+        let cell_width = self.render_metrics.cell_size.width as f32;
+        let cell_height = self.render_metrics.cell_size.height as f32;
+        let sidebar_offset = self.sidebar_x_offset();
+        Ok({
+        // We want to fill out to the edges of the splits
+        let (x, width_delta) = if pos.left == 0 {
+            (
+                sidebar_offset,
+                padding_left + border.left.get() as f32 + (cell_width / 2.0),
+            )
+        } else {
+            (
+                padding_left + border.left.get() as f32 + sidebar_offset - (cell_width / 2.0)
+                    + (pos.left as f32 * cell_width),
+                cell_width,
+            )
+        };
+
+        let (y, height_delta) = if pos.top == 0 {
+            (
+                (top_pixel_y - padding_top),
+                padding_top + (cell_height / 2.0),
+            )
+        } else {
+            (
+                top_pixel_y + (pos.top as f32 * cell_height) - (cell_height / 2.0),
+                cell_height,
+            )
+        };
+        euclid::rect(
+            x,
+            y,
+            // Go all the way to the right edge if we're right-most
+            if pos.left + pos.width >= self.terminal_size.cols as usize {
+                self.effective_right_edge() - x
+            } else {
+                (pos.width as f32 * cell_width) + width_delta
+            },
+            // Go all the way to the bottom if we're bottom-most
+            if pos.top + pos.height >= self.terminal_size.rows as usize {
+                self.dimensions.pixel_height as f32 - y
+            } else {
+                (pos.height as f32 * cell_height) + height_delta as f32
+            },
+        )
+        })
+    }
+
     pub fn paint_pane(
         &mut self,
         pos: &PositionedPane,
@@ -681,52 +742,8 @@ impl crate::TermWindow {
                 config.text_background_opacity
             });
 
-        let cell_width = self.render_metrics.cell_size.width as f32;
-        let cell_height = self.render_metrics.cell_size.height as f32;
         let sidebar_offset = self.sidebar_x_offset();
-        let background_rect = {
-            // We want to fill out to the edges of the splits
-            let (x, width_delta) = if pos.left == 0 {
-                (
-                    sidebar_offset,
-                    padding_left + border.left.get() as f32 + (cell_width / 2.0),
-                )
-            } else {
-                (
-                    padding_left + border.left.get() as f32 + sidebar_offset - (cell_width / 2.0)
-                        + (pos.left as f32 * cell_width),
-                    cell_width,
-                )
-            };
-
-            let (y, height_delta) = if pos.top == 0 {
-                (
-                    (top_pixel_y - padding_top),
-                    padding_top + (cell_height / 2.0),
-                )
-            } else {
-                (
-                    top_pixel_y + (pos.top as f32 * cell_height) - (cell_height / 2.0),
-                    cell_height,
-                )
-            };
-            euclid::rect(
-                x,
-                y,
-                // Go all the way to the right edge if we're right-most
-                if pos.left + pos.width >= self.terminal_size.cols as usize {
-                    self.effective_right_edge() - x
-                } else {
-                    (pos.width as f32 * cell_width) + width_delta
-                },
-                // Go all the way to the bottom if we're bottom-most
-                if pos.top + pos.height >= self.terminal_size.rows as usize {
-                    self.dimensions.pixel_height as f32 - y
-                } else {
-                    (pos.height as f32 * cell_height) + height_delta as f32
-                },
-            )
-        };
+        let background_rect = self.pane_background_rect(pos)?;
 
         if self.window_background.is_empty() {
             // Per-pane, palette-specified background
