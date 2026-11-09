@@ -126,12 +126,14 @@ impl PaneHolds {
     }
 }
 
-/// Where to draw a held picture captured at `from` so it fills `to`: scaled
-/// by the same factor on both axes (text keeps its shape), anchored at the
-/// top left and clipped to `to`, in window coordinates.
+/// Where to draw a held picture captured at `from` so it covers `to`: scaled
+/// by the same factor on both axes (text keeps its shape), large enough to
+/// leave no blank edge, anchored at the top left and cropped to `to`, in
+/// window coordinates. A narrower pane loses its right side, a wider one its
+/// bottom, until the real content replaces the picture.
 pub fn fit_into(from: &PxRect, to: &PxRect) -> crate::pane_anim::Transform {
     let s = if from.w >= 1.0 && from.h >= 1.0 {
-        (to.w / from.w).min(to.h / from.h)
+        (to.w / from.w).max(to.h / from.h)
     } else {
         1.0
     };
@@ -211,19 +213,25 @@ mod test {
     }
 
     #[test]
-    fn fit_keeps_the_shape_and_clips_to_the_new_rect() {
+    fn fit_keeps_the_shape_and_leaves_no_blank_edge() {
         let from = PxRect { x: 100.0, y: 50.0, w: 400.0, h: 200.0 };
-        // Narrower and as tall: scaled down uniformly by the width.
-        let to = PxRect { x: 300.0, y: 50.0, w: 200.0, h: 200.0 };
-        let tr = fit_into(&from, &to);
-        assert_eq!((tr.sx, tr.sy), (0.5, 0.5));
+        // Narrower and as tall: kept at its size, the right side cropped.
+        let narrow = PxRect { x: 300.0, y: 50.0, w: 200.0, h: 200.0 };
+        let tr = fit_into(&from, &narrow);
+        assert_eq!((tr.sx, tr.sy), (1.0, 1.0));
         let shown = tr.map(&from);
-        assert_eq!((shown.x, shown.y, shown.w, shown.h), (300.0, 50.0, 200.0, 100.0));
+        assert_eq!((shown.x, shown.y, shown.w, shown.h), (300.0, 50.0, 400.0, 200.0));
         assert_eq!(tr.clip, Some([300.0, 50.0, 500.0, 250.0]));
-        // Wider and as tall: not stretched, the extra width stays empty.
+        // Wider and as tall: scaled up to the width, the bottom cropped.
         let wide = PxRect { x: 0.0, y: 50.0, w: 800.0, h: 200.0 };
         let tr = fit_into(&from, &wide);
-        assert_eq!((tr.sx, tr.sy), (1.0, 1.0));
-        assert_eq!(tr.map(&from).x, 0.0);
+        assert_eq!((tr.sx, tr.sy), (2.0, 2.0));
+        let shown = tr.map(&from);
+        assert_eq!((shown.x, shown.y, shown.w, shown.h), (0.0, 50.0, 800.0, 400.0));
+        // Either way the picture covers the whole new rect.
+        for to in [narrow, wide] {
+            let s = fit_into(&from, &to).map(&from);
+            assert!(s.x <= to.x && s.y <= to.y && s.x + s.w >= to.x + to.w && s.y + s.h >= to.y + to.h);
+        }
     }
 }
