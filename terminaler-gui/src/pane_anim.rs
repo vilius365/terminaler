@@ -461,6 +461,15 @@ impl PaneAnimations {
         })
     }
 
+    /// True while `id` is the shrinking half of a swap or relocation: its
+    /// final layout is the small one, so it is drawn from its picture
+    /// before the swap rather than magnifying that small layout.
+    pub fn shrinking_swap(&self, id: PaneId) -> bool {
+        self.tweens
+            .get(&id)
+            .map_or(false, |t| t.swap && t.to.w * t.to.h + 1.0 < t.from.w * t.from.h)
+    }
+
     /// True while `id` is the growing half of a swap: it is painted above
     /// the others so it covers the pane shrinking out of its way.
     pub fn on_top(&self, id: PaneId) -> bool {
@@ -743,6 +752,19 @@ mod test {
         let end = start + lift_duration().mul_f32(0.999);
         assert!(close(shown(3, &after[2].1, end), after[2].1.rect));
         assert!(close(shown(1, &after[0].1, end), after[0].1.rect));
+    }
+
+    #[test]
+    fn only_the_shrinking_pane_of_a_swap_uses_its_old_picture() {
+        let t0 = Instant::now();
+        let mut a = PaneAnimations::default();
+        let before = [(1, snap(0.0, 100.0)), (2, snap(100.0, 50.0)), (3, snap(150.0, 50.0))];
+        a.observe_frame(&before, ENV, CELL, t0, MS(150));
+        let after = [(1, snap(150.0, 50.0)), (2, snap(100.0, 50.0)), (3, snap(0.0, 100.0))];
+        a.observe_frame(&after, ENV, CELL, t0 + MS(16), MS(150));
+        assert!(a.shrinking_swap(1), "the old main pane shrinks");
+        assert!(!a.shrinking_swap(3), "the incoming pane grows");
+        assert!(!a.shrinking_swap(2), "the bystander is not animating");
     }
 
     #[test]

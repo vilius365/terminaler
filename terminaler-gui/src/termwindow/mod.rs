@@ -888,6 +888,12 @@ pub struct TermWindow {
     /// A released divider move, applied after the next frame has captured
     /// every pane's picture (see pane_hold).
     pub(crate) pending_split_resize: Option<(usize, isize)>,
+    /// A focus click, applied after the next frame has captured every
+    /// pane's picture: the pane leaving the main slot is drawn from it.
+    pub(crate) pending_focus_layout: Option<PaneId>,
+    /// Pictures captured before a focus swap, by pane, with the background
+    /// rect each was painted in.
+    pub(crate) pane_snapshots: HashMap<PaneId, (crate::quad::HeapQuadAllocator, crate::pane_anim::PxRect)>,
     pub(crate) pane_holds: crate::pane_hold::PaneHolds,
     pub(crate) pane_hold_quads: HashMap<PaneId, crate::quad::HeapQuadAllocator>,
     pub(crate) pane_hold_capture: Option<HashMap<PaneId, (crate::quad::HeapQuadAllocator, crate::pane_anim::PxRect)>>,
@@ -1300,6 +1306,8 @@ impl TermWindow {
             has_animation: RefCell::new(None),
             pane_anims: RefCell::new(Default::default()),
             pending_split_resize: None,
+            pending_focus_layout: None,
+            pane_snapshots: HashMap::new(),
             pane_holds: Default::default(),
             pane_hold_quads: HashMap::new(),
             pane_hold_capture: None,
@@ -3473,6 +3481,21 @@ impl TermWindow {
     /// the user last resized a focus layout to (kept across restarts in
     /// focus-layout.json), or 60% until they have.
     pub fn focus_layout(&mut self, pane_id: PaneId) {
+        // With pane animations on, paint one more frame first, keeping each
+        // pane's picture, so the pane leaving the main slot can shrink from
+        // it instead of magnifying its new small layout.
+        if self.pane_animation_duration().is_some() {
+            self.pending_focus_layout = Some(pane_id);
+            self.pane_snapshots.clear();
+            if let Some(window) = self.window.as_ref() {
+                window.invalidate();
+            }
+            return;
+        }
+        self.apply_focus_layout(pane_id);
+    }
+
+    pub(crate) fn apply_focus_layout(&mut self, pane_id: PaneId) {
         let mux = Mux::get();
         let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
             Some(tab) => tab,

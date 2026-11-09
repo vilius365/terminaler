@@ -75,6 +75,7 @@ impl crate::TermWindow {
                         // Held pictures point into the old atlas.
                         self.pane_holds.clear();
                         self.pane_hold_quads.clear();
+                        self.pane_snapshots.clear();
                         let result = if pass == 0 {
                             // Let's try clearing out the atlas and trying again
                             // self.clear_texture_atlas()
@@ -142,6 +143,15 @@ impl crate::TermWindow {
                 log::info!("split drag applied: move split {} by {} cells", index, delta);
                 tab.resize_split_by(index, delta);
             }
+            if let Some(window) = self.window.as_ref() {
+                window.invalidate();
+            }
+        }
+        if let Some(pane_id) = self.pending_focus_layout.take() {
+            if let Some(captured) = self.pane_hold_capture.take() {
+                self.pane_snapshots = captured;
+            }
+            self.apply_focus_layout(pane_id);
             if let Some(window) = self.window.as_ref() {
                 window.invalidate();
             }
@@ -456,7 +466,7 @@ impl crate::TermWindow {
         // Pane holds (pane_hold.rs): capture every pane's picture on the
         // frame before a released divider move is applied, and draw held
         // pictures until their panes have redrawn.
-        let capturing = self.pending_split_resize.is_some();
+        let capturing = self.pending_split_resize.is_some() || self.pending_focus_layout.is_some();
         self.pane_hold_capture = capturing.then(HashMap::new);
         {
             let env = [
@@ -583,6 +593,38 @@ impl crate::TermWindow {
                     self.dimensions.pixel_height as f32 / 2.0,
                 )
             });
+            // The shrinking half of a swap is drawn from its picture before
+            // the swap, shrunk into the rect it shows now: its new layout is
+            // the small one, and magnifying that enlarges its text.
+            if let Some(duration) = anim_duration {
+                let shrinking = self.pane_anims.borrow().shrinking_swap(id);
+                let current = self.pane_anims.borrow().current(id, frame_now, duration);
+                if let (true, Some(content), Some((quads, from))) =
+                    (shrinking, current, self.pane_snapshots.get(&id))
+                {
+                    let bg = self.pane_background_rect(&pos)?;
+                    let bg = crate::pane_anim::PxRect { x: bg.min_x(), y: bg.min_y(), w: bg.width(), h: bg.height() };
+                    let (ml, mt) = (snap.rect.x - bg.x, snap.rect.y - bg.y);
+                    let (mr, mb) = (
+                        bg.x + bg.w - (snap.rect.x + snap.rect.w),
+                        bg.y + bg.h - (snap.rect.y + snap.rect.h),
+                    );
+                    let target = crate::pane_anim::PxRect {
+                        x: content.x - ml,
+                        y: content.y - mt,
+                        w: content.w + ml + mr,
+                        h: content.h + mt + mb,
+                    };
+                    let mark = layers.mark();
+                    quads.apply_to(&mut layers).context("apply swap snapshot")?;
+                    let tr = crate::pane_hold::fit_into(from, &target).to_vertex_space(
+                        self.dimensions.pixel_width as f32 / 2.0,
+                        self.dimensions.pixel_height as f32 / 2.0,
+                    );
+                    layers.transform_since(mark, &tr);
+                    continue;
+                }
+            }
             let on_top = anim_duration.is_some() && self.pane_anims.borrow().on_top(pos.pane.pane_id());
             if let (true, Some(tr)) = (on_top, transform) {
                 // The growing half of a swap is painted on the layer above
@@ -630,6 +672,10 @@ impl crate::TermWindow {
             }
         }
         drop(lifted);
+        {
+            let anims = self.pane_anims.borrow();
+            self.pane_snapshots.retain(|id, _| anims.shrinking_swap(*id));
+        }
 
         let sliding = match anim_duration {
             Some(duration) => {
