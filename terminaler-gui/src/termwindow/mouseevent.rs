@@ -175,9 +175,14 @@ impl super::TermWindow {
                     }
                     if let Some((item, _)) = self.dragging.take() {
                         // Completed a drag
-                        if matches!(item.item_type, UIItemType::Split(_)) {
+                        if let UIItemType::Split(split) = &item.item_type {
+                            if !self.config.split_drag_live_resize {
+                                self.finish_deferred_split_drag(split);
+                                context.invalidate();
+                            }
                             self.save_focus_width();
                         }
+                        self.split_drag_offset = None;
                         return;
                     }
                 }
@@ -526,6 +531,28 @@ impl super::TermWindow {
         context.invalidate();
     }
 
+    /// Apply a deferred divider drag: move the split by the whole cells the
+    /// line was dragged.
+    fn finish_deferred_split_drag(&mut self, split: &PositionedSplit) {
+        let offset = match self.split_drag_offset {
+            Some((index, offset)) if index == split.index => offset,
+            _ => return,
+        };
+        let base = self.render_metrics.cell_size;
+        let cell = match split.direction {
+            SplitDirection::Horizontal => base.width as f32,
+            SplitDirection::Vertical => base.height as f32,
+        };
+        let delta = (offset / cell).round() as isize;
+        if delta == 0 {
+            return;
+        }
+        if let Some(tab) = Mux::get().get_active_tab_for_window(self.mux_window_id) {
+            log::info!("split drag released: move split {} by {} cells", split.index, delta);
+            tab.resize_split_by(split.index, delta);
+        }
+    }
+
     fn drag_split(
         &mut self,
         mut item: UIItem,
@@ -575,6 +602,22 @@ impl super::TermWindow {
                 ((event.coords.y as f32 - line) / ch).round() as isize
             }
         };
+        if !self.config.split_drag_live_resize {
+            // Deferred: only the line moves; the panes resize on release.
+            let offset = match split.direction {
+                SplitDirection::Horizontal => {
+                    event.coords.x as f32 - (origin_x + split.left as f32 * cw + cw / 2.0)
+                }
+                SplitDirection::Vertical => {
+                    event.coords.y as f32 - (origin_y + split.top as f32 * ch + ch / 2.0)
+                }
+            };
+            self.split_drag_offset = Some((split.index, offset));
+            context.invalidate();
+            self.dragging.replace((item, start_event));
+            return;
+        }
+
         if delta != 0 {
             log::info!(
                 "split drag: pointer {},{} divider at cell {},{} ({:?}) -> move by {} cells",

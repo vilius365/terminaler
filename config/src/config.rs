@@ -678,6 +678,12 @@ pub struct Config {
     #[dynamic(default)]
     pub log_animation_frames: bool,
 
+    /// Resize the panes on each cell step while a divider is dragged. When
+    /// false, only the divider line follows the pointer and the panes are
+    /// resized once, on release: no terminal (or tmux) redraws mid-drag.
+    #[dynamic(default = "default_true")]
+    pub split_drag_live_resize: bool,
+
     /// Fit every pane's font to its size automatically: the bigger the pane,
     /// the larger the text, always showing at least `pane_fit_columns` columns
     /// and `pane_fit_rows` rows. Ctrl+scroll (or the font size actions) sizes
