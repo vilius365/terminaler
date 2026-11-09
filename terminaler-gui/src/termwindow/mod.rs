@@ -2290,8 +2290,13 @@ impl TermWindow {
             }
         }
 
-        // Clear cached per-pane scaled configs so they rebuild with new settings
+        // Clear cached per-pane scaled configs so they rebuild with new
+        // settings, and restart the prewarm: its basis (dpi, font scale) is
+        // usually unchanged by a reload, so it would otherwise think every
+        // scale is still built and leave the next fit to build them mid-frame.
         self.scaled_font_configs.clear();
+        self.scaled_font_seeded.clear();
+        self.scaled_prewarm_basis = (0, 0);
 
         if let Some(window) = self.window.as_ref().map(|w| w.clone()) {
             self.load_os_parameters();
