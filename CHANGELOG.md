@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-11-09
+
+### Fixed
+- **Pane animations no longer judder.** Each animation frame asked for the next one with a 16 ms timer, which drifted against the monitor's refresh and dropped frames, most visibly on a 144 Hz monitor. On Wayland, animations now paint once per display refresh (`animation_vsync`, default `true`; X11 keeps the timer). A frame that takes longer than one refresh no longer makes the motion jump ahead. `animation_fps`, used by the visual bell and colour fades, now defaults to 60 (was 10).
+- **Splits and closes no longer stall at the start.** A split's text jumped size halfway through its slide because the pane's font was refitted 150 ms in; a one-off change (split, close, swap) now refits at once, while dragging a divider still waits. A pane at a new font size now starts with the fallback fonts already found, instead of discovering them one glyph at a time and repainting the whole window for each. A refit reshapes only its own pane. The sidebar is rebuilt once a pane animation ends rather than during it. The first frame of a close went from 15-41 ms to 2 ms, and of a split from 55-113 ms to 10-35 ms (60-75 ms for the first split after launch, while fonts for the new size are built).
+- **The window no longer stalls about once a second.** The sidebar read every pane's directory, git branch, Claude state and process on the GUI thread (30-50 ms), and again on every Claude status update. It now reads them on a worker thread, and a Claude status update no longer rebuilds the sidebar by itself.
+- **Panes with steady output paint 4-7 ms faster.** Every paint asked each pane's terminal whether it was reading a password, which took 4-7 ms for a pane with steady output. The answer is now cached and refreshed in the background every 250 ms.
+- **A restored window keeps its size and maximized state.** A restart used to bring the window back about a sidebar narrower each time, and never maximized. The session file now saves the window's size and whether it was maximized.
+
+### Added
+- **`log_animation_frames`** (default `false`) logs each animation frame's paint time and gap, the parts of slow frames that took 3 ms or more, and what rebuilt the sidebar, to the GUI log.
+
 ## 2026-11-06
 
 ### Fixed

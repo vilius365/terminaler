@@ -739,7 +739,7 @@ impl RenderState {
                             num_quads, need_quads,
                         )
                     })?;
-                    log::info!(
+                    log::debug!(
                         "layer {} vb {}: allocated {} quads (needed {})",
                         layer.zindex,
                         vb_idx,
