@@ -9,8 +9,14 @@
 - **Panes with steady output paint 4-7 ms faster.** Every paint asked each pane's terminal whether it was reading a password, which took 4-7 ms for a pane with steady output. The answer is now cached and refreshed in the background every 250 ms.
 - **A restored window keeps its size and maximized state.** A restart used to bring the window back about a sidebar narrower each time, and never maximized. The session file now saves the window's size and whether it was maximized.
 
+- **Scrolling panes reuse their lines.** A line that scrolled up one row used to be rebuilt from scratch, because the line cache was keyed by the line's row. It is now keyed by the line's content and moved to its new row, so a slowly scrolling pane rebuilds only its new lines.
+- **Dragging a divider no longer changes the neighbours' text size mid-drag.** A pause in the drag refitted every auto-fit pane's font, so the text next to the divider jumped between sizes. Fonts now hold while the divider is held and are refitted once after release.
+- **The divider line follows the pointer.** Panes still resize in whole cells, but the line itself now moves smoothly with the pointer, up to half a cell either side.
+- **Pane fonts are built ahead of time.** Every pane font size from 0.50x to 1.50x, with its fallback fonts, is built on idle frames after startup and after a move to a monitor with another dpi. A font fit or a new pane size no longer builds fonts or loads font files in the middle of a frame. Fallback fonts found later are passed on to the other sizes on idle frames.
+
 ### Added
-- **`log_animation_frames`** (default `false`) logs each animation frame's paint time and gap, the parts of slow frames that took 3 ms or more, and what rebuilt the sidebar, to the GUI log.
+- **`split_drag_live_resize`** (default `true`). Set it to `false` to resize panes only when you release a divider: only the line moves during the drag, so the terminals and tmux behind them do not redraw at every cell step.
+- **`log_animation_frames`** (default `false`) logs each animation frame's paint time and gap, the parts of slow frames that took 3 ms or more, and what rebuilt the sidebar, to the GUI log. Rebuilt lines are split into text shaping and glyph time.
 
 ## 2026-11-06
 
