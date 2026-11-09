@@ -6,11 +6,14 @@ use crate::termwindow::render::corners::{
 use crate::termwindow::{SidebarTabInfo, TabSidebarItem, UIItem, UIItemType};
 use crate::utilsprites::RenderMetrics;
 use config::{Dimension, TabSidebarPosition};
-use mux::pane::CachePolicy;
+use mux::pane::{CachePolicy, Pane};
 use mux::tab::TabId;
 use mux::Mux;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::Arc;
+use crate::termwindow::TermWindowNotif;
+use window::WindowOps;
 use std::time::{Duration, Instant};
 use terminaler_font::LoadedFont;
 use window::color::LinearRgba;
@@ -180,7 +183,15 @@ impl crate::TermWindow {
         }
     }
 
+    #[track_caller]
     pub fn invalidate_tab_sidebar(&mut self) {
+        if self.config.log_animation_frames && self.tab_sidebar.is_some() {
+            log::info!(
+                target: "anim_frames",
+                "  sidebar invalidated by {}",
+                std::panic::Location::caller()
+            );
+        }
         self.tab_sidebar.take();
     }
 
@@ -211,97 +222,70 @@ impl crate::TermWindow {
         }
     }
 
-    /// Poll CWD and git branch info for each tab, throttled to every 2 seconds.
+    /// Refresh CWD, git branch, Claude and connector info for each tab, at
+    /// most once a second. The lookups read /proc and the filesystem and took
+    /// 30-50 ms, which stalled the GUI thread every second (and on every
+    /// claude_* user var), so they run on a worker thread; the result is
+    /// applied by `apply_sidebar_info` back on the GUI thread.
     pub fn update_sidebar_info(&mut self) {
-        if self.last_sidebar_info_poll.elapsed() < Duration::from_secs(1) {
+        if self.sidebar_info_in_flight
+            || self.last_sidebar_info_poll.elapsed() < Duration::from_secs(1)
+        {
             return;
         }
-        self.last_sidebar_info_poll = Instant::now();
-        let poll_start = Instant::now();
-
-        let mux = Mux::get();
-        let mux_window = match mux.get_window(self.mux_window_id) {
+        let window = match self.window.clone() {
             Some(w) => w,
             None => return,
         };
+        self.last_sidebar_info_poll = Instant::now();
 
-        let mut new_info: HashMap<TabId, SidebarTabInfo> = HashMap::new();
-
-        for tab in mux_window.iter() {
-            let tab_id = tab.tab_id();
-
-            let active_pane = match tab.get_active_pane() {
-                Some(p) => p,
-                None => continue,
+        let tabs: Vec<(TabId, Arc<dyn Pane>, Vec<Arc<dyn Pane>>)> = {
+            let mux = Mux::get();
+            let mux_window = match mux.get_window(self.mux_window_id) {
+                Some(w) => w,
+                None => return,
             };
+            mux_window
+                .iter()
+                .filter_map(|tab| {
+                    let active = tab.get_active_pane()?;
+                    let panes = tab
+                        .iter_panes_ignoring_zoom()
+                        .into_iter()
+                        .map(|p| p.pane)
+                        .collect();
+                    Some((tab.tab_id(), active, panes))
+                })
+                .collect()
+        };
 
-            let cwd_url = active_pane.get_current_working_dir(CachePolicy::AllowStale);
-            let cwd_path = cwd_url.as_ref().and_then(|u| {
-                if u.scheme() == "file" {
-                    Some(u.path().to_string())
-                } else {
-                    None
-                }
-            });
-
-            let cwd_short = match &cwd_path {
-                Some(path) => shorten_path(path),
-                None => String::new(),
-            };
-
-            let git_start = Instant::now();
-            let git_branch = cwd_path.as_deref().and_then(find_git_branch);
-            let git_elapsed = git_start.elapsed();
-            if git_elapsed > Duration::from_millis(100) {
+        self.sidebar_info_in_flight = true;
+        std::thread::spawn(move || {
+            let poll_start = Instant::now();
+            let new_info = collect_sidebar_info(tabs);
+            let poll_elapsed = poll_start.elapsed();
+            if poll_elapsed > Duration::from_millis(500) {
                 log::warn!(
-                    "update_sidebar_info: find_git_branch took {:?} for tab {}",
-                    git_elapsed,
-                    tab_id
+                    "sidebar info poll took {:?} (process enumeration + git lookups)",
+                    poll_elapsed
                 );
             }
+            window.notify(TermWindowNotif::Apply(Box::new(move |tw| {
+                tw.apply_sidebar_info(new_info);
+            })));
+        });
+    }
 
-            // Detect Claude Code sessions and connector processes on ALL
-            // panes in the tab.
-            let mut pane_claude_info = std::collections::HashMap::new();
-            let mut pane_connector = std::collections::HashMap::new();
-            for pane_pos in tab.iter_panes_ignoring_zoom() {
-                let pane = &pane_pos.pane;
-                if let Some(info) = claude_info_for_pane(pane) {
-                    pane_claude_info.insert(pane.pane_id(), info);
-                }
-                if let Some(pinfo) = pane.get_foreground_process_info(CachePolicy::AllowStale) {
-                    if let Some(label) = connector_label_from_argv(&pinfo.argv) {
-                        pane_connector.insert(pane.pane_id(), label);
-                    }
-                }
-            }
-
-            new_info.insert(
-                tab_id,
-                SidebarTabInfo {
-                    cwd_short,
-                    git_branch,
-                    pane_claude_info,
-                    pane_connector,
-                },
-            );
-        }
-
-        // If the info changed, invalidate the cached sidebar element so it
-        // gets rebuilt on the next paint with the fresh data.
+    /// Take a finished sidebar info poll; rebuild the sidebar if it changed.
+    pub fn apply_sidebar_info(&mut self, new_info: HashMap<TabId, SidebarTabInfo>) {
+        self.sidebar_info_in_flight = false;
         if self.sidebar_info_changed(&new_info) {
-            self.tab_sidebar.take();
+            self.invalidate_tab_sidebar();
+            if let Some(window) = self.window.as_ref() {
+                window.invalidate();
+            }
         }
-
         self.tab_sidebar_info = new_info;
-
-        let poll_elapsed = poll_start.elapsed();
-        if poll_elapsed > Duration::from_millis(200) {
-            log::warn!(
-                "update_sidebar_info poll took {:?} on the GUI thread (process enumeration + git lookups)",
-                poll_elapsed
-            );
-        }
     }
 
     fn sidebar_info_changed(&self, new_info: &HashMap<TabId, SidebarTabInfo>) -> bool {
@@ -1198,7 +1182,7 @@ impl crate::TermWindow {
 
         if has_flashing_tab {
             // Force rebuild so animation updates
-            self.tab_sidebar.take();
+            self.invalidate_tab_sidebar();
             // Schedule next frame for smooth animation (~30fps)
             self.update_next_frame_time(Some(Instant::now() + Duration::from_millis(32)));
         }
@@ -1264,7 +1248,7 @@ impl crate::TermWindow {
 
             if self.tmux_sidebar_fingerprint != fingerprint {
                 self.tmux_sidebar_fingerprint = fingerprint;
-                self.tab_sidebar.take();
+                self.invalidate_tab_sidebar();
             }
         }
 
@@ -1906,6 +1890,55 @@ const GIT_BRANCH_CACHE_TTL: Duration = Duration::from_secs(5);
 static GIT_BRANCH_CACHE: std::sync::OnceLock<
     parking_lot::Mutex<HashMap<String, (Instant, Option<String>)>>,
 > = std::sync::OnceLock::new();
+
+/// The per-tab sidebar info for `tabs` (tab, active pane, all panes). Runs
+/// on a worker thread: everything here may block on /proc or the filesystem.
+fn collect_sidebar_info(
+    tabs: Vec<(TabId, Arc<dyn Pane>, Vec<Arc<dyn Pane>>)>,
+) -> HashMap<TabId, SidebarTabInfo> {
+    let mut new_info = HashMap::new();
+    for (tab_id, active_pane, panes) in tabs {
+        let cwd_url = active_pane.get_current_working_dir(CachePolicy::AllowStale);
+        let cwd_path = cwd_url.as_ref().and_then(|u| {
+            if u.scheme() == "file" {
+                Some(u.path().to_string())
+            } else {
+                None
+            }
+        });
+        let cwd_short = match &cwd_path {
+            Some(path) => shorten_path(path),
+            None => String::new(),
+        };
+        let git_branch = cwd_path.as_deref().and_then(find_git_branch);
+
+        // Detect Claude Code sessions and connector processes on ALL
+        // panes in the tab.
+        let mut pane_claude_info = HashMap::new();
+        let mut pane_connector = HashMap::new();
+        for pane in &panes {
+            if let Some(info) = claude_info_for_pane(pane) {
+                pane_claude_info.insert(pane.pane_id(), info);
+            }
+            if let Some(pinfo) = pane.get_foreground_process_info(CachePolicy::AllowStale) {
+                if let Some(label) = connector_label_from_argv(&pinfo.argv) {
+                    pane_connector.insert(pane.pane_id(), label);
+                }
+            }
+        }
+
+        new_info.insert(
+            tab_id,
+            SidebarTabInfo {
+                cwd_short,
+                git_branch,
+                pane_claude_info,
+                pane_connector,
+            },
+        );
+    }
+    new_info
+}
 
 /// Find the git branch for `path`, memoized per directory with a short TTL so
 /// the blocking filesystem walk runs at most once per directory per

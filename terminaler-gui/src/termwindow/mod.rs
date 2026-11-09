@@ -743,6 +743,8 @@ pub struct TermWindow {
     /// clones the discovery snapshot and scans pane argv, so it is throttled.
     last_tmux_fingerprint_poll: Instant,
     last_sidebar_info_poll: Instant,
+    /// A sidebar info poll is running on its worker thread.
+    sidebar_info_in_flight: bool,
     /// Number of Claude agent panes in `waiting_input` across all windows,
     /// shown as a tab-bar badge. Refreshed on a throttled poll.
     agents_waiting: usize,
@@ -1161,6 +1163,7 @@ impl TermWindow {
             sidebar_resize_start_width: None,
             last_tmux_fingerprint_poll: Instant::now(),
             last_sidebar_info_poll: Instant::now(),
+            sidebar_info_in_flight: false,
             agents_waiting: 0,
             last_agents_poll: Instant::now(),
             pane_last_output: HashMap::new(),
