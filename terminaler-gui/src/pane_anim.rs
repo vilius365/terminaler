@@ -410,15 +410,24 @@ impl PaneAnimations {
         let moved_edges = (0..4).filter(|&i| (from[i] - to[i]).abs() >= 1.0).count();
         if tween.swap && final_rect.w >= 1.0 && final_rect.h >= 1.0 {
             // A swapped pane grows or shrinks on its way: scale its final
-            // drawing into the rect it shows now, so a small pane swapped
+            // drawing to the rect it shows now, so a small pane swapped
             // into the main slot grows gradually instead of arriving big.
-            let (sx, sy) = (cur.w / final_rect.w, cur.h / final_rect.h);
+            // One factor for both axes keeps the text's proportions (the
+            // main slot and a stack slot differ in shape, so separate
+            // factors stretched it up to 70%); the larger one covers the
+            // rect, and the overflow is cropped to it plus its gutters.
+            let s = (cur.w / final_rect.w).max(cur.h / final_rect.h);
             return Some(Transform {
-                dx: cur.x - final_rect.x * sx,
-                dy: cur.y - final_rect.y * sy,
-                sx,
-                sy,
-                clip: None,
+                dx: cur.x - final_rect.x * s,
+                dy: cur.y - final_rect.y * s,
+                sx: s,
+                sy: s,
+                clip: Some([
+                    cur.x - margin.0,
+                    cur.y - margin.1,
+                    cur.x + cur.w + margin.0,
+                    cur.y + cur.h + margin.1,
+                ]),
             });
         }
         if tween.swap || !rects_resized(&tween.from, &tween.to) || moved_edges > 1 {
@@ -607,7 +616,9 @@ mod test {
         let swapped = [(1, snap(100.0, 100.0)), (2, snap(0.0, 100.0))];
         a.observe_frame(&swapped, ENV, CELL, t0 + MS(16), MS(150));
         let tr = at(&a, 1, &swapped[0].1, t0 + MS(16)).unwrap();
-        assert_eq!((tr.dx, tr.clip), (-100.0, None));
+        // Same size both ways: a pure shift, cropped to the moving rect.
+        assert_eq!((tr.dx, tr.sx, tr.sy), (-100.0, 1.0, 1.0));
+        assert_eq!(tr.clip, Some([-5.0, -10.0, 105.0, 110.0]));
         let end = at(&a, 1, &swapped[0].1, t0 + MS(16 + 2000)).unwrap();
         assert_eq!(end.dx, 0.0);
     }
@@ -644,10 +655,11 @@ mod test {
         a.observe_frame(&after, ENV, CELL, start, MS(150));
         for (id, s) in &after {
             let tr = at(&a, *id, s, start).expect("relocated panes animate");
-            assert_eq!(tr.clip, None, "a relocation is scaled, not clipped");
+            assert_eq!(tr.sx, tr.sy, "a relocation is scaled uniformly");
         }
         let tr = at(&a, 3, &after[2].1, start).unwrap();
-        assert!((tr.map(&after[2].1.rect).w - 50.0).abs() < 0.5, "3 starts at its old width");
+        let clip = tr.clip.expect("a relocation is cropped to the rect it shows");
+        assert!((clip[2] - clip[0] - (50.0 + 2.0 * 5.0)).abs() < 0.5, "3 starts at its old width");
         assert!(a.on_top(3) && !a.on_top(1), "the growing pane covers the shrinking ones");
     }
 
@@ -677,7 +689,7 @@ mod test {
         assert!(at(&a, 1, &after[0].1, start).unwrap().clip.is_some(), "1 lost its bottom half: revealed");
         assert!(at(&a, 2, &after[1].1, start).unwrap().clip.is_some(), "2 grew downwards: revealed");
         let moved = at(&a, 3, &after[2].1, start).unwrap();
-        assert_eq!(moved.clip, None, "3 changed place: scaled move");
+        assert_eq!(moved.sx, moved.sy, "3 changed place: scaled move");
         assert!((moved.map(&after[2].1.rect).x - 100.0).abs() < 0.5, "3 starts where it was");
     }
 
@@ -704,16 +716,29 @@ mod test {
         let after = [(1, snap(150.0, 50.0)), (2, snap(100.0, 50.0)), (3, snap(0.0, 100.0))];
         let start = t0 + MS(16);
         a.observe_frame(&after, ENV, CELL, start, MS(150));
-        let shown = |id: PaneId, s: &PaneSnap, t: Instant| at(&a, id, s, t).unwrap().map(&s.rect);
+        let tr = |id: PaneId, s: &PaneSnap, t: Instant| at(&a, id, s, t).unwrap();
+        let shown = |id: PaneId, s: &PaneSnap, t: Instant| tr(id, s, t).map(&s.rect);
         let close = |p: PxRect, q: PxRect| (p.x - q.x).abs() < 0.5 && (p.w - q.w).abs() < 0.5;
-        // First frame: each is drawn exactly where and as big as it was.
-        assert!(close(shown(3, &after[2].1, start), before[2].1.rect), "{:?}", shown(3, &after[2].1, start));
-        assert!(close(shown(1, &after[0].1, start), before[0].1.rect), "{:?}", shown(1, &after[0].1, start));
-        // Midway: the incoming pane is between the two sizes.
-        let mid = shown(3, &after[2].1, start + lift_duration().mul_f32(0.5));
-        assert!(mid.w > 55.0 && mid.w < 95.0, "growing: {}", mid.w);
-        let mid = shown(1, &after[0].1, start + lift_duration().mul_f32(0.5));
-        assert!(mid.w > 55.0 && mid.w < 95.0, "shrinking: {}", mid.w);
+        // First frame: each covers exactly the rect it had, cropped to it,
+        // with one scale factor for both axes.
+        for (id, idx) in [(3, 2), (1, 0)] {
+            let t = tr(id, &after[idx].1, start);
+            assert_eq!(t.sx, t.sy, "pane {id} keeps its proportions");
+            let s = t.map(&after[idx].1.rect);
+            let b = before[idx].1.rect;
+            assert!((s.x - b.x).abs() < 0.5 && (s.y - b.y).abs() < 0.5, "pane {id} anchored: {s:?}");
+            assert!(s.w >= b.w - 0.5 && s.h >= b.h - 0.5, "pane {id} covers its rect: {s:?}");
+            let clip = t.clip.expect("cropped to the rect it shows");
+            assert!((clip[0] - (b.x - 5.0)).abs() < 0.5 && (clip[2] - (b.x + b.w + 5.0)).abs() < 0.5);
+        }
+        // Midway: what is visible (the crop, less its gutters) is between
+        // the two sizes.
+        let visible = |id: PaneId, idx: usize| {
+            let c = tr(id, &after[idx].1, start + lift_duration().mul_f32(0.5)).clip.unwrap();
+            c[2] - c[0] - 10.0
+        };
+        assert!(visible(3, 2) > 55.0 && visible(3, 2) < 95.0, "growing: {}", visible(3, 2));
+        assert!(visible(1, 0) > 55.0 && visible(1, 0) < 95.0, "shrinking: {}", visible(1, 0));
         // Last frame: both are at their final rects.
         let end = start + lift_duration().mul_f32(0.999);
         assert!(close(shown(3, &after[2].1, end), after[2].1.rect));
