@@ -845,6 +845,10 @@ pub struct TermWindow {
 
     ui_items: Vec<UIItem>,
     dragging: Option<(UIItem, MouseEvent)>,
+    /// While a divider is dragged: (split index, pixels from the divider's
+    /// cell position to the pointer, within half a cell). The divider is
+    /// drawn there so it follows the pointer smoothly between cell steps.
+    split_drag_offset: Option<(usize, f32)>,
     pub tab_drag: Option<TabDragState>,
     /// A pane being moved by its grip (see PaneDragState).
     pub pane_drag: Option<PaneDragState>,
@@ -1285,6 +1289,7 @@ impl TermWindow {
             scaled_font_seeded: HashSet::new(),
             ui_items: vec![],
             dragging: None,
+            split_drag_offset: None,
             tab_drag: None,
             pane_drag: None,
             pane_long_press: None,

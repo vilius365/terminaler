@@ -48,12 +48,24 @@ impl crate::TermWindow {
         let pos_x = split.left as f32 * cell_width + padding_left + border.left.get() as f32
             + sidebar_offset;
 
+        // A divider being dragged is drawn under the pointer (see drag_split).
+        let drag_offset = match (&self.dragging, self.split_drag_offset) {
+            (Some((item, _)), Some((index, offset)))
+                if index == split.index
+                    && matches!(&item.item_type,
+                        crate::termwindow::UIItemType::Split(s) if s.index == split.index) =>
+            {
+                offset
+            }
+            _ => 0.0,
+        };
+
         if split.direction == SplitDirection::Horizontal {
             self.filled_rectangle(
                 layers,
                 2,
                 euclid::rect(
-                    pos_x + (cell_width / 2.0),
+                    pos_x + (cell_width / 2.0) + drag_offset,
                     pos_y - (cell_height / 2.0),
                     self.render_metrics.underline_height as f32,
                     (1. + split.size as f32) * cell_height,
@@ -78,7 +90,7 @@ impl crate::TermWindow {
                 2,
                 euclid::rect(
                     pos_x - (cell_width / 2.0),
-                    pos_y + (cell_height / 2.0),
+                    pos_y + (cell_height / 2.0) + drag_offset,
                     (1.0 + split.size as f32) * cell_width,
                     self.render_metrics.underline_height as f32,
                 ),

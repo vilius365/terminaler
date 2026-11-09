@@ -591,9 +591,25 @@ impl super::TermWindow {
             tab.resize_split_by(split.index, delta);
             if let Some(split) = tab.iter_splits().into_iter().nth(split.index) {
                 item.item_type = UIItemType::Split(split);
-                context.invalidate();
             }
         }
+
+        // The panes move in whole cells; the divider line itself follows the
+        // pointer, up to half a cell either side of its cell position.
+        if let UIItemType::Split(split) = &item.item_type {
+            let offset = match split.direction {
+                SplitDirection::Horizontal => {
+                    let line = origin_x + split.left as f32 * cw + cw / 2.0;
+                    (event.coords.x as f32 - line).clamp(-cw / 2.0, cw / 2.0)
+                }
+                SplitDirection::Vertical => {
+                    let line = origin_y + split.top as f32 * ch + ch / 2.0;
+                    (event.coords.y as f32 - line).clamp(-ch / 2.0, ch / 2.0)
+                }
+            };
+            self.split_drag_offset = Some((split.index, offset));
+        }
+        context.invalidate();
         self.dragging.replace((item, start_event));
     }
 
