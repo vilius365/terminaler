@@ -2316,10 +2316,14 @@ impl TermWindow {
         }
         if name.starts_with("claude_") {
             // Reset the poll timer so update_sidebar_info() refreshes
-            // the data immediately on the next paint frame, not after
-            // the 1s throttle expires.
+            // the data on the next paint, not after the 1s throttle. The
+            // sidebar is rebuilt when that poll's result differs; rebuilding
+            // it here too (8 ms, once per var) only repainted stale data, and
+            // a Claude status line sets several vars at once.
             self.last_sidebar_info_poll = std::time::Instant::now() - std::time::Duration::from_secs(2);
-            self.invalidate_tab_sidebar();
+            if let Some(window) = self.window.as_ref() {
+                window.invalidate();
+            }
         }
         // React immediately to claude_status → waiting_input instead of
         // waiting for the next poll cycle (up to 1s delay).

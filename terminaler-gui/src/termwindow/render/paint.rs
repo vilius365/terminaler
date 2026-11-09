@@ -43,6 +43,7 @@ impl crate::TermWindow {
                         if !allocated {
                             break 'pass;
                         }
+                        log::info!(target: "anim_frames", "  repaint pass {}: grew quad buffers", pass + 1);
                         self.invalidate_fancy_tab_bar();
                         self.invalidate_tab_sidebar();
                         self.brief_bar_cache = None;
@@ -59,6 +60,14 @@ impl crate::TermWindow {
                         current_size,
                     }) = err.root_cause().downcast_ref::<OutOfTextureSpace>()
                     {
+                        log::info!(
+                            target: "anim_frames",
+                            "  repaint pass {}: glyph atlas full at {} (wants {}); {}",
+                            pass + 1,
+                            current_size,
+                            size,
+                            if pass == 0 { "clearing it" } else { "growing it" }
+                        );
                         let result = if pass == 0 {
                             // Let's try clearing out the atlas and trying again
                             // self.clear_texture_atlas()
@@ -97,6 +106,7 @@ impl crate::TermWindow {
                             );
                         }
                     } else if err.root_cause().downcast_ref::<ClearShapeCache>().is_some() {
+                        log::info!(target: "anim_frames", "  repaint pass {}: shape cache cleared", pass + 1);
                         self.invalidate_fancy_tab_bar();
                         self.invalidate_tab_sidebar();
                         self.brief_bar_cache = None;
