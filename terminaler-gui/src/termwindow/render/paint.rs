@@ -417,9 +417,7 @@ impl crate::TermWindow {
         }
 
         let any_lift = anim_duration.is_some()
-            && snaps
-                .iter()
-                .any(|(id, _)| self.pane_anims.borrow().lift_height(*id, frame_now).is_some());
+            && snaps.iter().any(|(id, _)| self.pane_anims.borrow().on_top(*id));
         let lifted_layer = if any_lift {
             Some(
                 self.render_state
@@ -450,17 +448,18 @@ impl crate::TermWindow {
                 ),
                 None => None,
             };
-            let lift = match anim_duration {
-                Some(_) => self.pane_anims.borrow().lift_height(pos.pane.pane_id(), frame_now),
-                None => None,
-            };
-            if let (Some(height), Some(tr)) = (lift, transform) {
-                // A lifted pane is painted on the layer above the others,
-                // with a shadow that deepens as it rises.
+            // Quads are positioned relative to the window centre.
+            let transform = transform.map(|tr| {
+                tr.to_vertex_space(
+                    self.dimensions.pixel_width as f32 / 2.0,
+                    self.dimensions.pixel_height as f32 / 2.0,
+                )
+            });
+            let on_top = anim_duration.is_some() && self.pane_anims.borrow().on_top(pos.pane.pane_id());
+            if let (true, Some(tr)) = (on_top, transform) {
+                // The growing half of a swap is painted on the layer above
+                // the others, so it covers the pane shrinking out of its way.
                 let lifted_layers = lifted.as_mut().context("lift layer")?;
-                let rect = tr.map(&snap.rect);
-                self.paint_lift_shadow(lifted_layers, &rect, height, cell_size)
-                    .context("lift shadow")?;
                 let mark = lifted_layers.mark();
                 let seg = Instant::now();
                 self.pane_line_stats.set((0, 0, Duration::ZERO));

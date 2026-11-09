@@ -702,8 +702,8 @@ pub struct Config {
     #[dynamic(default = "default_pane_fit_rows")]
     pub pane_fit_rows: u16,
 
-    /// Length in milliseconds of the lift-and-drop move: when panes swap or
-    /// rearrange, each is lifted, glides to the middle and falls into place.
+    /// Length in milliseconds of a pane swap: the two panes that trade places
+    /// grow and shrink in place, each straight into the other's slot.
     #[dynamic(default = "default_pane_lift_ms")]
     pub pane_lift_ms: u32,
 

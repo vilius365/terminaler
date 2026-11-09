@@ -37,9 +37,9 @@ struct Tween {
     /// window boundary; those are never clipped while they stay put.
     bounds: [bool; 4],
     start: Instant,
-    /// Set for a rearrangement of existing panes: the pane is lifted out of
-    /// its place, glides to this centre point, then falls into its new place.
-    lift: Option<(f32, f32)>,
+    /// Set for two panes that traded places: each grows or shrinks straight
+    /// into the other's rect over the swap duration.
+    swap: bool,
 }
 
 /// A pane as painted in one frame.
@@ -66,6 +66,19 @@ pub struct Transform {
 }
 
 impl Transform {
+    /// The same transform for vertices, whose origin is the window centre
+    /// (`ox`, `oy` in window pixels) rather than the top-left corner. A pure
+    /// shift is the same in both; a scale and a clip are not.
+    pub fn to_vertex_space(&self, ox: f32, oy: f32) -> Transform {
+        Transform {
+            dx: ox * self.sx + self.dx - ox,
+            dy: oy * self.sy + self.dy - oy,
+            sx: self.sx,
+            sy: self.sy,
+            clip: self.clip.map(|[l, t, r, b]| [l - ox, t - oy, r - ox, b - oy]),
+        }
+    }
+
     /// Where `rect` lands under this transform.
     pub fn map(&self, rect: &PxRect) -> PxRect {
         PxRect {
@@ -114,7 +127,7 @@ fn rects_resized(a: &PxRect, b: &PxRect) -> bool {
     (a.w - b.w).abs() >= 1.0 || (a.h - b.h).abs() >= 1.0
 }
 
-/// Length of a lift-and-drop move, in milliseconds. The window sets it from
+/// Length of a swap, in milliseconds. The window sets it from
 /// `pane_lift_ms`.
 static LIFT_MS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(675);
 
@@ -152,28 +165,6 @@ fn css_ease(easing: EasingFunction, pos: f32) -> f32 {
     bez(y1, y2, (lo + hi) / 2.0)
 }
 
-/// Share of a lift spent rising and gliding to the centre; the rest is the fall.
-const LIFT_RISE: f32 = 0.45;
-
-fn lift_rect(tween: &Tween, centre: (f32, f32), raw: f32) -> PxRect {
-    let raw = raw.clamp(0.0, 1.0);
-    let f = (tween.from.x + tween.from.w / 2.0, tween.from.y + tween.from.h / 2.0);
-    let g = (tween.to.x + tween.to.w / 2.0, tween.to.y + tween.to.h / 2.0);
-    let (cx, cy) = if raw < LIFT_RISE {
-        // Rise and glide: slow start, smooth arrival.
-        let e = css_ease(EasingFunction::EaseInOut, raw / LIFT_RISE);
-        (f.0 + (centre.0 - f.0) * e, f.1 + (centre.1 - f.1) * e)
-    } else {
-        // Fall: starts gently and speeds up, like something dropped.
-        let e = css_ease(EasingFunction::EaseIn, (raw - LIFT_RISE) / (1.0 - LIFT_RISE));
-        (centre.0 + (g.0 - centre.0) * e, centre.1 + (g.1 - centre.1) * e)
-    };
-    let size = css_ease(EasingFunction::EaseInOut, raw);
-    let w = tween.from.w + (tween.to.w - tween.from.w) * size;
-    let h = tween.from.h + (tween.to.h - tween.from.h) * size;
-    PxRect { x: cx - w / 2.0, y: cy - h / 2.0, w, h }
-}
-
 static EASING: parking_lot::Mutex<EasingFunction> = parking_lot::Mutex::new(EasingFunction::EaseOut);
 
 /// Set the curve every animation uses; the window calls this from its config.
@@ -203,7 +194,7 @@ impl PaneAnimations {
         now: Instant,
         duration: Duration,
     ) {
-        self.start_bounded(pane, from, to, [false; 4], None, now, duration);
+        self.start_bounded(pane, from, to, [false; 4], false, now, duration);
     }
 
     fn start_bounded(
@@ -212,7 +203,7 @@ impl PaneAnimations {
         from: PxRect,
         to: PxRect,
         bounds: [bool; 4],
-        lift: Option<(f32, f32)>,
+        swap: bool,
         now: Instant,
         duration: Duration,
     ) {
@@ -225,7 +216,7 @@ impl PaneAnimations {
                     to,
                     bounds,
                     start: now,
-                    lift,
+                    swap,
                 },
             );
         }
@@ -242,14 +233,15 @@ impl PaneAnimations {
     /// The rect to draw for `pane` now, or None when it is not animating.
     pub fn current(&self, pane: PaneId, now: Instant, duration: Duration) -> Option<PxRect> {
         let tween = self.tweens.get(&pane)?;
-        if let Some(centre) = tween.lift {
+        if tween.swap {
             let dur = lift_duration();
             let raw = if dur.is_zero() {
                 1.0
             } else {
                 now.saturating_duration_since(tween.start).as_secs_f32() / dur.as_secs_f32()
             };
-            return Some(lift_rect(tween, centre, raw));
+            let t = css_ease(EasingFunction::EaseInOut, raw.clamp(0.0, 1.0));
+            return Some(tween.from.lerp(&tween.to, t));
         }
         let t = progress(tween.start, now, duration);
         Some(tween.from.lerp(&tween.to, t))
@@ -267,7 +259,7 @@ impl PaneAnimations {
     /// still running, i.e. the caller must schedule another frame.
     pub fn prune(&mut self, now: Instant, duration: Duration) -> bool {
         self.tweens.retain(|_, t| {
-            let dur = if t.lift.is_some() { lift_duration() } else { duration };
+            let dur = if t.swap { lift_duration() } else { duration };
             now.saturating_duration_since(t.start) < dur
         });
         self.ghosts
@@ -311,18 +303,10 @@ impl PaneAnimations {
             // the tab and not a tab switch.
             //
             // The same panes before and after is a rearrangement (swap,
-            // rotate, focus layout, dock). A swapped pair is lifted, glided
-            // to the middle of the pane area and dropped into the other's
-            // place.
+            // rotate, focus layout, dock). A swapped pair grows and shrinks
+            // in place, each straight into the other's rect.
             let rearranged = snaps.len() == self.last_rects.len()
                 && snaps.iter().all(|(id, _)| self.last_rects.contains_key(id));
-            let centre = {
-                let left = snaps.iter().map(|(_, s)| s.rect.x).fold(f32::MAX, f32::min);
-                let top = snaps.iter().map(|(_, s)| s.rect.y).fold(f32::MAX, f32::min);
-                let right = snaps.iter().map(|(_, s)| s.rect.x + s.rect.w).fold(f32::MIN, f32::max);
-                let bottom = snaps.iter().map(|(_, s)| s.rect.y + s.rect.h).fold(f32::MIN, f32::max);
-                ((left + right) / 2.0, (top + bottom) / 2.0)
-            };
             // Only a true swap is animated: two panes that exchanged exactly
             // each other's rects. Any other reshuffle (a focus layout, a
             // rotate) snaps, so panes that merely shifted do not move.
@@ -346,16 +330,16 @@ impl PaneAnimations {
                         if rects_differ(&prev.rect, &snap.rect) {
                             if rearranged {
                                 if swapped(*id, snap) {
-                                    self.start_bounded(*id, prev.rect, snap.rect, snap.bounds, Some(centre), now, duration);
+                                    self.start_bounded(*id, prev.rect, snap.rect, snap.bounds, true, now, duration);
                                 }
                                 continue;
                             }
-                            self.start_bounded(*id, prev.rect, snap.rect, snap.bounds, None, now, duration);
+                            self.start_bounded(*id, prev.rect, snap.rect, snap.bounds, false, now, duration);
                         }
                     }
                     None => {
                         if let Some(from) = self.split_origin(snaps, &snap.rect, cell) {
-                            self.start_bounded(*id, from, snap.rect, snap.bounds, None, now, duration);
+                            self.start_bounded(*id, from, snap.rect, snap.bounds, false, now, duration);
                         }
                     }
                 }
@@ -437,8 +421,8 @@ impl PaneAnimations {
         // pane is being relocated; a clip would leave part of it undrawn
         // until the tween ends, so slide it instead.
         let moved_edges = (0..4).filter(|&i| (from[i] - to[i]).abs() >= 1.0).count();
-        if tween.lift.is_some() && final_rect.w >= 1.0 && final_rect.h >= 1.0 {
-            // A lifted pane grows or shrinks on its way: scale its final
+        if tween.swap && final_rect.w >= 1.0 && final_rect.h >= 1.0 {
+            // A swapped pane grows or shrinks on its way: scale its final
             // drawing into the rect it shows now, so a small pane swapped
             // into the main slot grows gradually instead of arriving big.
             let (sx, sy) = (cur.w / final_rect.w, cur.h / final_rect.h);
@@ -450,7 +434,7 @@ impl PaneAnimations {
                 clip: None,
             });
         }
-        if tween.lift.is_some() || !rects_resized(&tween.from, &tween.to) || moved_edges > 1 {
+        if tween.swap || !rects_resized(&tween.from, &tween.to) || moved_edges > 1 {
             return Some(Transform {
                 dx: cur.x - final_rect.x,
                 dy: cur.y - final_rect.y,
@@ -481,17 +465,12 @@ impl PaneAnimations {
         })
     }
 
-    /// How high `id` is lifted right now, 0..=1: zero on the ground, one at
-    /// the top of the lift. None when the pane is not part of a lift.
-    pub fn lift_height(&self, id: PaneId, now: Instant) -> Option<f32> {
-        let tween = self.tweens.get(&id)?;
-        tween.lift?;
-        let dur = lift_duration();
-        if dur.is_zero() {
-            return None;
-        }
-        let raw = (now.saturating_duration_since(tween.start).as_secs_f32() / dur.as_secs_f32()).clamp(0.0, 1.0);
-        Some((raw * std::f32::consts::PI).sin().max(0.0))
+    /// True while `id` is the growing half of a swap: it is painted above
+    /// the others so it covers the pane shrinking out of its way.
+    pub fn on_top(&self, id: PaneId) -> bool {
+        self.tweens
+            .get(&id)
+            .map_or(false, |t| t.swap && t.to.w * t.to.h > t.from.w * t.from.h + 1.0)
     }
 
     /// Push every running animation's clock back by `by`, so a frame that
@@ -646,27 +625,22 @@ mod test {
         assert_eq!(end.dx, 0.0);
     }
 
-    /// A moment in the fall, three quarters of the way through a lift that began at `start`.
-    fn start_of_fall(start: Instant) -> Instant {
-        start + lift_duration().mul_f32(0.75)
-    }
-
     #[test]
-    fn swapped_panes_pass_through_the_centre() {
+    fn swapped_panes_move_straight_without_a_detour() {
         let t0 = Instant::now();
         let mut a = PaneAnimations::default();
-        a.observe_frame(&[(1, snap(0.0, 100.0)), (2, snap(100.0, 100.0))], ENV, CELL, t0, MS(150));
-        let swapped = [(1, snap(100.0, 100.0)), (2, snap(0.0, 100.0))];
-        a.observe_frame(&swapped, ENV, CELL, t0 + MS(16), MS(150));
-        let rise_end = t0 + MS(16) + lift_duration().mul_f32(LIFT_RISE);
-        let cur = a.current(1, rise_end, MS(150)).unwrap();
-        // The pane area spans x 0..200, so its centre is x = 100 and a
-        // 100-wide pane centred there starts at x = 50.
-        assert!((cur.x - 50.0).abs() < 0.5, "x was {}", cur.x);
-        let early = a.current(1, t0 + MS(16 + 50), MS(150)).unwrap();
-        assert!(early.x > 0.0 && early.x < 50.0, "still rising: {}", early.x);
-        let late = a.current(1, start_of_fall(t0 + MS(16)), MS(150)).unwrap();
-        assert!(late.x > 50.0 && late.x < 100.0, "falling: {}", late.x);
+        let before = [(1, snap(0.0, 100.0)), (2, snap(100.0, 50.0)), (3, snap(150.0, 50.0))];
+        a.observe_frame(&before, ENV, CELL, t0, MS(150));
+        let after = [(1, snap(150.0, 50.0)), (2, snap(100.0, 50.0)), (3, snap(0.0, 100.0))];
+        a.observe_frame(&after, ENV, CELL, t0 + MS(16), MS(150));
+        // Every frame, each edge sits between where it started and ended.
+        for step in 0..=20 {
+            let t = t0 + MS(16) + lift_duration().mul_f32(step as f32 / 20.0);
+            let c = a.current(3, t, MS(150)).unwrap();
+            assert!(c.x >= -0.01 && c.x <= 150.01, "left {} at {step}", c.x);
+            assert!(c.x + c.w >= 99.99 && c.x + c.w <= 200.01, "right {} at {step}", c.x + c.w);
+            assert_eq!(c.y, 0.0, "no vertical travel");
+        }
     }
 
     #[test]
@@ -722,19 +696,28 @@ mod test {
     }
 
     #[test]
-    fn a_lifted_pane_rises_then_lands() {
+    fn only_the_growing_pane_of_a_swap_is_on_top() {
         let t0 = Instant::now();
         let mut a = PaneAnimations::default();
-        a.observe_frame(&[(1, snap(0.0, 100.0)), (2, snap(100.0, 100.0))], ENV, CELL, t0, MS(150));
-        let swapped = [(1, snap(100.0, 100.0)), (2, snap(0.0, 100.0))];
-        a.observe_frame(&swapped, ENV, CELL, t0 + MS(16), MS(150));
-        let start = t0 + MS(16);
-        assert_eq!(a.lift_height(1, start), Some(0.0));
-        let top = a.lift_height(1, start + lift_duration().mul_f32(0.5)).unwrap();
-        assert!(top > 0.99, "highest mid-flight: {top}");
-        let late = a.lift_height(1, start + lift_duration().mul_f32(0.95)).unwrap();
-        assert!(late < 0.2, "nearly landed: {late}");
-        assert_eq!(a.lift_height(9, start), None, "unknown pane");
+        let before = [(1, snap(0.0, 100.0)), (2, snap(100.0, 50.0)), (3, snap(150.0, 50.0))];
+        a.observe_frame(&before, ENV, CELL, t0, MS(150));
+        let after = [(1, snap(150.0, 50.0)), (2, snap(100.0, 50.0)), (3, snap(0.0, 100.0))];
+        a.observe_frame(&after, ENV, CELL, t0 + MS(16), MS(150));
+        assert!(a.on_top(3), "the incoming main pane grows over the other");
+        assert!(!a.on_top(1), "the shrinking pane stays below");
+        assert!(!a.on_top(2), "the bystander is not animating");
+    }
+
+    #[test]
+    fn vertex_space_keeps_the_mapping_of_window_space() {
+        let tr = Transform { dx: 30.0, dy: -4.0, sx: 0.5, sy: 2.0, clip: Some([10.0, 20.0, 110.0, 220.0]) };
+        let (ox, oy) = (400.0, 300.0);
+        let v = tr.to_vertex_space(ox, oy);
+        // A point at window (x, y) is vertex (x - ox, y - oy); both routes agree.
+        let (x, y) = (250.0, 120.0);
+        assert!(((x - ox) * v.sx + v.dx - ((x * tr.sx + tr.dx) - ox)).abs() < 1e-3);
+        assert!(((y - oy) * v.sy + v.dy - ((y * tr.sy + tr.dy) - oy)).abs() < 1e-3);
+        assert_eq!(v.clip, Some([-390.0, -280.0, -290.0, -80.0]));
     }
 
     #[test]
