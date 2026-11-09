@@ -43,7 +43,8 @@ pub fn capture_session() -> SessionState {
             if settings.len() == mux::session_state::layout_font_settings(&layout).len() {
                 mux::session_state::set_layout_font_settings(&mut layout, &mut settings.into_iter());
             }
-            tabs.push(TabState { title, layout });
+            let focus_arranged = tab.focus_main_fraction().is_some();
+            tabs.push(TabState { title, layout, focus_arranged });
         }
 
         let terminal_size = mux_window
@@ -209,6 +210,7 @@ pub async fn restore_session(
 
                 tab.restore_groups(&tab_state.layout);
                 seed_font_scales(&tab, &tab_state.layout);
+                tab.restore_focus_arranged(tab_state.focus_arranged);
             } else {
                 // Additional tabs: spawn a new tab in the same window
                 let tab = domain
@@ -247,6 +249,7 @@ pub async fn restore_session(
 
                 tab.restore_groups(&tab_state.layout);
                 seed_font_scales(&tab, &tab_state.layout);
+                tab.restore_focus_arranged(tab_state.focus_arranged);
             }
         }
 

@@ -50,6 +50,10 @@ pub struct TabState {
     pub title: String,
     /// Pane layout tree.
     pub layout: PaneLayoutNode,
+    /// The tab was in the arrangement focus_layout builds, so after a
+    /// restore a focus click swaps two panes instead of rebuilding.
+    #[serde(default)]
+    pub focus_arranged: bool,
 }
 
 /// Serializable pane layout tree.
@@ -253,6 +257,7 @@ mod tests {
                 tabs: vec![
                     TabState {
                         title: "Shell".into(),
+                        focus_arranged: false,
                         layout: PaneLayoutNode::Pane {
                             cwd: Some(PathBuf::from("/home/user")),
                             command: Some("bash".into()),
@@ -268,6 +273,7 @@ mod tests {
                     },
                     TabState {
                         title: "Dev".into(),
+                        focus_arranged: false,
                         layout: PaneLayoutNode::Split {
                             direction: SplitDirectionState::Horizontal,
                             ratio: 0.5,

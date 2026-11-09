@@ -1162,6 +1162,21 @@ impl Tab {
         self.inner.lock().focus_main_fraction()
     }
 
+    /// After a session restore, mark the tab as a focus arrangement again
+    /// when it was saved as one and its rebuilt tree still has that shape.
+    /// Returns whether the tab is now a focus arrangement.
+    pub fn restore_focus_arranged(&self, saved: bool) -> bool {
+        let mut inner = self.inner.lock();
+        if !saved {
+            return false;
+        }
+        inner.focus_arranged = true;
+        if inner.focus_main_fraction().is_none() {
+            inner.focus_arranged = false;
+        }
+        inner.focus_arranged
+    }
+
     /// Trade the places of two panes. Each pane takes over the other's slot
     /// and size, so the shape of the layout does not change. The active pane
     /// stays the same pane. Returns false, leaving the layout untouched, when
@@ -4047,6 +4062,32 @@ mod test {
         assert!(after[0].is_active);
         assert_eq!((after[1].top, after[1].height), (stack[0].top, stack[0].height));
         assert_eq!((after[2].top, after[2].height), (stack[1].top, stack[1].height));
+    }
+
+    #[test]
+    fn a_restored_focus_arrangement_swaps_on_the_next_focus() {
+        let (tab, _) = three_across();
+        assert!(tab.focus_layout(1, 0.6));
+        // A restart rebuilds the same tree with the flag cleared.
+        tab.inner.lock().focus_arranged = false;
+        assert_eq!(tab.focus_main_fraction(), None);
+        assert!(tab.restore_focus_arranged(true));
+        assert!(tab.focus_main_fraction().is_some());
+        let before: Vec<_> = tab.iter_panes().iter().map(|p| (p.left, p.top, p.width, p.height)).collect();
+        let stacked = tab.iter_panes()[2].pane.pane_id();
+        // The next focus is a plain swap: every slot keeps its geometry.
+        assert!(tab.focus_layout(stacked, 0.6));
+        let after: Vec<_> = tab.iter_panes().iter().map(|p| (p.left, p.top, p.width, p.height)).collect();
+        assert_eq!(before, after);
+        assert_eq!(tab.iter_panes()[0].pane.pane_id(), stacked);
+    }
+
+    #[test]
+    fn restoring_focus_arranged_refuses_a_tree_of_another_shape() {
+        let (tab, _) = three_across();
+        assert!(!tab.restore_focus_arranged(true), "three across is not a focus shape");
+        assert_eq!(tab.focus_main_fraction(), None);
+        assert!(!tab.restore_focus_arranged(false));
     }
 
     #[test]
