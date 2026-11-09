@@ -1100,13 +1100,17 @@ impl crate::TermWindow {
                 window_is_transparent: bool,
                 layers: &'a mut TripleLayerQuadAllocator<'b>,
                 error: Option<anyhow::Error>,
+                password_input: bool,
             }
 
             self.pane_callback_time.set(Duration::ZERO);
             self.pane_hit_stats
                 .set((Duration::ZERO, Duration::ZERO, Duration::ZERO, 0));
             self.pane_hash_stats.set((Duration::ZERO, 0));
+            let password_input = self.config.detect_password_input
+                && self.pane_password_input(&pos.pane);
             let mut render = LineRender {
+                password_input,
                 term_window: self,
                 selrange,
                 rectangular,
@@ -1168,20 +1172,9 @@ impl crate::TermWindow {
                                 }
                                 _ => None,
                             },
-                            if self.term_window.config.detect_password_input {
-                                match self.pos.pane.get_metadata() {
-                                    Value::Object(obj) => {
-                                        match obj.get(&Value::String("password_input".to_string()))
-                                        {
-                                            Some(Value::Bool(b)) => *b,
-                                            _ => false,
-                                        }
-                                    }
-                                    _ => false,
-                                }
-                            } else {
-                                false
-                            },
+                            // Cached per pane: asking the pty here cost 4-7 ms
+                            // per busy pane on every paint.
+                            self.password_input,
                         )
                     } else {
                         (None, None, false)

@@ -831,6 +831,10 @@ pub struct TermWindow {
     pub pane_hit_stats: std::cell::Cell<(Duration, Duration, Duration, usize)>,
     /// Line shape hash: time spent, lines whose hash was recomputed.
     pub pane_hash_stats: std::cell::Cell<(Duration, usize)>,
+    /// Last known password-input state per pane and when it was read.
+    password_input_cache: RefCell<HashMap<PaneId, (Instant, bool)>>,
+    /// Panes whose password-input state is being read on a worker thread.
+    password_input_in_flight: RefCell<HashSet<PaneId>>,
 
     last_status_call: Instant,
     cursor_blink_state: RefCell<ColorEase>,
@@ -1231,6 +1235,8 @@ impl TermWindow {
             pane_callback_time: std::cell::Cell::new(Duration::ZERO),
             pane_hit_stats: std::cell::Cell::new((Duration::ZERO, Duration::ZERO, Duration::ZERO, 0)),
             pane_hash_stats: std::cell::Cell::new((Duration::ZERO, 0)),
+            password_input_cache: RefCell::new(HashMap::new()),
+            password_input_in_flight: RefCell::new(HashSet::new()),
             line_quad_cache: RefCell::new(LfuCache::new(
                 "line_quad_cache.hit.rate",
                 "line_quad_cache.miss.rate",
@@ -5408,6 +5414,53 @@ impl TermWindow {
         self.scaled_font_configs
             .insert(key, (Rc::clone(&fonts), metrics));
         (fonts, metrics)
+    }
+
+    /// Whether `pane` looks like it is reading a password (echo off,
+    /// canonical input). Reading the pty's termios took 4-7 ms for a pane
+    /// with steady output, on every paint, so the last answer is used and
+    /// refreshed on a worker thread at most every 250 ms; a change repaints.
+    pub fn pane_password_input(&self, pane: &Arc<dyn Pane>) -> bool {
+        let pane_id = pane.pane_id();
+        let now = Instant::now();
+        let (value, stale) = match self.password_input_cache.borrow().get(&pane_id) {
+            Some((read_at, value)) => (
+                *value,
+                now.duration_since(*read_at) >= Duration::from_millis(250),
+            ),
+            None => (false, true),
+        };
+        if stale && self.password_input_in_flight.borrow_mut().insert(pane_id) {
+            if let Some(window) = self.window.clone() {
+                let pane = Arc::clone(pane);
+                std::thread::spawn(move || {
+                    let password = match pane.get_metadata() {
+                        terminaler_dynamic::Value::Object(obj) => matches!(
+                            obj.get(&terminaler_dynamic::Value::String(
+                                "password_input".to_string()
+                            )),
+                            Some(terminaler_dynamic::Value::Bool(true))
+                        ),
+                        _ => false,
+                    };
+                    window.notify(TermWindowNotif::Apply(Box::new(move |tw| {
+                        tw.password_input_in_flight.borrow_mut().remove(&pane_id);
+                        let old = tw
+                            .password_input_cache
+                            .borrow_mut()
+                            .insert(pane_id, (Instant::now(), password));
+                        if old.map(|(_, v)| v) != Some(password) {
+                            if let Some(window) = tw.window.as_ref() {
+                                window.invalidate();
+                            }
+                        }
+                    })));
+                });
+            } else {
+                self.password_input_in_flight.borrow_mut().remove(&pane_id);
+            }
+        }
+        value
     }
 
     /// The scaled config a pane paints with. The first time a scale paints,
