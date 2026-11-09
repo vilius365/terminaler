@@ -67,9 +67,9 @@ pub struct LineQuadCacheKey {
     /// The pane's font metrics: a refit changes only this pane's font, and
     /// its first row keeps the same pixel position.
     pub metric: crate::glyphcache::CellMetricKey,
-    pub top_pixel_y: NotNan<f32>,
+    /// No row or y position: a line that scrolls to another row keeps its
+    /// entry, and the cached quads are moved by the y difference on reuse.
     pub left_pixel_x: NotNan<f32>,
-    pub phys_line_idx: usize,
     pub pane_id: PaneId,
     pub pane_is_active: bool,
     /// A cursor position with the y value fixed at 0.
@@ -80,6 +80,8 @@ pub struct LineQuadCacheKey {
 }
 
 pub struct LineQuadCacheValue {
+    /// The y position the quads were built at.
+    pub top_pixel_y: f32,
     pub expires: Option<Instant>,
     pub layers: HeapQuadAllocator,
     // Only set if the line contains any hyperlinks, so

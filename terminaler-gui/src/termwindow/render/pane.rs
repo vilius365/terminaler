@@ -1199,13 +1199,13 @@ impl crate::TermWindow {
                         cursor,
                         shape_hash,
                         metric: crate::glyphcache::CellMetricKey::from(&self.term_window.render_metrics),
-                        top_pixel_y: NotNan::new(self.top_pixel_y).unwrap()
-                            + (line_idx + self.pos.top) as f32
-                                * self.term_window.render_metrics.cell_size.height as f32,
                         left_pixel_x: NotNan::new(self.left_pixel_x).unwrap(),
-                        phys_line_idx: line_idx,
                         reverse_video: self.dims.reverse_video,
                     };
+
+                    let line_top_pixel_y = self.top_pixel_y
+                        + (line_idx + self.pos.top) as f32
+                            * self.term_window.render_metrics.cell_size.height as f32;
 
                     let key_time = key_start.elapsed();
                     let lookup_start = Instant::now();
@@ -1231,7 +1231,10 @@ impl crate::TermWindow {
                             let apply_start = Instant::now();
                             cached_quad
                                 .layers
-                                .apply_to(self.layers)
+                                .apply_to_with_y_offset(
+                                    self.layers,
+                                    line_top_pixel_y - cached_quad.top_pixel_y,
+                                )
                                 .context("cached_quad.layers.apply_to")?;
                             let (k, l, a, q) = self.term_window.pane_hit_stats.get();
                             self.term_window.pane_hit_stats.set((
@@ -1270,7 +1273,7 @@ impl crate::TermWindow {
                         .term_window
                         .render_screen_line(
                             RenderScreenLineParams {
-                                top_pixel_y: *quad_key.top_pixel_y,
+                                top_pixel_y: line_top_pixel_y,
                                 left_pixel_x: self.left_pixel_x,
                                 pixel_width: self.dims.cols as f32
                                     * self.term_window.render_metrics.cell_size.width as f32,
@@ -1315,6 +1318,7 @@ impl crate::TermWindow {
                         .context("HeapQuadAllocator::apply_to")?;
 
                     let quad_value = LineQuadCacheValue {
+                        top_pixel_y: line_top_pixel_y,
                         layers: buf,
                         expires,
                         invalidate_on_hover_change: render_result.invalidate_on_hover_change,

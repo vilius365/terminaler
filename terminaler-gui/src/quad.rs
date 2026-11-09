@@ -336,6 +336,28 @@ impl HeapQuadAllocator {
         metrics::histogram!("quad_buffer_apply").record(start.elapsed());
         Ok(())
     }
+
+    /// Like `apply_to`, but moves every quad down by `dy` pixels. The line
+    /// cache uses this to reuse a line's quads after it scrolls to another row.
+    pub fn apply_to_with_y_offset(
+        &self,
+        other: &mut TripleLayerQuadAllocator,
+        dy: f32,
+    ) -> anyhow::Result<()> {
+        if dy == 0.0 {
+            return self.apply_to(other);
+        }
+        for (layer_num, quads) in [(0, &self.layer0), (1, &self.layer1), (2, &self.layer2)] {
+            for quad in quads {
+                let mut verts = quad.to_vertices();
+                for v in verts.iter_mut() {
+                    v.position[1] += dy;
+                }
+                other.extend_with(layer_num, &verts);
+            }
+        }
+        Ok(())
+    }
 }
 
 impl TripleLayerQuadAllocatorTrait for HeapQuadAllocator {
