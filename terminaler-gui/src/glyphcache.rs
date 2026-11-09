@@ -54,6 +54,11 @@ pub enum LoadState {
 pub struct CellMetricKey {
     pub pixel_width: u16,
     pub pixel_height: u16,
+    /// The font's descender in 1/64 px. Panes have their own font sizes and
+    /// two sizes can round to the same cell (0.81 and 0.83 both give 10x22),
+    /// so the cell alone would let them share shaped glyphs; the descender
+    /// scales continuously with the font size and tells them apart.
+    pub descender_64: i32,
 }
 
 impl From<&RenderMetrics> for CellMetricKey {
@@ -61,6 +66,7 @@ impl From<&RenderMetrics> for CellMetricKey {
         CellMetricKey {
             pixel_width: metrics.cell_size.width as u16,
             pixel_height: metrics.cell_size.height as u16,
+            descender_64: (metrics.descender.get() * 64.0).round() as i32,
         }
     }
 }

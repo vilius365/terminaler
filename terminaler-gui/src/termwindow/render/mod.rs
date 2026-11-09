@@ -64,6 +64,9 @@ pub struct LineQuadCacheKey {
     pub composing: Option<String>,
     pub selection: Range<usize>,
     pub shape_hash: [u8; 16],
+    /// The pane's font metrics: a refit changes only this pane's font, and
+    /// its first row keeps the same pixel position.
+    pub metric: crate::glyphcache::CellMetricKey,
     pub top_pixel_y: NotNan<f32>,
     pub left_pixel_x: NotNan<f32>,
     pub phys_line_idx: usize,
@@ -99,9 +102,9 @@ pub struct LineToEleShapeCacheKey {
     pub shape_hash: [u8; 16],
     pub composing: Option<(usize, String)>,
     pub shape_generation: usize,
-    /// The cell size the line was laid out with: panes can have their own font
-    /// scale, and identical lines in two panes must not share an entry.
-    pub cell: (i32, i32),
+    /// The font metrics the line was laid out with: panes can have their own
+    /// font scale, and identical lines in two panes must not share an entry.
+    pub metric: crate::glyphcache::CellMetricKey,
 }
 
 pub struct LineToElementShapeItem {

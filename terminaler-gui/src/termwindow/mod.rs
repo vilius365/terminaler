@@ -5617,8 +5617,9 @@ impl TermWindow {
         let scale = best.1;
         self.set_pane_font_scale(pane_id, scale);
         self.resize_pane_for_font_scale(pane_id);
-        self.shape_generation += 1;
-        self.shape_cache.borrow_mut().clear();
+        // No shape cache reset: the shape caches are keyed by the font
+        // metrics (CellMetricKey includes the descender), so only this pane
+        // reshapes. Clearing them made every pane reshape on every fit.
         self.invalidate_tab_sidebar();
         log::info!(
             "fit: pane {} area {}x{}px, scale {:.2} for {}x{} cells",
