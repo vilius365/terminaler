@@ -886,7 +886,8 @@ impl crate::TermWindow {
 
                 let presentation_width = PresentationWidth::with_cluster(&cluster);
 
-                match font.shape(
+                let shape_start = Instant::now();
+                let shaped_result = font.shape(
                     &cluster.text,
                     move || window.notify(TermWindowNotif::InvalidateShapeCache),
                     BlockKey::filter_out_synthetic,
@@ -894,8 +895,11 @@ impl crate::TermWindow {
                     cluster.direction,
                     None, // FIXME: need more paragraph context
                     Some(&presentation_width),
-                ) {
+                );
+                let shape_time = shape_start.elapsed();
+                match shaped_result {
                     Ok(info) => {
+                        let glyph_start = Instant::now();
                         let glyphs = self.glyph_infos_to_glyphs(
                             &style,
                             &mut gl_state.glyph_cache.borrow_mut(),
@@ -903,6 +907,9 @@ impl crate::TermWindow {
                             &font,
                             metrics,
                         )?;
+                        let (st, gt, n) = self.pane_shape_stats.get();
+                        self.pane_shape_stats
+                            .set((st + shape_time, gt + glyph_start.elapsed(), n + 1));
                         let shaped = Rc::new(ShapedInfo::process(&info, &glyphs));
 
                         self.shape_cache

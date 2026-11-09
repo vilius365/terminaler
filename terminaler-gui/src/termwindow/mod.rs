@@ -803,6 +803,10 @@ pub struct TermWindow {
     scaled_prewarm: Vec<u32>,
     scaled_prewarm_basis: (usize, u64),
     scaled_prewarm_started: Option<Instant>,
+    /// A painted scale found fallback faces the prewarmed scales lack:
+    /// re-adopt them on idle frames.
+    scaled_prewarm_readopt: bool,
+    scaled_readopt_queue: Vec<u32>,
 
     window_background: Vec<LoadedBackgroundLayer>,
 
@@ -836,6 +840,9 @@ pub struct TermWindow {
     pub pane_hit_stats: std::cell::Cell<(Duration, Duration, Duration, usize)>,
     /// Line shape hash: time spent, lines whose hash was recomputed.
     pub pane_hash_stats: std::cell::Cell<(Duration, usize)>,
+    /// Rebuilt lines: time in HarfBuzz shaping, time turning glyph infos into
+    /// cached glyphs (rasterising the ones not cached yet), clusters shaped.
+    pub pane_shape_stats: std::cell::Cell<(Duration, Duration, usize)>,
     /// Last known password-input state per pane and when it was read.
     password_input_cache: RefCell<HashMap<PaneId, (Instant, bool)>>,
     /// Panes whose password-input state is being read on a worker thread.
@@ -1244,6 +1251,7 @@ impl TermWindow {
             pane_callback_time: std::cell::Cell::new(Duration::ZERO),
             pane_hit_stats: std::cell::Cell::new((Duration::ZERO, Duration::ZERO, Duration::ZERO, 0)),
             pane_hash_stats: std::cell::Cell::new((Duration::ZERO, 0)),
+            pane_shape_stats: std::cell::Cell::new((Duration::ZERO, Duration::ZERO, 0)),
             password_input_cache: RefCell::new(HashMap::new()),
             password_input_in_flight: RefCell::new(HashSet::new()),
             line_quad_cache: RefCell::new(LfuCache::new(
@@ -1295,6 +1303,8 @@ impl TermWindow {
             scaled_prewarm: vec![],
             scaled_prewarm_basis: (0, 0),
             scaled_prewarm_started: None,
+            scaled_prewarm_readopt: false,
+            scaled_readopt_queue: vec![],
             ui_items: vec![],
             dragging: None,
             split_drag_offset: None,
@@ -5487,7 +5497,9 @@ impl TermWindow {
         let key = Self::font_scale_key(scale);
         if self.scaled_font_seeded.insert(key) {
             // Cheap (tens of µs) when a prewarm already adopted everything.
-            self.adopt_scaled_fallbacks(scale, &entry.0);
+            if self.adopt_scaled_fallbacks(scale, &entry.0) {
+                self.scaled_prewarm_readopt = true;
+            }
         }
         entry
     }
@@ -5543,8 +5555,34 @@ impl TermWindow {
             self.scaled_prewarm_basis = basis;
             self.scaled_prewarm = (50..=150u32).rev().filter(|k| *k != 100).collect();
             self.scaled_prewarm_started = Some(Instant::now());
+            self.scaled_prewarm_readopt = false;
+        }
+        // Fallbacks found since the prewarm: give them to every scale that
+        // has not painted yet (a painted one adopts at its first paint).
+        if self.scaled_prewarm.is_empty()
+            && self.scaled_readopt_queue.is_empty()
+            && self.scaled_prewarm_readopt
+        {
+            self.scaled_prewarm_readopt = false;
+            self.scaled_readopt_queue = self
+                .scaled_font_configs
+                .keys()
+                .filter(|k| !self.scaled_font_seeded.contains(k))
+                .copied()
+                .collect();
+            self.scaled_prewarm_started = Some(Instant::now());
         }
         let started = Instant::now();
+        if self.scaled_prewarm.is_empty() {
+            while let Some(key) = self.scaled_readopt_queue.pop() {
+                if let Some((fonts, _)) = self.scaled_font_configs.get(&key).cloned() {
+                    self.adopt_scaled_fallbacks(key as f64 / 100.0, &fonts);
+                }
+                if started.elapsed() >= Duration::from_millis(4) {
+                    break;
+                }
+            }
+        }
         while let Some(key) = self.scaled_prewarm.pop() {
             if self.scaled_font_basis == basis && self.scaled_font_configs.contains_key(&key) {
                 continue;
@@ -5557,10 +5595,10 @@ impl TermWindow {
                 break;
             }
         }
-        if self.scaled_prewarm.is_empty() {
+        if self.scaled_prewarm.is_empty() && self.scaled_readopt_queue.is_empty() {
             if let Some(since) = self.scaled_prewarm_started.take() {
                 log::info!(
-                    "prewarmed pane font scales 0.50-1.50 in {:?} ({} configs)",
+                    "prewarmed pane font scales in {:?} ({} configs)",
                     since.elapsed(),
                     self.scaled_font_configs.len()
                 );

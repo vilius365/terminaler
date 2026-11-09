@@ -1107,6 +1107,8 @@ impl crate::TermWindow {
             self.pane_hit_stats
                 .set((Duration::ZERO, Duration::ZERO, Duration::ZERO, 0));
             self.pane_hash_stats.set((Duration::ZERO, 0));
+            self.pane_shape_stats
+                .set((Duration::ZERO, Duration::ZERO, 0));
             let password_input = self.config.detect_password_input
                 && self.pane_password_input(&pos.pane);
             let mut render = LineRender {
@@ -1363,10 +1365,14 @@ impl crate::TermWindow {
             let inside = self.pane_callback_time.get();
             let (k, l, a, q) = self.pane_hit_stats.get();
             let (ht, hn) = self.pane_hash_stats.get();
+            let (st, gt, sn) = self.pane_shape_stats.get();
             self.log_frame_segment(
                 &format!(
-                    "    with_lines_mut (callback {:.2}ms; line hash {:.2}ms, {} recomputed; cached lines: key {:.2}ms, lookup {:.2}ms, copy {:.2}ms for {} quads)",
+                    "    with_lines_mut (callback {:.2}ms; shaping {:.2}ms + glyphs {:.2}ms for {} clusters; line hash {:.2}ms, {} recomputed; cached lines: key {:.2}ms, lookup {:.2}ms, copy {:.2}ms for {} quads)",
                     inside.as_secs_f64() * 1000.0,
+                    st.as_secs_f64() * 1000.0,
+                    gt.as_secs_f64() * 1000.0,
+                    sn,
                     ht.as_secs_f64() * 1000.0,
                     hn,
                     k.as_secs_f64() * 1000.0,
