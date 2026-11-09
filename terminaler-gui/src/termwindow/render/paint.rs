@@ -193,7 +193,7 @@ impl crate::TermWindow {
 
     /// With `log_animation_frames`, log one part of a frame that took longer
     /// than 3 ms, to find what makes a slow frame slow.
-    fn log_frame_segment(&self, what: &str, since: Instant) {
+    pub(crate) fn log_frame_segment(&self, what: &str, since: Instant) {
         if !self.config.log_animation_frames {
             return;
         }

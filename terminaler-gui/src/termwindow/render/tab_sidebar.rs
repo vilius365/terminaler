@@ -1131,7 +1131,10 @@ impl crate::TermWindow {
         use anyhow::Context;
 
         // Update sidebar metadata periodically
+        let seg = Instant::now();
         self.update_sidebar_info();
+        self.log_frame_segment("sidebar.info", seg);
+        let seg = Instant::now();
 
         // Start the tmux discovery poller once the sidebar is live, so the
         // session list populates without the user opening the picker first.
@@ -1265,16 +1268,22 @@ impl crate::TermWindow {
             }
         }
 
+        self.log_frame_segment("sidebar.fingerprint", seg);
+
         if self.tab_sidebar.is_none() {
+            let seg = Instant::now();
             let sidebar = self.build_tab_sidebar()?;
             self.tab_sidebar.replace(sidebar);
+            self.log_frame_segment("sidebar.build", seg);
         }
 
+        let seg = Instant::now();
         let computed = self.tab_sidebar.as_ref().unwrap();
         let ui_items = computed.ui_items();
 
         let gl_state = self.render_state.as_ref().unwrap();
         self.render_element(computed, gl_state, None)?;
+        self.log_frame_segment("sidebar.render", seg);
 
         self.ui_items.extend(ui_items);
 

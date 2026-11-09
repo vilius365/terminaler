@@ -727,16 +727,25 @@ impl RenderState {
         for layer in self.layers.borrow().iter() {
             for vb_idx in 0..3 {
                 if let Some(need_quads) = layer.need_more_quads(vb_idx) {
-                    // Round up to next multiple of 128 that is >=
-                    // the number of needed quads for this frame
-                    let num_quads = (need_quads + 127) & !127;
+                    // Half again as many as this frame needed, rounded up
+                    // to a multiple of 128. Growing only to the next 128
+                    // made every frame of a pane animation that needed a
+                    // few more quads than the last overflow, grow and paint
+                    // the whole window a second time.
+                    let num_quads = (need_quads + need_quads / 2 + 127) & !127;
                     layer.reallocate_quads(vb_idx, num_quads).with_context(|| {
                         format!(
                             "Failed to allocate {} quads (needed {})",
                             num_quads, need_quads,
                         )
                     })?;
-                    log::trace!("Allocated {} quads (needed {})", num_quads, need_quads);
+                    log::info!(
+                        "layer {} vb {}: allocated {} quads (needed {})",
+                        layer.zindex,
+                        vb_idx,
+                        num_quads,
+                        need_quads
+                    );
                     allocated = true;
                 }
             }
