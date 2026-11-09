@@ -625,7 +625,10 @@ impl crate::TermWindow {
             return self.paint_pane_box_model(pos);
         }
 
+        let part = Instant::now();
         self.check_for_dirty_lines_and_invalidate_selection(&pos.pane);
+        self.log_frame_segment("    dirty-lines check", part);
+        let part = Instant::now();
         /*
         let zone = {
             let dims = pos.pane.get_dimensions();
@@ -994,6 +997,8 @@ impl crate::TermWindow {
             .context("per-pane scrollbar")?;
         }
 
+        self.log_frame_segment("    backgrounds, rings, scrollbar", part);
+        let part = Instant::now();
         // --- Per-pane font scaling for text rendering ---
         // Background/borders above used base metrics to keep pane boundaries static.
         // For text rendering, swap to scaled fonts/metrics if this pane has a custom scale.
@@ -1051,6 +1056,7 @@ impl crate::TermWindow {
             (sel.range.clone(), sel.rectangular)
         };
 
+        self.log_frame_segment("    font swap, selection", part);
         let start = Instant::now();
         let selection_fg = palette.selection_fg.to_linear();
         let selection_bg = palette.selection_bg.to_linear();
@@ -1328,8 +1334,11 @@ impl crate::TermWindow {
                 }
             }
 
+            let part = Instant::now();
             pos.pane.with_lines_mut(stable_range.clone(), &mut render);
             render_error = render.error.take();
+            drop(render);
+            self.log_frame_segment("    with_lines_mut", part);
         }
 
         // Restore original fonts/metrics if we swapped for per-pane scaling
