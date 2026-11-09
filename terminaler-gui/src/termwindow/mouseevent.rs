@@ -2088,7 +2088,7 @@ impl super::TermWindow {
 
         let top = bg_y + g.top_offset;
         g.pill_button_at(
-            pane_count,
+            self.pill_offers_focus(hovered_id, pane_count),
             bg_right,
             top,
             event.coords.x as f32,

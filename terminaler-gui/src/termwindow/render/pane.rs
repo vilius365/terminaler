@@ -161,10 +161,10 @@ impl ToastGeom {
         pane_w >= self.min_pane_width && pane_h >= self.min_pane_height
     }
 
-    /// The pill's buttons, left to right: focus only when the tab has another
-    /// pane to stack (otherwise it would be dead), then close in the corner.
-    pub fn pill_buttons(&self, pane_count: usize) -> &'static [&'static str] {
-        if pane_count >= 2 {
+    /// The pill's buttons, left to right: focus when it would do something
+    /// (see `TermWindow::pill_offers_focus`), then close in the corner.
+    pub fn pill_buttons(&self, offers_focus: bool) -> &'static [&'static str] {
+        if offers_focus {
             &["focus", "close"]
         } else {
             &["close"]
@@ -185,13 +185,13 @@ impl ToastGeom {
     /// its top at `top`. The padding between buttons counts toward the nearer one.
     pub fn pill_button_at(
         &self,
-        pane_count: usize,
+        offers_focus: bool,
         right: f32,
         top: f32,
         x: f32,
         y: f32,
     ) -> Option<&'static str> {
-        let names = self.pill_buttons(pane_count);
+        let names = self.pill_buttons(offers_focus);
         let n = names.len();
         let left = right - self.pill_width(n);
         if x < left || x >= right || y < top || y >= top + self.height {
@@ -582,6 +582,24 @@ impl crate::TermWindow {
             _ => return None,
         };
         Some(crate::agent_color::unit_ring_color(key, active))
+    }
+
+    /// Whether `pane_id`'s header pill shows the focus button. Not on a lone
+    /// pane (nothing to stack), and not on the main pane while the tab is in
+    /// the focus layout (it is already focused). The button comes back once
+    /// a new pane or another layout change breaks the focus arrangement.
+    pub fn pill_offers_focus(&self, pane_id: mux::pane::PaneId, pane_count: usize) -> bool {
+        if pane_count < 2 {
+            return false;
+        }
+        let mux = mux::Mux::get();
+        let Some(tab) = mux.get_active_tab_for_window(self.mux_window_id) else {
+            return true;
+        };
+        if tab.focus_main_fraction().is_none() {
+            return true;
+        }
+        tab.iter_panes().first().map_or(true, |main| main.pane.pane_id() != pane_id)
     }
 
     pub fn paint_pane(
@@ -1757,7 +1775,7 @@ impl crate::TermWindow {
         let close_bg = window::color::LinearRgba(0.973, 0.318, 0.286, 0.55);
         let close_armed_bg = window::color::LinearRgba(0.973, 0.318, 0.286, 1.0);
         let white = window::color::LinearRgba(1.0, 1.0, 1.0, 0.92);
-        let names = geom.pill_buttons(pane_count);
+        let names = geom.pill_buttons(self.pill_offers_focus(hovered_id, pane_count));
         let pill_w = geom.pill_width(names.len());
         let left = bg_right - pill_w;
         let top = bg_y + geom.top_offset;
@@ -1823,15 +1841,15 @@ mod geometry_tests {
         assert!(!g.shows_pill(g.min_pane_width - 1.0, 1000.0));
         assert!(!g.shows_pill(1000.0, g.min_pane_height - 1.0));
         // A lone pane has nothing to stack: focus would be dead, close stays.
-        assert_eq!(g.pill_buttons(1), &["close"]);
-        assert_eq!(g.pill_buttons(2), &["focus", "close"]);
+        assert_eq!(g.pill_buttons(false), &["close"]);
+        assert_eq!(g.pill_buttons(true), &["focus", "close"]);
     }
 
     #[test]
     fn pill_hit_test_matches_the_painted_buttons() {
         let g = ToastGeom::for_dpi(96);
         let (right, top) = (500.0, 20.0);
-        let panes = 2;
+        let panes = true;
         let n = g.pill_buttons(panes).len();
         for (idx, &name) in g.pill_buttons(panes).iter().enumerate() {
             let l = g.button_left(right, n, idx);
@@ -1844,7 +1862,7 @@ mod geometry_tests {
         // Outside the pill hits nothing; a lone pane's pill is fit and close.
         assert_eq!(g.pill_button_at(panes, right, top, right + 1.0, top + 5.0), None);
         assert_eq!(g.pill_button_at(panes, right, top, right - g.pill_width(n) - 1.0, top + 5.0), None);
-        assert_eq!(g.pill_button_at(1, right, top, right - g.pill_width(1) - 1.0, top + 5.0), None);
+        assert_eq!(g.pill_button_at(false, right, top, right - g.pill_width(1) - 1.0, top + 5.0), None);
         assert_eq!(g.pill_width(1), g.width);
     }
 
