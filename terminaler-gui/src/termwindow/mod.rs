@@ -781,6 +781,8 @@ pub struct TermWindow {
     /// were built for. The window's dpi changes after startup (HiDPI), and
     /// configs built before that were half size for good.
     scaled_font_basis: (usize, u64),
+    /// Scaled configs that have adopted the fallback fonts already found.
+    scaled_font_seeded: HashSet<u32>,
 
     window_background: Vec<LoadedBackgroundLayer>,
 
@@ -1245,6 +1247,7 @@ impl TermWindow {
             semantic_zones: HashMap::new(),
             scaled_font_configs: HashMap::new(),
             scaled_font_basis: (0, 0),
+            scaled_font_seeded: HashSet::new(),
             ui_items: vec![],
             dragging: None,
             tab_drag: None,
@@ -5333,6 +5336,7 @@ impl TermWindow {
         );
         if self.scaled_font_basis != basis {
             self.scaled_font_configs.clear();
+            self.scaled_font_seeded.clear();
             self.scaled_font_basis = basis;
         }
         if let Some(entry) = self.scaled_font_configs.get(&key) {
@@ -5364,6 +5368,42 @@ impl TermWindow {
         self.scaled_font_configs
             .insert(key, (Rc::clone(&fonts), metrics));
         (fonts, metrics)
+    }
+
+    /// The scaled config a pane paints with. The first time a scale paints,
+    /// its fonts adopt every fallback font the window font and the other
+    /// scaled configs have found, so a pane at a new size (a split, a fit)
+    /// does not rediscover them glyph by glyph, clearing every pane's shape
+    /// caches and repainting the whole frame each time, during the first
+    /// frames of its animation.
+    pub fn scaled_config_for_paint(&mut self, scale: f64) -> (Rc<FontConfiguration>, RenderMetrics) {
+        let entry = self.get_or_create_scaled_config(scale);
+        let key = Self::font_scale_key(scale);
+        if self.scaled_font_seeded.insert(key) {
+            let start = Instant::now();
+            let mut sources = vec![Rc::clone(&self.fonts)];
+            sources.extend(
+                self.scaled_font_configs
+                    .iter()
+                    .filter(|(k, _)| **k != key)
+                    .map(|(_, (fonts, _))| Rc::clone(fonts)),
+            );
+            let mut added = false;
+            for source in &sources {
+                match entry.0.adopt_fallbacks_from(source) {
+                    Ok(a) => added |= a,
+                    Err(err) => log::warn!("scaled font {:.2}: adopting fallbacks: {:#}", scale, err),
+                }
+            }
+            log::info!(
+                "scaled font {:.2}: adopted fallbacks from {} configs in {:?} (added: {})",
+                scale,
+                sources.len(),
+                start.elapsed(),
+                added
+            );
+        }
+        entry
     }
 
     /// Set a pane's own font scale and remember it for the session file.

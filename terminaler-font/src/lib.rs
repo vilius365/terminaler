@@ -1141,6 +1141,29 @@ impl FontConfiguration {
         self.inner.change_scaling(font_scale, dpi)
     }
 
+    /// Give this configuration's fonts the fallback fonts that `other` has
+    /// already found, style by style. A fresh configuration (the same fonts
+    /// at another size) otherwise rediscovers them one missing glyph at a
+    /// time, and each discovery makes the caller clear its shape caches and
+    /// repaint. Returns whether any font gained a fallback.
+    pub fn adopt_fallbacks_from(&self, other: &FontConfiguration) -> anyhow::Result<bool> {
+        let theirs: Vec<(TextStyle, Vec<ParsedFont>)> = other
+            .inner
+            .fonts
+            .borrow()
+            .iter()
+            .map(|(style, font)| (style.clone(), font.clone_handles()))
+            .collect();
+        let mut added = false;
+        for (style, handles) in theirs {
+            let font = self.resolve_font(&style)?;
+            if font.insert_fallback_handles(handles)? {
+                added = true;
+            }
+        }
+        Ok(added)
+    }
+
     /// Returns the baseline font specified in the configuration
     pub fn default_font(&self) -> anyhow::Result<Rc<LoadedFont>> {
         self.inner.default_font(&self.inner)

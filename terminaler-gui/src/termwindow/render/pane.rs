@@ -1017,7 +1017,7 @@ impl crate::TermWindow {
             orig_fonts = Some(Rc::clone(&self.fonts));
             orig_metrics = Some(self.render_metrics);
 
-            let (pane_fonts, pane_metrics) = self.get_or_create_scaled_config(pane_scale);
+            let (pane_fonts, pane_metrics) = self.scaled_config_for_paint(pane_scale);
             self.fonts = pane_fonts;
             self.render_metrics = pane_metrics;
         } else {
