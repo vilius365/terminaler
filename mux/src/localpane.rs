@@ -449,6 +449,7 @@ impl Pane for LocalPane {
             pixel_width: size.pixel_width.try_into()?,
             pixel_height: size.pixel_height.try_into()?,
         })?;
+        crate::mark_pane_resized(self.pane_id);
         self.terminal.lock().resize(size);
         Ok(())
     }

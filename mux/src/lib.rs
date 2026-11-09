@@ -125,10 +125,40 @@ const BUFSIZE: usize = 1024 * 1024;
 
 /// This function applies parsed actions to the pane and notifies any
 /// mux subscribers about the output event
+/// When each pane's pty was last resized, kept only while
+/// `log_animation_frames` is on, to time how long the program behind the
+/// pane (tmux, the shell, a TUI) takes to redraw after a resize.
+static RESIZE_MARKS: parking_lot::Mutex<Option<HashMap<PaneId, Instant>>> = parking_lot::Mutex::new(None);
+
+pub fn mark_pane_resized(pane_id: PaneId) {
+    if configuration().log_animation_frames {
+        RESIZE_MARKS
+            .lock()
+            .get_or_insert_with(HashMap::new)
+            .insert(pane_id, Instant::now());
+    }
+}
+
+fn resize_mark(pane_id: PaneId, take: bool) -> Option<Duration> {
+    let mut marks = RESIZE_MARKS.lock();
+    let marks = marks.as_mut()?;
+    let at = if take { marks.remove(&pane_id)? } else { *marks.get(&pane_id)? };
+    Some(at.elapsed())
+}
+
 fn send_actions_to_mux(pane: &Weak<dyn Pane>, dead: &Arc<AtomicBool>, actions: Vec<Action>) {
     let start = Instant::now();
     match pane.upgrade() {
         Some(pane) => {
+            if let Some(since) = resize_mark(pane.pane_id(), true) {
+                log::info!(
+                    target: "anim_frames",
+                    "  pane {}: first output {:.1}ms after pty resize ({} actions)",
+                    pane.pane_id(),
+                    since.as_secs_f64() * 1000.0,
+                    actions.len()
+                );
+            }
             pane.perform_actions(actions);
             histogram!("send_actions_to_mux.perform_actions.latency").record(start.elapsed());
             Mux::notify_from_any_thread(MuxNotification::PaneOutput(pane.pane_id()));
@@ -170,6 +200,16 @@ fn parse_buffered_data(pane: Weak<dyn Pane>, dead: &Arc<AtomicBool>, mut rx: Fil
                             DecPrivateModeCode::SynchronizedOutput,
                         )))) => {
                             hold = true;
+                            if let Some(p) = pane.upgrade() {
+                                if let Some(since) = resize_mark(p.pane_id(), false) {
+                                    log::info!(
+                                        target: "anim_frames",
+                                        "  pane {}: sync output begins {:.1}ms after pty resize",
+                                        p.pane_id(),
+                                        since.as_secs_f64() * 1000.0
+                                    );
+                                }
+                            }
 
                             // Flush prior actions
                             if !actions.is_empty() {
