@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-11-10
+
+### Fixed
+- **A widened pane no longer shows magnified text at the start.** After a divider release, the pane shows its old picture until the program redraws. That picture was scaled to cover the new, wider rectangle, so the text grew by the width ratio. The picture now keeps its size and the live pane shows in the strip it does not cover.
+- **Pane resize on homepc.** `split_drag_live_resize` is `true` there, so the program redraws while you drag and no empty strip shows after the release.
+
 ## 2026-11-09
 
 ### Fixed
