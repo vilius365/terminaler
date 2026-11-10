@@ -566,6 +566,29 @@ impl crate::TermWindow {
                         self.dimensions.pixel_height as f32 / 2.0,
                     );
                     layers.transform_since(mark, &tr);
+                    // The picture keeps its size, so a grown pane has a strip
+                    // it does not cover: show the live pane there, clipped to
+                    // the strip, instead of an empty block. The picture sits
+                    // at the target's top left corner.
+                    let (sr, sb) = (target.x + from.w, target.y + from.h);
+                    let (tr_x, tr_y) = (target.x + target.w, target.y + target.h);
+                    let mut strips = Vec::new();
+                    if tr_x - sr >= 1.0 {
+                        strips.push([sr, target.y, tr_x, tr_y]);
+                    }
+                    if tr_y - sb >= 1.0 {
+                        strips.push([target.x, sb, sr.min(tr_x), tr_y]);
+                    }
+                    for clip in strips {
+                        let mark = layers.mark();
+                        self.paint_pane(&pos, &mut layers).context("paint_pane strip")?;
+                        let tr = crate::pane_anim::Transform { dx: 0.0, dy: 0.0, sx: 1.0, sy: 1.0, clip: Some(clip) }
+                            .to_vertex_space(
+                                self.dimensions.pixel_width as f32 / 2.0,
+                                self.dimensions.pixel_height as f32 / 2.0,
+                            );
+                        layers.transform_since(mark, &tr);
+                    }
                     continue;
                 }
             }
