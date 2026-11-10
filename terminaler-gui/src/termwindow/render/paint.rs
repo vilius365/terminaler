@@ -561,7 +561,7 @@ impl crate::TermWindow {
                     .context("held pane background")?;
                     let mark = layers.mark();
                     quads.apply_to(&mut layers).context("apply held pane")?;
-                    let tr = crate::pane_hold::fit_into(&from, &target).to_vertex_space(
+                    let tr = crate::pane_hold::hold_into(&from, &target).to_vertex_space(
                         self.dimensions.pixel_width as f32 / 2.0,
                         self.dimensions.pixel_height as f32 / 2.0,
                     );

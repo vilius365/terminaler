@@ -146,6 +146,21 @@ pub fn fit_into(from: &PxRect, to: &PxRect) -> crate::pane_anim::Transform {
     }
 }
 
+/// Where to draw a held picture of a pane whose divider was released: at its
+/// own size, moved with the pane's top left corner and cropped to `to`. A
+/// divider changes one axis only, so scaling to cover the other axis would
+/// magnify the text by the width (or height) ratio. A wider pane shows its
+/// background in the new strip until the real content replaces the picture.
+pub fn hold_into(from: &PxRect, to: &PxRect) -> crate::pane_anim::Transform {
+    crate::pane_anim::Transform {
+        dx: to.x - from.x,
+        dy: to.y - from.y,
+        sx: 1.0,
+        sy: 1.0,
+        clip: Some([to.x, to.y, to.x + to.w, to.y + to.h]),
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -210,6 +225,22 @@ mod test {
         assert_eq!(ended, vec![(1, Release::Settled, MS(260))]);
         assert_eq!(h.panes(), vec![2]);
         assert_eq!(h.rect(2), Some(r(100.0)));
+    }
+
+    #[test]
+    fn a_held_picture_is_never_magnified_by_a_one_axis_resize() {
+        let from = PxRect { x: 100.0, y: 50.0, w: 400.0, h: 200.0 };
+        // Widened by 50% at the same height: fit_into would scale by 1.5.
+        let wide = PxRect { x: 100.0, y: 50.0, w: 600.0, h: 200.0 };
+        let tr = hold_into(&from, &wide);
+        assert_eq!((tr.sx, tr.sy), (1.0, 1.0));
+        let shown = tr.map(&from);
+        assert_eq!((shown.x, shown.y, shown.w, shown.h), (100.0, 50.0, 400.0, 200.0));
+        assert_eq!(tr.clip, Some([100.0, 50.0, 700.0, 250.0]));
+        // The pane's left edge moved: the picture follows its corner.
+        let moved = PxRect { x: 300.0, y: 50.0, w: 200.0, h: 200.0 };
+        let shown = hold_into(&from, &moved).map(&from);
+        assert_eq!((shown.x, shown.w), (300.0, 400.0));
     }
 
     #[test]
