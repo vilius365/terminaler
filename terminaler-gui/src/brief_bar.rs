@@ -30,6 +30,33 @@ pub struct BriefRow {
     pub active_at: Option<String>,
     pub inferred: Option<bool>,
     pub stale: Option<bool>,
+    /// Claude Code's own lifecycle state from its session file: `busy`,
+    /// `idle` or `shell`. Absent for agents that are not Claude Code.
+    pub state: Option<String>,
+}
+
+/// What a tile's border says about the session behind it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TileState {
+    /// A turn is running.
+    Busy,
+    /// A turn ended and the session waits for input.
+    Idle,
+}
+
+/// The state of the interconnect instance `instance` on `machine`, if the
+/// feed has a row for it with a `busy` or `idle` state. Rows are matched the
+/// same way `sidebar_label` matches them.
+pub fn tile_state(instance: Option<&str>, machine: &str, rows: &[BriefRow]) -> Option<TileState> {
+    let name = instance?;
+    let row = rows
+        .iter()
+        .find(|r| r.name.as_deref() == Some(name) && r.machine.as_deref() == Some(machine))?;
+    match row.state.as_deref() {
+        Some("busy") => Some(TileState::Busy),
+        Some("idle") => Some(TileState::Idle),
+        _ => None,
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -303,6 +330,32 @@ mod tests {
             path: path.map(str::to_string),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn tile_state_reads_busy_and_idle_for_the_matching_row() {
+        let row = |state: Option<&str>| BriefRow {
+            name: Some("witch".into()),
+            machine: Some("devbox".into()),
+            state: state.map(str::to_string),
+            ..Default::default()
+        };
+        let state = |rows: &[BriefRow]| tile_state(Some("witch"), "devbox", rows);
+        assert_eq!(state(&[row(Some("busy"))]), Some(TileState::Busy));
+        assert_eq!(state(&[row(Some("idle"))]), Some(TileState::Idle));
+        // `shell` and a missing state say nothing about a turn.
+        assert_eq!(state(&[row(Some("shell"))]), None);
+        assert_eq!(state(&[row(None)]), None);
+        // Another machine's row, or no instance name, never matches.
+        assert_eq!(tile_state(Some("witch"), "wsl", &[row(Some("busy"))]), None);
+        assert_eq!(tile_state(None, "devbox", &[row(Some("busy"))]), None);
+    }
+
+    #[test]
+    fn parse_rows_keeps_the_state_field() {
+        let rows = parse_rows(r#"[{"name":"a","machine":"devbox","session_id":"s","state":"busy"}]"#)
+            .unwrap();
+        assert_eq!(rows[0].state.as_deref(), Some("busy"));
     }
 
     #[test]

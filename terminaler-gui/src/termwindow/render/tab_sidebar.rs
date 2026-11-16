@@ -688,7 +688,26 @@ impl crate::TermWindow {
                     None => theme.text_tertiary.mul_alpha(dimf),
                 };
                 tile.right_hint = count.map(|c| (c, hint_color));
-                tile.border_color = theme.border_subtle.mul_alpha(dimf);
+                // A session that waits for input is the one to find; persona
+                // sessions idle between dispatches, so idle is not flagged
+                // for them.
+                let turn_state = crate::brief_bar::tile_state(
+                    session
+                        .agent
+                        .as_deref()
+                        .filter(|_| session.agent_is_instance),
+                    machine,
+                    &brief_rows,
+                );
+                tile.border_color = match turn_state {
+                    Some(crate::brief_bar::TileState::Busy) => {
+                        theme.accent_green.mul_alpha(0.6 * dimf)
+                    }
+                    Some(crate::brief_bar::TileState::Idle) if !session.is_persona() => {
+                        theme.accent_yellow.mul_alpha(0.6 * dimf)
+                    }
+                    _ => theme.border_subtle.mul_alpha(dimf),
+                };
                 if session.attachable {
                     tile.item = Some(TabSidebarItem::TmuxSession {
                         box_name: snap.box_name.clone(),
