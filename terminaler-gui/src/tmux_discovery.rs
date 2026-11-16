@@ -266,20 +266,16 @@ fn run_probe(
         // agent type ("claude") wherever one is registered for this session.
         // Also best effort: an unreachable daemon just leaves the type.
         if !instances.is_empty() {
-            let by_session = instances_for_machine(instances, tmux_box.interconnect_machine_name());
-            for session in &mut sessions {
-                if let Some(name) = by_session.get(&session.session) {
-                    session.agent = Some(name.clone());
-                    session.agent_is_instance = true;
-                }
-            }
-            // A renamed session no longer matches the name the instance
-            // registered under; its pane id still does.
-            label_by_pane(
+            let machine = tmux_box.interconnect_machine_name();
+            // The pane an instance registered from is the stronger key: a
+            // session name can be renamed away or reused by another session,
+            // a pane id cannot. Pane matches go first.
+            let placed = label_by_pane(
                 &mut sessions,
                 &pane_sessions,
-                &instances_by_pane(instances, tmux_box.interconnect_machine_name()),
+                &instances_by_pane(instances, machine),
             );
+            label_by_name(&mut sessions, &instances_for_machine(instances, machine), &placed);
         }
     }
 
@@ -797,24 +793,19 @@ fn instances_by_pane(
     by_pane
 }
 
-/// Name the sessions whose registered session name no longer exists, by the
-/// pane the instance registered from. A name match always wins: this only
-/// fills sessions the name lookup left without an instance, and never gives
-/// one instance to a second session.
+/// Name each session after the instance whose registered pane lives in it,
+/// whatever session name that instance registered under. Returns the names of
+/// the instances placed this way. An instance names one session only.
 fn label_by_pane(
     sessions: &mut [TmuxSessionEntry],
     pane_sessions: &std::collections::HashMap<String, String>,
     by_pane: &std::collections::HashMap<String, String>,
-) {
-    let named: std::collections::HashSet<String> = sessions
-        .iter()
-        .filter(|s| s.agent_is_instance)
-        .filter_map(|s| s.agent.clone())
-        .collect();
+) -> std::collections::HashSet<String> {
+    let mut placed = std::collections::HashSet::new();
     let mut panes: Vec<_> = by_pane.iter().collect();
     panes.sort();
     for (pane, name) in panes {
-        if named.contains(name) {
+        if placed.contains(name) {
             continue;
         }
         let Some(session_name) = pane_sessions.get(pane) else {
@@ -826,6 +817,31 @@ fn label_by_pane(
         {
             entry.agent = Some(name.clone());
             entry.agent_is_instance = true;
+            placed.insert(name.clone());
+        }
+    }
+    placed
+}
+
+/// Prefer the interconnect instance name ("witch") over the generic agent
+/// type ("claude") wherever one is registered for this session name. Sessions
+/// already named by pane keep that name, and an instance already placed by
+/// pane is not given a second session.
+fn label_by_name(
+    sessions: &mut [TmuxSessionEntry],
+    by_session: &std::collections::HashMap<String, String>,
+    placed: &std::collections::HashSet<String>,
+) {
+    for session in sessions.iter_mut() {
+        if session.agent_is_instance {
+            continue;
+        }
+        if let Some(name) = by_session.get(&session.session) {
+            if placed.contains(name) {
+                continue;
+            }
+            session.agent = Some(name.clone());
+            session.agent_is_instance = true;
         }
     }
 }
@@ -1001,43 +1017,81 @@ mod tests {
         }
     }
 
+    fn label(
+        sessions: &mut [TmuxSessionEntry],
+        instances: &[InterconnectInstance],
+        panes: &str,
+    ) {
+        let placed = label_by_pane(
+            sessions,
+            &parse_pane_sessions(panes),
+            &instances_by_pane(instances, "devbox"),
+        );
+        label_by_name(sessions, &instances_for_machine(instances, "devbox"), &placed);
+    }
+
+    fn with_pane(mut i: InterconnectInstance, pane: &str) -> InterconnectInstance {
+        i.pane_id = Some(pane.to_string());
+        i
+    }
+
     #[test]
     fn a_renamed_session_is_named_by_its_registered_pane() {
         // ivory registered from pane %227 in `epic-persona-platform`; that
         // session was renamed `board-card-movement` and the registry kept the
         // old name.
-        let mut ivory = inst("ivory", "devbox", "epic-persona-platform", "active");
-        ivory.pane_id = Some("%227".to_string());
-        let by_pane = instances_by_pane(&[ivory], "devbox");
-        let pane_sessions =
-            parse_pane_sessions("claude 9 %227 board-card-movement\nzsh 8 %1 other\n");
+        let ivory = with_pane(inst("ivory", "devbox", "epic-persona-platform", "active"), "%227");
         let mut sessions = vec![entry_named("board-card-movement"), entry_named("other")];
-        label_by_pane(&mut sessions, &pane_sessions, &by_pane);
+        label(
+            &mut sessions,
+            &[ivory],
+            "claude 9 %227 board-card-movement\nzsh 8 %1 other\n",
+        );
         assert_eq!(sessions[0].agent.as_deref(), Some("ivory"));
         assert!(sessions[0].agent_is_instance);
         assert!(!sessions[1].agent_is_instance);
     }
 
     #[test]
-    fn pane_matching_never_overrides_a_name_match_or_reuses_an_instance() {
-        let mut ivory = inst("ivory", "devbox", "x", "active");
-        ivory.pane_id = Some("%227".to_string());
-        let by_pane = instances_by_pane(&[ivory], "devbox");
-        let pane_sessions = parse_pane_sessions("claude 9 %227 a\nclaude 8 %228 b\n");
-        // `a` was already named by session name: the pane pass leaves it.
-        let mut named = entry_named("a");
-        named.agent = Some("witch".to_string());
-        named.agent_is_instance = true;
-        let mut sessions = vec![named, entry_named("b")];
-        label_by_pane(&mut sessions, &pane_sessions, &by_pane);
+    fn a_reused_session_name_does_not_steal_the_old_instance() {
+        // ivory registered as `epic-persona-platform` from pane %227, which is
+        // now in `board-card-movement`. A NEW session took the name
+        // `epic-persona-platform`, and blaze runs in it from pane %234.
+        let ivory = with_pane(inst("ivory", "devbox", "epic-persona-platform", "active"), "%227");
+        let blaze = with_pane(inst("blaze", "devbox", "epic-persona-platform", "active"), "%234");
+        let mut sessions = vec![entry_named("board-card-movement"), entry_named("epic-persona-platform")];
+        label(
+            &mut sessions,
+            &[ivory, blaze],
+            "claude 9 %227 board-card-movement\nclaude 8 %234 epic-persona-platform\n",
+        );
+        assert_eq!(sessions[0].agent.as_deref(), Some("ivory"));
+        assert_eq!(sessions[1].agent.as_deref(), Some("blaze"));
+    }
+
+    #[test]
+    fn the_name_still_matches_when_the_pane_is_gone_or_unknown() {
+        // No pane id registered, or the pane no longer exists: the name decides.
+        let witch = inst("witch", "devbox", "main", "active");
+        let gone = with_pane(inst("lunar", "devbox", "other", "active"), "%99");
+        let mut sessions = vec![entry_named("main"), entry_named("other")];
+        label(&mut sessions, &[witch, gone], "zsh 1 %1 main\nzsh 2 %2 other\n");
         assert_eq!(sessions[0].agent.as_deref(), Some("witch"));
-        assert!(!sessions[1].agent_is_instance, "pane %227 lives in `a`, not `b`");
-        // Another machine's instance, or a dead one, never matches.
-        let mut other = inst("lunar", "home", "x", "active");
-        other.pane_id = Some("%228".to_string());
-        let mut dead = inst("gone", "devbox", "x", "dead");
-        dead.pane_id = Some("%228".to_string());
+        assert_eq!(sessions[1].agent.as_deref(), Some("lunar"));
+    }
+
+    #[test]
+    fn an_instance_names_one_session_and_foreign_instances_are_ignored() {
+        let ivory = with_pane(inst("ivory", "devbox", "x", "active"), "%227");
+        let other = with_pane(inst("lunar", "home", "x", "active"), "%228");
+        let dead = with_pane(inst("gone", "devbox", "x", "dead"), "%228");
         assert!(instances_by_pane(&[other, dead], "devbox").is_empty());
+        // ivory is placed by pane in `a`; its registered name `x` must not
+        // name a second session.
+        let mut sessions = vec![entry_named("a"), entry_named("x")];
+        label(&mut sessions, &[ivory], "claude 9 %227 a\nclaude 8 %5 x\n");
+        assert_eq!(sessions[0].agent.as_deref(), Some("ivory"));
+        assert!(!sessions[1].agent_is_instance);
     }
 
     #[test]
