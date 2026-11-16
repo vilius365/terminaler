@@ -566,22 +566,16 @@ impl crate::TermWindow {
             );
 
             let mut personas_heading: Option<bool> = None;
+            // A collapsed group's heading goes after the sessions the user
+            // started by hand, where the expanded heading would sit, so it is
+            // pushed after the loop below.
+            let collapsed_personas = if personas_collapsed && !personas.is_empty() {
+                Some(personas.len())
+            } else {
+                None
+            };
             let personas_iter: Box<dyn Iterator<Item = &crate::tmux_discovery::TmuxSessionEntry>> =
-                if personas_collapsed && !personas.is_empty() {
-                    if px_used + eyebrow_px <= tile_budget_px {
-                        children.push(sidebar_eyebrow_collapsible(
-                            title_font,
-                            "\u{00b7} personas",
-                            None,
-                            theme,
-                            sidebar_width,
-                            stale,
-                            Some((&personas_group_key, true, personas.len())),
-                        ));
-                        px_used += eyebrow_px;
-                    } else {
-                        tiles_hidden += personas.len();
-                    }
+                if collapsed_personas.is_some() {
                     Box::new(std::iter::empty())
                 } else {
                     Box::new(personas.into_iter())
@@ -731,6 +725,23 @@ impl crate::TermWindow {
                 }
                 children.push(build_tile(tile));
                 px_used += tile_px;
+            }
+
+            if let Some(count) = collapsed_personas {
+                if px_used + eyebrow_px <= tile_budget_px {
+                    children.push(sidebar_eyebrow_collapsible(
+                        title_font,
+                        "\u{00b7} personas",
+                        None,
+                        theme,
+                        sidebar_width,
+                        stale,
+                        Some((&personas_group_key, true, count)),
+                    ));
+                    px_used += eyebrow_px;
+                } else {
+                    tiles_hidden += count;
+                }
             }
         }
 
@@ -2513,7 +2524,9 @@ fn build_tile(a: TileArgs) -> Element {
             top: Dimension::Pixels(1.),
             bottom: Dimension::Pixels(1.),
         })
-        .border_corners(Some(rounded_corners(0.3)))
+        // Square: the rounded corner sprite draws 3-4 px thick and twice as
+        // bright as the 1 px edge, which showed as a box in every corner.
+        .border_corners(None)
         .colors(ElementColors {
             border: BorderColor::new(a.border_color),
             bg: a.bg.into(),

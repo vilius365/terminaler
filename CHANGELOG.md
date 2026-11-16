@@ -3,6 +3,8 @@
 ## 2026-11-16
 
 ### Fixed
+- **Sidebar tiles have square corners.** The rounded corner pieces drew 3 to 4 px thick and twice as bright as the 1 px border, so each tile showed a small box in every corner, and a dark notch beside the left ones. The border is now one clean line.
+- **A collapsed `· personas` group sits below the sessions you started by hand.** It was placed directly under the box heading, above your own sessions. It now sits where the expanded group's heading does.
 - **A renamed tmux session keeps its agent name in the sidebar.** The interconnect registry keeps the session name an agent registered under, so renaming the session left its tile labelled with the generic `claude` and without the epic label or state marker. The tile is now also matched by the tmux pane id the agent registered from, which a rename does not change. A match by session name still wins.
 
 ### Added
