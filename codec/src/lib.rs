@@ -441,7 +441,7 @@ macro_rules! pdu {
 /// The overall version of the codec.
 /// This must be bumped when backwards incompatible changes
 /// are made to the types and protocol.
-pub const CODEC_VERSION: usize = 45;
+pub const CODEC_VERSION: usize = 46;
 
 // Defines the Pdu enum.
 // Each struct has an explicit identifying number.
@@ -502,6 +502,8 @@ pdu! {
     GetPaneDirection: 60,
     GetPaneDirectionResponse: 61,
     AdjustPaneSize: 62,
+    GetPaneUserVars: 63,
+    GetPaneUserVarsResponse: 64,
 }
 
 impl Pdu {
@@ -874,6 +876,18 @@ pub struct AdjustPaneSize {
     pub pane_id: PaneId,
     pub direction: PaneDirection,
     pub amount: usize,
+}
+
+/// Ask the pane's owner for its user variables (the OSC 1337 `SetUserVar`
+/// values, such as `claude_status`).
+#[derive(Deserialize, Serialize, PartialEq, Debug)]
+pub struct GetPaneUserVars {
+    pub pane_id: PaneId,
+}
+
+#[derive(Deserialize, Serialize, PartialEq, Debug)]
+pub struct GetPaneUserVarsResponse {
+    pub user_vars: HashMap<String, String>,
 }
 
 #[derive(Deserialize, Serialize, PartialEq, Debug)]

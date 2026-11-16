@@ -1087,5 +1087,6 @@ impl Client {
         GetPaneDirectionResponse
     );
     rpc!(adjust_pane_size, AdjustPaneSize, UnitResponse);
+    rpc!(get_pane_user_vars, GetPaneUserVars, GetPaneUserVarsResponse);
     rpc!(notify_alert, NotifyAlert, UnitResponse);
 }

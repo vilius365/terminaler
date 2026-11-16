@@ -7,6 +7,7 @@ mod activate_pane;
 mod activate_pane_direction;
 mod activate_tab;
 mod adjust_pane_size;
+mod agent;
 mod get_pane_direction;
 mod get_text;
 mod kill_pane;
@@ -166,6 +167,10 @@ Outputs the pane-id for the newly created pane on success"
     #[command(name = "rename-workspace", rename_all = "kebab")]
     RenameWorkspace(rename_workspace::RenameWorkspace),
 
+    /// Read or wait on the state of the Claude Code session in a pane
+    #[command(name = "agent", rename_all = "kebab")]
+    Agent(agent::AgentCommand),
+
     /// Zoom, unzoom, or toggle zoom state
     #[command(name = "zoom-pane", rename_all = "kebab")]
     ZoomPane(zoom_pane::ZoomPane),
@@ -205,6 +210,7 @@ async fn run_cli_async(opts: &crate::Opt, cli: CliCommand) -> anyhow::Result<()>
         CliSubCommand::SetTabTitle(cmd) => cmd.run(client).await,
         CliSubCommand::SetWindowTitle(cmd) => cmd.run(client).await,
         CliSubCommand::RenameWorkspace(cmd) => cmd.run(client).await,
+        CliSubCommand::Agent(cmd) => cmd.run(client).await,
         CliSubCommand::ZoomPane(cmd) => cmd.run(client).await,
     }
 }

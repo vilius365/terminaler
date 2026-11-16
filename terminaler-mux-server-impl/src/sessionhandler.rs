@@ -610,6 +610,24 @@ impl SessionHandler {
                 .detach();
             }
 
+            Pdu::GetPaneUserVars(GetPaneUserVars { pane_id }) => {
+                spawn_into_main_thread(async move {
+                    catch(
+                        move || {
+                            let mux = Mux::get();
+                            let pane = mux
+                                .get_pane(pane_id)
+                                .ok_or_else(|| anyhow!("no such pane {}", pane_id))?;
+                            Ok(Pdu::GetPaneUserVarsResponse(GetPaneUserVarsResponse {
+                                user_vars: pane.copy_user_vars(),
+                            }))
+                        },
+                        send_response,
+                    )
+                })
+                .detach();
+            }
+
             Pdu::ActivatePaneDirection(ActivatePaneDirection { pane_id, direction }) => {
                 spawn_into_main_thread(async move {
                     catch(
@@ -1002,6 +1020,7 @@ impl SessionHandler {
             | Pdu::UnitResponse { .. }
             | Pdu::LivenessResponse { .. }
             | Pdu::GetPaneDirectionResponse { .. }
+            | Pdu::GetPaneUserVarsResponse { .. }
             | Pdu::SearchScrollbackResponse { .. }
             | Pdu::GetLinesResponse { .. }
             | Pdu::GetCodecVersionResponse { .. }
