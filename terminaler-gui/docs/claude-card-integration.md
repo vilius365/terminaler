@@ -39,7 +39,7 @@ Claude Code session (in a pane)
   │
   ├─ Terminal emulator stores user vars per-pane
   │
-  └─ Terminaler polls pane.copy_user_vars() every 2s
+  └─ Terminaler reacts to each SetUserVar event (`emit_user_var_event`, termwindow/mod.rs) and re-reads pane.copy_user_vars()
       └─ Renders Claude Card in sidebar
 ```
 
