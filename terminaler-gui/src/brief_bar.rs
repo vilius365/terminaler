@@ -463,6 +463,7 @@ mod tests {
             },
             tmux_command: "tmux".to_string(),
             interconnect_machine: machine.map(str::to_string),
+            session_agents: Default::default(),
             enabled: true,
         }
     }
@@ -475,6 +476,7 @@ mod tests {
             agent: Some(agent.to_string()),
             agent_is_instance: instance,
             attachable,
+            ..Default::default()
         }
     }
 

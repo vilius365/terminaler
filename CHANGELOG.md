@@ -2,6 +2,9 @@
 
 ## 2026-11-16
 
+### Added
+- **Sidebar tiles show the right icon for what runs in the session.** A session that runs no agent shows a terminal prompt `❯` and the name of the program in it (`baresip`), not the empty-box placeholder. Hermes sessions show `☿` and Codex sessions `◈`; Claude and other agents keep `⇄`. The kind of agent comes from the interconnect registry for named agents, from the process name otherwise, and from the new per-box `session_agents` setting for sessions neither can identify, for example `"session_agents": { "infra-agent": "hermes" }`.
+
 ### Fixed
 - **Sidebar tiles have square corners.** The rounded corner pieces drew 3 to 4 px thick and twice as bright as the 1 px border, so each tile showed a small box in every corner, and a dark notch beside the left ones. The border is now one clean line.
 - **A collapsed `· personas` group sits below the sessions you started by hand.** It was placed directly under the box heading, above your own sessions. It now sits where the expanded group's heading does.

@@ -74,6 +74,14 @@ pub struct TmuxBox {
     #[dynamic(default)]
     pub interconnect_machine: Option<String>,
 
+    /// Sessions the sidebar cannot recognise by their process, mapped to the
+    /// agent that runs in them, for example `{"infra-agent": "hermes"}`. The
+    /// tile then shows that agent's icon and name. Known names: `hermes`,
+    /// `codex`, `claude`; any other text is shown as given with the plain
+    /// agent icon.
+    #[dynamic(default)]
+    pub session_agents: std::collections::HashMap<String, String>,
+
     #[dynamic(default = "default_true")]
     pub enabled: bool,
 }
@@ -516,6 +524,7 @@ mod tests {
             },
             tmux_command: default_tmux_command(),
             interconnect_machine: None,
+            session_agents: Default::default(),
             enabled: true,
         }
     }
@@ -563,6 +572,7 @@ mod tests {
             connection: TmuxConnection::Wsl { distribution: None },
             tmux_command: default_tmux_command(),
             interconnect_machine: None,
+            session_agents: Default::default(),
             enabled: true,
         };
         assert_eq!(
@@ -601,6 +611,7 @@ mod tests {
             connection: TmuxConnection::Wsl { distribution: None },
             tmux_command: default_tmux_command(),
             interconnect_machine: None,
+            session_agents: Default::default(),
             enabled: true,
         };
         // No remote shell: tmux `;` command chaining, current window only.
@@ -626,6 +637,7 @@ mod tests {
             },
             tmux_command: default_tmux_command(),
             interconnect_machine: None,
+            session_agents: Default::default(),
             enabled: true,
         };
         assert_eq!(
@@ -651,6 +663,7 @@ mod tests {
             },
             tmux_command: default_tmux_command(),
             interconnect_machine: None,
+            session_agents: Default::default(),
             enabled: true,
         };
         assert_eq!(
@@ -668,6 +681,7 @@ mod tests {
             },
             tmux_command: "/usr/bin/tmux".to_string(),
             interconnect_machine: None,
+            session_agents: Default::default(),
             enabled: true,
         };
         let argv = b.attach_argv("main");

@@ -26,7 +26,7 @@ pub enum BoxStatus {
     RegistryOnly,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TmuxSessionEntry {
     pub session: String,
     pub windows: u32,
@@ -45,6 +45,13 @@ pub struct TmuxSessionEntry {
     /// configured transport, so there is no way to run `tmux attach` on it.
     /// The UI lists these but explains why selecting them cannot attach.
     pub attachable: bool,
+    /// The kind of agent in the session (`claude`, `codex`, `hermes`, ...),
+    /// from the config mapping, the registry, or the process name, in that
+    /// order. Picks the tile icon.
+    pub runtime: Option<String>,
+    /// The foreground program of the session's first pane that is not a
+    /// shell, shown on tiles that run no agent (`baresip`).
+    pub command: Option<String>,
 }
 
 impl TmuxSessionEntry {
@@ -247,8 +254,11 @@ fn run_probe(
         match run_tmux(&argv, timeout_secs) {
             Ok(Some(stdout)) => {
                 let agents = parse_session_agents(&stdout);
+                let commands = parse_session_commands(&stdout);
                 for session in &mut sessions {
                     session.agent = agents.get(&session.session).cloned();
+                    session.runtime = session.agent.clone();
+                    session.command = commands.get(&session.session).cloned();
                 }
                 pane_sessions = parse_pane_sessions(&stdout);
             }
@@ -276,7 +286,9 @@ fn run_probe(
                 &instances_by_pane(instances, machine),
             );
             label_by_name(&mut sessions, &instances_for_machine(instances, machine), &placed);
+            apply_instance_runtimes(&mut sessions, instances, machine);
         }
+        apply_session_agents(&mut sessions, &tmux_box.session_agents);
     }
 
     Ok(sessions)
@@ -417,6 +429,8 @@ fn parse_list_sessions(stdout: &str) -> Vec<TmuxSessionEntry> {
                 agent_is_instance: false,
                 // Came from a real probe, so the box has a working transport.
                 attachable: true,
+                runtime: None,
+                command: None,
             })
         })
         .collect()
@@ -437,6 +451,9 @@ struct InterconnectInstance {
     /// `tmux_session`, it survives a session rename.
     #[serde(default)]
     pane_id: Option<String>,
+    /// `claude`, `codex`, `hermes`, ... as the daemon records it.
+    #[serde(default)]
+    agent_runtime: Option<String>,
     #[serde(default)]
     status: Option<String>,
 }
@@ -645,6 +662,8 @@ fn registry_only_snapshots(
                 agent: Some(inst.instance_id.clone()),
                 agent_is_instance: true,
                 attachable: false,
+                runtime: inst.agent_runtime.clone().filter(|r| !r.is_empty()),
+                command: None,
             });
     }
 
@@ -741,6 +760,68 @@ fn parse_pane_line(line: &str) -> Option<(&str, &str, &str)> {
         return None;
     }
     Some((command, pane_id, session))
+}
+
+/// Programs that mean "an idle shell", not what the session is for.
+const SHELLS: &[&str] = &["bash", "zsh", "sh", "fish", "dash", "tmux"];
+
+/// The foreground program of each session's first pane that runs something
+/// other than a shell, for tiles that run no agent.
+fn parse_session_commands(stdout: &str) -> std::collections::HashMap<String, String> {
+    let mut commands = std::collections::HashMap::new();
+    for line in stdout.lines() {
+        let Some((command, _pane_id, session)) = parse_pane_line(line) else {
+            continue;
+        };
+        let base = command.rsplit(['/', '\\']).next().unwrap_or(command);
+        if base.is_empty() || SHELLS.contains(&base) {
+            continue;
+        }
+        commands
+            .entry(session.to_string())
+            .or_insert_with(|| base.to_string());
+    }
+    commands
+}
+
+/// A session named after a registry instance takes that instance's runtime
+/// (`codex`, `hermes`), which says more than the process name.
+fn apply_instance_runtimes(
+    sessions: &mut [TmuxSessionEntry],
+    instances: &[InterconnectInstance],
+    machine: &str,
+) {
+    for session in sessions.iter_mut().filter(|s| s.agent_is_instance) {
+        let runtime = instances
+            .iter()
+            .find(|i| {
+                i.machine.as_deref() == Some(machine)
+                    && Some(&i.instance_id) == session.agent.as_ref()
+            })
+            .and_then(|i| i.agent_runtime.clone())
+            .filter(|r| !r.is_empty());
+        if runtime.is_some() {
+            session.runtime = runtime;
+        }
+    }
+}
+
+/// The user's `session_agents` mapping decides for sessions the process name
+/// cannot identify. It wins over everything, and gives a session that showed
+/// no agent the mapped name.
+fn apply_session_agents(
+    sessions: &mut [TmuxSessionEntry],
+    mapping: &std::collections::HashMap<String, String>,
+) {
+    for session in sessions.iter_mut() {
+        let Some(agent) = mapping.get(&session.session).filter(|a| !a.is_empty()) else {
+            continue;
+        };
+        session.runtime = Some(agent.clone());
+        if session.agent.is_none() {
+            session.agent = Some(agent.clone());
+        }
+    }
 }
 
 /// Returns the agent label per session; the first agent pane found in a
@@ -970,6 +1051,7 @@ mod tests {
             agent: agent.map(str::to_string),
             agent_is_instance: is_instance,
             attachable: true,
+            ..Default::default()
         };
         assert!(entry(Some("ol-vault"), true).is_persona());
         // A bare word is a session started by hand, not by persona.sh.
@@ -1002,6 +1084,7 @@ mod tests {
             tmux_session: Some(session.to_string()),
             tmux_window: None,
             pane_id: None,
+            agent_runtime: None,
             status: Some(status.to_string()),
         }
     }
@@ -1014,6 +1097,7 @@ mod tests {
             agent: Some("claude".to_string()),
             agent_is_instance: false,
             attachable: true,
+            ..Default::default()
         }
     }
 
@@ -1095,6 +1179,47 @@ mod tests {
     }
 
     #[test]
+    fn commands_skip_shells_and_keep_the_first_program() {
+        let cmds = parse_session_commands(
+            "zsh 1 %1 bs\nbaresip 2 %2 bs\nvim 3 %3 bs\nbash 4 %4 plain\nssh 5 %5 infra agent\n",
+        );
+        assert_eq!(cmds.get("bs").map(String::as_str), Some("baresip"));
+        assert_eq!(cmds.get("plain"), None);
+        assert_eq!(cmds.get("infra agent").map(String::as_str), Some("ssh"));
+    }
+
+    #[test]
+    fn session_agents_mapping_names_a_session_the_process_cannot() {
+        let mut sessions = vec![TmuxSessionEntry { session: "infra-agent".into(), ..Default::default() },
+                                TmuxSessionEntry { session: "bs".into(), ..Default::default() }];
+        let mut map = std::collections::HashMap::new();
+        map.insert("infra-agent".to_string(), "hermes".to_string());
+        apply_session_agents(&mut sessions, &map);
+        assert_eq!(sessions[0].agent.as_deref(), Some("hermes"));
+        assert_eq!(sessions[0].runtime.as_deref(), Some("hermes"));
+        assert_eq!(sessions[1].agent, None);
+        assert_eq!(sessions[1].runtime, None);
+        // It wins over the process-derived runtime but keeps an instance name.
+        let mut named = vec![TmuxSessionEntry {
+            session: "infra-agent".into(), agent: Some("karma".into()), agent_is_instance: true,
+            runtime: Some("claude".into()), ..Default::default() }];
+        apply_session_agents(&mut named, &map);
+        assert_eq!(named[0].agent.as_deref(), Some("karma"));
+        assert_eq!(named[0].runtime.as_deref(), Some("hermes"));
+    }
+
+    #[test]
+    fn a_named_session_takes_its_instances_runtime() {
+        let mut i = inst("karma", "devbox", "s", "active");
+        i.agent_runtime = Some("codex".to_string());
+        let mut sessions = vec![TmuxSessionEntry {
+            session: "s".into(), agent: Some("karma".into()), agent_is_instance: true,
+            runtime: Some("claude".into()), ..Default::default() }];
+        apply_instance_runtimes(&mut sessions, &[i], "devbox");
+        assert_eq!(sessions[0].runtime.as_deref(), Some("codex"));
+    }
+
+    #[test]
     fn instances_are_scoped_to_their_machine() {
         // Same session name on two boxes must not cross-label: `%0` on wsl
         // and on devbox are different instances.
@@ -1125,6 +1250,7 @@ mod tests {
                 tmux_session: Some("live".to_string()),
                 tmux_window: None,
                 pane_id: None,
+                agent_runtime: None,
                 status: None,
             },
         ];
@@ -1159,6 +1285,7 @@ mod tests {
                 tmux_session: Some("s".to_string()),
                 tmux_window: None,
                 pane_id: None,
+                agent_runtime: None,
                 status: None,
             },
             inst("live", "devbox", "s", "active"),
@@ -1300,6 +1427,7 @@ mod tests {
             tmux_session: session.map(|s| s.to_string()),
             tmux_window: window.map(|w| w.to_string()),
             pane_id: None,
+            agent_runtime: None,
             status: status.map(|s| s.to_string()),
         }
     }

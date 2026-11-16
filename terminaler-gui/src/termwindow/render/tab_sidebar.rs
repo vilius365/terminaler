@@ -613,9 +613,12 @@ impl crate::TermWindow {
                 // takes the label line; the agent name is metadata and rides
                 // the icon line (user feedback: agent name alone is not
                 // enough). A named interconnect instance stays orange.
+                // The agent's own icon where it has one; a session running
+                // no agent gets a terminal prompt and its program's name.
+                let glyph = runtime_glyph(session.runtime.as_deref());
                 let (icon, icon_color, agent_line) = if session.agent_is_instance {
                     (
-                        "\u{21c4}", // ⇄ matches the statusline's instance marker
+                        glyph.unwrap_or("\u{21c4}"), // ⇄ matches the statusline's instance marker
                         theme.accent_orange,
                         session
                             .agent
@@ -623,9 +626,20 @@ impl crate::TermWindow {
                             .map(|a| (a, theme.accent_orange)),
                     )
                 } else if let Some(agent) = session.agent.clone() {
-                    ("\u{21c4}", theme.text_secondary, Some((agent, theme.text_secondary)))
+                    (
+                        glyph.unwrap_or("\u{21c4}"),
+                        theme.text_secondary,
+                        Some((agent, theme.text_secondary)),
+                    )
                 } else {
-                    ("\u{25a3}", theme.text_tertiary, None) // ▣
+                    (
+                        "\u{276f}", // ❯
+                        theme.text_tertiary,
+                        session
+                            .command
+                            .clone()
+                            .map(|c| (c, theme.text_tertiary)),
+                    )
                 };
                 let machine = self
                     .config
@@ -2088,6 +2102,16 @@ fn find_git_branch_uncached(path: &str) -> Option<String> {
     None
 }
 
+/// The tile icon for an agent kind that has its own; `None` keeps the generic
+/// agent icon (Claude and anything unknown).
+fn runtime_glyph(runtime: Option<&str>) -> Option<&'static str> {
+    match runtime?.to_ascii_lowercase().as_str() {
+        "hermes" => Some("\u{263f}"), // ☿ Mercury, the messenger
+        "codex" => Some("\u{25c8}"),  // ◈
+        _ => None,
+    }
+}
+
 /// Uniform rounded-corner set for tiles and the flyout.
 fn rounded_corners(size: f32) -> Corners {
     Corners {
@@ -2203,6 +2227,16 @@ pub(crate) fn connector_label_from_argv(argv: &[String]) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn runtime_glyph_covers_hermes_and_codex_only() {
+        assert_eq!(super::runtime_glyph(Some("hermes")), Some("\u{263f}"));
+        assert_eq!(super::runtime_glyph(Some("Codex")), Some("\u{25c8}"));
+        // Claude and unknown agents keep the generic agent icon.
+        assert_eq!(super::runtime_glyph(Some("claude")), None);
+        assert_eq!(super::runtime_glyph(Some("aider")), None);
+        assert_eq!(super::runtime_glyph(None), None);
+    }
+
     use super::connector_label_from_argv;
 
     fn argv(s: &str) -> Vec<String> {
