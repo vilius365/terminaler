@@ -2,6 +2,9 @@
 
 ## 2026-11-16
 
+### Fixed
+- **A renamed tmux session keeps its agent name in the sidebar.** The interconnect registry keeps the session name an agent registered under, so renaming the session left its tile labelled with the generic `claude` and without the epic label or state marker. The tile is now also matched by the tmux pane id the agent registered from, which a rename does not change. A match by session name still wins.
+
 ### Added
 - **Sidebar tiles show whether a session is working or waiting.** A tile for a Claude Code session, including one on another machine, gets a green border and dot while a turn runs and a yellow border and dot while it waits for input. The state comes from the `state` field of the brief feed (Claude's own session file). Persona sessions are not flagged when idle, because they idle between dispatches. The feed has no "blocked on a permission prompt" state, so that case still reads as waiting.
 - **`terminaler cli agent list` and `terminaler cli agent wait`.** `list` prints each pane that runs a Claude Code session with its state (`working`, `blocked`, `idle`, `error`), as a table or `--format json`. `wait --pane-id N --until <state> [--timeout SECS]` returns when the pane reaches the state, at once if it already has, and exits non-zero on timeout. Both read the `claude_status` variable the Claude Code hook sets, so they follow Claude's lifecycle events and not the screen. This needs a new mux request, `GetPaneUserVars`, so the GUI, the mux server and the CLI must all be rebuilt (codec version 46).

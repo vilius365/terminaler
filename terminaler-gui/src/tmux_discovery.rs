@@ -239,6 +239,7 @@ fn run_probe(
         None => return Ok(vec![]),
     };
 
+    let mut pane_sessions = std::collections::HashMap::new();
     if !sessions.is_empty() {
         // Best effort: a failing pane scan leaves the agent column blank
         // rather than downgrading an otherwise reachable box.
@@ -249,6 +250,7 @@ fn run_probe(
                 for session in &mut sessions {
                     session.agent = agents.get(&session.session).cloned();
                 }
+                pane_sessions = parse_pane_sessions(&stdout);
             }
             Ok(None) => {}
             Err(err) => {
@@ -271,6 +273,13 @@ fn run_probe(
                     session.agent_is_instance = true;
                 }
             }
+            // A renamed session no longer matches the name the instance
+            // registered under; its pane id still does.
+            label_by_pane(
+                &mut sessions,
+                &pane_sessions,
+                &instances_by_pane(instances, tmux_box.interconnect_machine_name()),
+            );
         }
     }
 
@@ -428,6 +437,10 @@ struct InterconnectInstance {
     tmux_session: Option<String>,
     #[serde(default)]
     tmux_window: Option<String>,
+    /// tmux pane id (`%227`) recorded at registration. Unlike
+    /// `tmux_session`, it survives a session rename.
+    #[serde(default)]
+    pane_id: Option<String>,
     #[serde(default)]
     status: Option<String>,
 }
@@ -720,24 +733,28 @@ const AGENT_COMMANDS: &[(&str, &str)] = &[
     ("cursor-agent", "cursor"),
 ];
 
-/// Parse `list-panes -a` output in `TmuxBox::LIST_PANES_FORMAT` order:
-/// command, pid, then the session name (name-last, hence `splitn`).
+/// One line of `list-panes -a` output in `TmuxBox::LIST_PANES_FORMAT` order:
+/// command, pid, pane id, then the session name (name-last, hence `splitn`).
+fn parse_pane_line(line: &str) -> Option<(&str, &str, &str)> {
+    let mut parts = line.splitn(4, ' ');
+    let command = parts.next()?;
+    let _pid = parts.next()?;
+    let pane_id = parts.next()?;
+    let session = parts.next().map(str::trim)?;
+    if session.is_empty() {
+        return None;
+    }
+    Some((command, pane_id, session))
+}
+
 /// Returns the agent label per session; the first agent pane found in a
 /// session wins, and sessions running no agent are absent from the map.
 fn parse_session_agents(stdout: &str) -> std::collections::HashMap<String, String> {
     let mut agents = std::collections::HashMap::new();
     for line in stdout.lines() {
-        let mut parts = line.splitn(3, ' ');
-        let Some(command) = parts.next() else {
+        let Some((command, _pane_id, session)) = parse_pane_line(line) else {
             continue;
         };
-        let Some(_pid) = parts.next() else { continue };
-        let Some(session) = parts.next().map(str::trim) else {
-            continue;
-        };
-        if session.is_empty() {
-            continue;
-        }
         if let Some(label) = agent_label(command) {
             agents
                 .entry(session.to_string())
@@ -745,6 +762,72 @@ fn parse_session_agents(stdout: &str) -> std::collections::HashMap<String, Strin
         }
     }
     agents
+}
+
+/// The session each pane is in, for every pane on the box.
+fn parse_pane_sessions(stdout: &str) -> std::collections::HashMap<String, String> {
+    stdout
+        .lines()
+        .filter_map(parse_pane_line)
+        .map(|(_, pane_id, session)| (pane_id.to_string(), session.to_string()))
+        .collect()
+}
+
+/// Instance name per tmux pane id, for the instances registered on `machine`
+/// that a rename has parted from their registered session name.
+fn instances_by_pane(
+    instances: &[InterconnectInstance],
+    machine: &str,
+) -> std::collections::HashMap<String, String> {
+    let mut by_pane = std::collections::HashMap::new();
+    for inst in instances {
+        if inst.machine.as_deref() != Some(machine)
+            || matches!(inst.status.as_deref(), Some("dead") | Some("inactive"))
+            || inst.instance_id.is_empty()
+        {
+            continue;
+        }
+        let Some(pane) = inst.pane_id.as_deref().filter(|p| p.starts_with('%')) else {
+            continue;
+        };
+        by_pane
+            .entry(pane.to_string())
+            .or_insert_with(|| inst.instance_id.clone());
+    }
+    by_pane
+}
+
+/// Name the sessions whose registered session name no longer exists, by the
+/// pane the instance registered from. A name match always wins: this only
+/// fills sessions the name lookup left without an instance, and never gives
+/// one instance to a second session.
+fn label_by_pane(
+    sessions: &mut [TmuxSessionEntry],
+    pane_sessions: &std::collections::HashMap<String, String>,
+    by_pane: &std::collections::HashMap<String, String>,
+) {
+    let named: std::collections::HashSet<String> = sessions
+        .iter()
+        .filter(|s| s.agent_is_instance)
+        .filter_map(|s| s.agent.clone())
+        .collect();
+    let mut panes: Vec<_> = by_pane.iter().collect();
+    panes.sort();
+    for (pane, name) in panes {
+        if named.contains(name) {
+            continue;
+        }
+        let Some(session_name) = pane_sessions.get(pane) else {
+            continue;
+        };
+        if let Some(entry) = sessions
+            .iter_mut()
+            .find(|s| &s.session == session_name && !s.agent_is_instance)
+        {
+            entry.agent = Some(name.clone());
+            entry.agent_is_instance = true;
+        }
+    }
 }
 
 /// Map a `pane_current_command` value to an agent label, if it is one.
@@ -883,10 +966,10 @@ mod tests {
     #[test]
     fn parses_agents_from_pane_list() {
         // Session names may contain spaces; only agent panes are recorded.
-        let out = "zsh 101 dark-factory\n\
-                   claude 102 dark-factory\n\
-                   vim 103 build\n\
-                   codex 104 invade team toolkit\n";
+        let out = "zsh 101 %1 dark-factory\n\
+                   claude 102 %2 dark-factory\n\
+                   vim 103 %3 build\n\
+                   codex 104 %4 invade team toolkit\n";
         let agents = parse_session_agents(out);
         assert_eq!(agents.get("dark-factory").map(String::as_str), Some("claude"));
         assert_eq!(
@@ -902,8 +985,59 @@ mod tests {
             machine: Some(machine.to_string()),
             tmux_session: Some(session.to_string()),
             tmux_window: None,
+            pane_id: None,
             status: Some(status.to_string()),
         }
+    }
+
+    fn entry_named(session: &str) -> TmuxSessionEntry {
+        TmuxSessionEntry {
+            session: session.to_string(),
+            windows: 1,
+            attached: false,
+            agent: Some("claude".to_string()),
+            agent_is_instance: false,
+            attachable: true,
+        }
+    }
+
+    #[test]
+    fn a_renamed_session_is_named_by_its_registered_pane() {
+        // ivory registered from pane %227 in `epic-persona-platform`; that
+        // session was renamed `board-card-movement` and the registry kept the
+        // old name.
+        let mut ivory = inst("ivory", "devbox", "epic-persona-platform", "active");
+        ivory.pane_id = Some("%227".to_string());
+        let by_pane = instances_by_pane(&[ivory], "devbox");
+        let pane_sessions =
+            parse_pane_sessions("claude 9 %227 board-card-movement\nzsh 8 %1 other\n");
+        let mut sessions = vec![entry_named("board-card-movement"), entry_named("other")];
+        label_by_pane(&mut sessions, &pane_sessions, &by_pane);
+        assert_eq!(sessions[0].agent.as_deref(), Some("ivory"));
+        assert!(sessions[0].agent_is_instance);
+        assert!(!sessions[1].agent_is_instance);
+    }
+
+    #[test]
+    fn pane_matching_never_overrides_a_name_match_or_reuses_an_instance() {
+        let mut ivory = inst("ivory", "devbox", "x", "active");
+        ivory.pane_id = Some("%227".to_string());
+        let by_pane = instances_by_pane(&[ivory], "devbox");
+        let pane_sessions = parse_pane_sessions("claude 9 %227 a\nclaude 8 %228 b\n");
+        // `a` was already named by session name: the pane pass leaves it.
+        let mut named = entry_named("a");
+        named.agent = Some("witch".to_string());
+        named.agent_is_instance = true;
+        let mut sessions = vec![named, entry_named("b")];
+        label_by_pane(&mut sessions, &pane_sessions, &by_pane);
+        assert_eq!(sessions[0].agent.as_deref(), Some("witch"));
+        assert!(!sessions[1].agent_is_instance, "pane %227 lives in `a`, not `b`");
+        // Another machine's instance, or a dead one, never matches.
+        let mut other = inst("lunar", "home", "x", "active");
+        other.pane_id = Some("%228".to_string());
+        let mut dead = inst("gone", "devbox", "x", "dead");
+        dead.pane_id = Some("%228".to_string());
+        assert!(instances_by_pane(&[other, dead], "devbox").is_empty());
     }
 
     #[test]
@@ -936,6 +1070,7 @@ mod tests {
                 machine: Some("devbox".to_string()),
                 tmux_session: Some("live".to_string()),
                 tmux_window: None,
+                pane_id: None,
                 status: None,
             },
         ];
@@ -969,6 +1104,7 @@ mod tests {
                 machine: Some("devbox".to_string()),
                 tmux_session: Some("s".to_string()),
                 tmux_window: None,
+                pane_id: None,
                 status: None,
             },
             inst("live", "devbox", "s", "active"),
@@ -1109,6 +1245,7 @@ mod tests {
             machine: Some(machine.to_string()),
             tmux_session: session.map(|s| s.to_string()),
             tmux_window: window.map(|w| w.to_string()),
+            pane_id: None,
             status: status.map(|s| s.to_string()),
         }
     }

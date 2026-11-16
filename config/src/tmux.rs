@@ -115,9 +115,10 @@ impl TmuxBox {
     /// `list-panes -a` walks every pane on the box in one round trip; the
     /// command comes first and the session name LAST for the same
     /// spaces-in-names reason as `LIST_SESSIONS_FORMAT` (parse with
-    /// `splitn(3, ' ')`).
+    /// `splitn(4, ' ')`). The pane id (`%227`) survives a session rename,
+    /// which the interconnect registry's stored session name does not.
     pub const LIST_PANES_FORMAT: &'static str =
-        "#{pane_current_command} #{pane_pid} #{session_name}";
+        "#{pane_current_command} #{pane_pid} #{pane_id} #{session_name}";
 
     pub fn list_sessions_argv(&self, connect_timeout_secs: u64) -> Vec<String> {
         self.discovery_argv(
@@ -551,7 +552,7 @@ mod tests {
         let argv = ssh_box().list_panes_argv(5);
         assert_eq!(
             argv.last().unwrap(),
-            "tmux list-panes -a -F '#{pane_current_command} #{pane_pid} #{session_name}'"
+            "tmux list-panes -a -F '#{pane_current_command} #{pane_pid} #{pane_id} #{session_name}'"
         );
     }
 
@@ -573,7 +574,7 @@ mod tests {
                 "list-panes",
                 "-a",
                 "-F",
-                "#{pane_current_command} #{pane_pid} #{session_name}",
+                "#{pane_current_command} #{pane_pid} #{pane_id} #{session_name}",
             ]
         );
     }
