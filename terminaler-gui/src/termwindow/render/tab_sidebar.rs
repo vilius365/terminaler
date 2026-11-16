@@ -683,11 +683,6 @@ impl crate::TermWindow {
                 tile.icon_label = agent_line.map(|(t, c)| (t, c.mul_alpha(dimf)));
                 tile.label = label;
                 tile.label_color = label_color.mul_alpha(dimf);
-                let hint_color = match unit_mark {
-                    Some((_, key)) => crate::agent_color::unit_ring_color(key, true),
-                    None => theme.text_tertiary.mul_alpha(dimf),
-                };
-                tile.right_hint = count.map(|c| (c, hint_color));
                 // A session that waits for input is the one to find; persona
                 // sessions idle between dispatches, so idle is not flagged
                 // for them.
@@ -699,14 +694,33 @@ impl crate::TermWindow {
                     machine,
                     &brief_rows,
                 );
-                tile.border_color = match turn_state {
-                    Some(crate::brief_bar::TileState::Busy) => {
-                        theme.accent_green.mul_alpha(0.6 * dimf)
-                    }
+                let state_color = match turn_state {
+                    Some(crate::brief_bar::TileState::Busy) => Some(theme.accent_green),
                     Some(crate::brief_bar::TileState::Idle) if !session.is_persona() => {
-                        theme.accent_yellow.mul_alpha(0.6 * dimf)
+                        Some(theme.accent_yellow)
                     }
-                    _ => theme.border_subtle.mul_alpha(dimf),
+                    _ => None,
+                };
+                let hint_color = match (state_color, unit_mark) {
+                    (Some(c), _) => c,
+                    (None, Some((_, key))) => crate::agent_color::unit_ring_color(key, true),
+                    (None, None) => theme.text_tertiary.mul_alpha(dimf),
+                };
+                // The state needs a dot to colour, so a tile with no count
+                // gets one; the attached marker is the same glyph.
+                let count = match (state_color, count) {
+                    (Some(_), None) => Some("\u{25cf}".to_string()),
+                    (Some(_), Some(c)) if !c.contains('\u{25cf}') => {
+                        Some(format!("{}\u{25cf}", c))
+                    }
+                    (_, c) => c,
+                };
+                tile.right_hint = count.map(|c| (c, hint_color));
+                // Not dimmed for an attached tile: attached is the usual case
+                // and the border would vanish against the dark background.
+                tile.border_color = match state_color {
+                    Some(c) => c.mul_alpha(if stale { 0.5 } else { 0.9 }),
+                    None => theme.border_subtle.mul_alpha(dimf),
                 };
                 if session.attachable {
                     tile.item = Some(TabSidebarItem::TmuxSession {
